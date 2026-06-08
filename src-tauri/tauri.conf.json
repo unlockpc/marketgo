@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "UnMarket",
+  "productName": "MarketGo",
   "version": "0.1.0",
   "identifier": "com.unzooai.unmarket",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "UnMarket - Global Marketing Automation",
+        "title": "MarketGo - Go-To-Market Automation",
         "width": 1200,
         "height": 800,
         "minWidth": 900,

@@ -1499,6 +1499,11 @@
       } catch {
         personasCache = [];
       }
+      try {
+        airportStatusCache = await invoke2("airport_status");
+      } catch {
+        airportStatusCache = null;
+      }
       await loadBrowserProfiles();
       await loadAvailableProfiles();
       await loadAccountLifecycles();
@@ -1576,55 +1581,90 @@
     }
   }
   var personasCache = [];
+  var airportStatusCache = null;
+  var selectedPersonaId = null;
   function renderAccounts() {
     const list = document.getElementById("accountsList");
     const empty = document.getElementById("emptyAccounts");
     if (!list || !empty) return;
-    const topBar = `<div class="card" style="margin:0 0 12px;padding:12px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-    <span style="font-weight:700;">\u{1F9D1}\u200D\u{1F91D}\u200D\u{1F9D1} \u8EAB\u4EFD(Gmail)\u7BA1\u7406</span>
-    <span class="text-muted" style="font-size:12px;">\u4E00\u4E2A Gmail = \u4E00\u5957\u72EC\u7ACB\u6D4F\u89C8\u5668+IP+\u6307\u7EB9\uFF1B\u540D\u4E0B\u8D26\u53F7\u5168\u5171\u7528\u5B83\u3002\u5F53\u524D ${personasCache.length} \u4E2A\u8EAB\u4EFD\u3002</span>
-    <button class="btn btn-small btn-primary" style="margin-left:auto;" onclick="createPersonaPrompt()" title="\u7528\u4E00\u4E2A\u771F\u5B9E Gmail \u65B0\u5EFA\u4E00\u5957\u72EC\u7ACB\u8EAB\u4EFD">+ \u65B0\u5EFA Gmail \u8EAB\u4EFD</button>
+    const a = airportStatusCache;
+    const airportBar = `<div class="card" style="margin:0 0 10px;padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-left:4px solid ${a && a.configured ? "#1a9d4a" : "#d97706"};">
+    <span style="font-weight:700;">\u{1F310} \u673A\u573A\u4EE3\u7406</span>
+    <span class="text-muted" style="font-size:12px;">${a && a.configured ? `\u8282\u70B9\u6C60 ${a.total} \u4E2A\uFF08\u7A7A\u95F2 ${a.free}\uFF09\xB7 \u6BCF\u4E2A\u90AE\u7BB1\u5206\u4E00\u4E2A\u72EC\u7ACB\u51FA\u53E3 IP` : "\u672A\u914D\u7F6E\u2014\u2014\u914D\u4E86\u624D\u80FD\u7ED9\u90AE\u7BB1\u5206\u914D\u72EC\u7ACB IP"}</span>
+    <button class="btn btn-small btn-secondary" style="margin-left:auto;" onclick="setAirportPrompt()">${a && a.configured ? "\u6362/\u5237\u65B0\u8BA2\u9605" : "\u8BBE\u7F6E\u673A\u573A\u8BA2\u9605"}</button>
   </div>`;
     const groups = /* @__PURE__ */ new Map();
-    for (const a of accounts) {
-      const key = a.persona_id || "__none__";
+    for (const acc of accounts) {
+      const key = acc.persona_id || "__none__";
       if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(a);
+      groups.get(key).push(acc);
     }
-    if (personasCache.length === 0 && accounts.length === 0) {
-      list.style.display = "block";
-      empty.style.display = "none";
-      list.innerHTML = topBar + `<div class="card" style="padding:18px;text-align:center;"><div class="text-muted">\u8FD8\u6CA1\u6709\u8EAB\u4EFD\u3002\u70B9\u4E0A\u9762\u300C+ \u65B0\u5EFA Gmail \u8EAB\u4EFD\u300D\u7528\u4E00\u4E2A Gmail \u5F00\u59CB\u2014\u2014\u4E4B\u540E\u5728\u5B83\u4E0B\u9762\u52A0\u5404\u5E73\u53F0\u8D26\u53F7\u3002</div></div>`;
-      return;
-    }
+    const hasUnassigned = groups.has("__none__");
+    const tabIds = [...personasCache.map((p) => p.id), ...hasUnassigned ? ["__none__"] : []];
     list.style.display = "block";
     empty.style.display = "none";
-    let html = topBar;
-    for (const p of personasCache) {
-      const accts = groups.get(p.id) || [];
-      html += `<div class="card" style="margin:14px 0 4px;padding:10px 14px;border-left:4px solid #4a8cff;">
+    if (tabIds.length === 0) {
+      list.innerHTML = airportBar + `<div class="card" style="padding:18px;text-align:center;">
+      <div class="text-muted">\u8FD8\u6CA1\u6709\u90AE\u7BB1\u3002\u7528\u4E00\u4E2A\u771F\u5B9E Gmail \u65B0\u5EFA\u7B2C\u4E00\u4E2A \u2192</div>
+      <button class="btn btn-primary" style="margin-top:10px;" onclick="createPersonaPrompt()">+ \u65B0\u5EFA Gmail</button></div>`;
+      return;
+    }
+    if (!selectedPersonaId || !tabIds.includes(selectedPersonaId)) selectedPersonaId = tabIds[0];
+    const tabs = tabIds.map((id) => {
+      const active = id === selectedPersonaId;
+      let label;
+      if (id === "__none__") label = `\u{1F9E9} \u672A\u5F52\u5C5E(${groups.get("__none__").length})`;
+      else {
+        const p = personasCache.find((x) => x.id === id);
+        label = `\u{1F4E7} ${p?.email || "\u90AE\u7BB1"}`;
+      }
+      return `<button class="btn btn-small ${active ? "btn-primary" : "btn-secondary"}" onclick="selectEmail('${id}')">${escapeHtml(label)}</button>`;
+    }).join("");
+    const tabBar = `<div class="card" style="margin:0 0 12px;padding:10px 14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+    <span style="font-weight:700;">\u{1F4E7} \u90AE\u7BB1\uFF1A</span>${tabs}
+    <button class="btn btn-small btn-primary" style="margin-left:auto;" onclick="createPersonaPrompt()" title="\u7528\u4E00\u4E2A\u771F\u5B9E Gmail \u65B0\u5EFA\u4E00\u5957\u72EC\u7ACB\u8EAB\u4EFD">+ \u65B0\u5EFA Gmail</button>
+  </div>`;
+    const sel = selectedPersonaId;
+    const accts = groups.get(sel) || [];
+    let panel = "";
+    if (sel === "__none__") {
+      panel = `<div class="card" style="margin:0 0 8px;padding:10px 14px;border-left:4px solid #d97706;">
+      <div style="font-weight:600;">\u{1F9E9} \u672A\u5F52\u5C5E\u90AE\u7BB1 \xB7 ${accts.length} \u4E2A\u8D26\u53F7</div>
+      <div class="text-muted" style="font-size:12px;">\u8FD9\u4E9B\u8D26\u53F7\u8FD8\u6CA1\u6302\u5230\u67D0\u4E2A Gmail \u4E0B\u3002\u5728\u8D26\u53F7\u4E0A\u9009\u300C\u5F52\u5C5E\u8EAB\u4EFD\u300D\u5F52\u7C7B\u5373\u53EF\u3002</div></div>`;
+      panel += accts.map((x) => renderAccountCard(x)).join("");
+    } else {
+      const p = personasCache.find((x) => x.id === sel);
+      panel = `<div class="card" style="margin:0 0 8px;padding:12px 14px;border-left:4px solid #4a8cff;">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-        <span style="font-weight:700;">\u{1F9D1}\u200D\u{1F91D}\u200D\u{1F9D1} ${escapeHtml(p.email || "\u8EAB\u4EFD")}</span>
-        <span class="text-muted" style="font-size:12px;">${p.region ? escapeHtml(p.region) : "\u{1F310} \u8282\u70B9\u672A\u5206\u914D"}${p.profile_id ? " \xB7 \u5171\u7528 " + escapeHtml(p.profile_id) : ""} \xB7 ${accts.length} \u4E2A\u8D26\u53F7</span>
-        <button class="btn btn-small btn-secondary" style="margin-left:auto;" onclick="personaGmailLogin('${p.id}')" title="\u6253\u5F00\u8FD9\u4E2A\u8EAB\u4EFD\u7684\u6D4F\u89C8\u5668\u53BB\u767B\u5F55\u5B83\u7684 Gmail\uFF08\u57FA\u7840\u767B\u5F55\uFF0C\u5148\u505A\u8FD9\u6B65\uFF09">\u{1F4E7} \u767B\u5F55Gmail</button>
-        <button class="btn btn-small btn-success" onclick="personaProvisionAll('${p.id}','${escapeHtml(p.email || "")}')" title="\u9010\u5E73\u53F0\u68C0\u67E5\uFF1A\u6709\u5C31\u767B\u5F55\u3001\u6CA1\u6709\u5C31\u6CE8\u518C\uFF0C\u8D26\u53F7\u81EA\u52A8\u6302\u5230\u8FD9\u4E2A\u90AE\u7BB1\u540D\u4E0B">\u{1F680} \u68C0\u67E5\u5E76\u5F00\u901A\u8D26\u53F7</button>
-        <button class="btn btn-small btn-primary" onclick="window.__addAccountPersona='${p.id}';openModal('modalAddAccount');">+ \u52A0\u8D26\u53F7</button>
-        <button class="btn btn-small btn-secondary" style="color:#e55;" onclick="deletePersonaAcct('${p.id}','${escapeHtml(p.email || "")}')" title="\u5220\u9664\u8FD9\u4E2A\u8EAB\u4EFD">\u5220\u8EAB\u4EFD</button>
+        <span style="font-weight:700;font-size:15px;">\u{1F4E7} ${escapeHtml(p?.email || "\u90AE\u7BB1")}</span>
+        <span class="text-muted" style="font-size:12px;">${p?.region ? escapeHtml(p.region) : "\u{1F310} \u8282\u70B9\u672A\u5206\u914D"}${p?.profile_id ? " \xB7 \u72EC\u7ACB\u6D4F\u89C8\u5668 " + escapeHtml(p.profile_id) : ""} \xB7 ${accts.length} \u4E2A\u8D26\u53F7</span>
       </div>
-    </div>`;
-      if (accts.length) html += accts.map((a) => renderAccountCard(a)).join("");
-      else html += `<div class="text-muted" style="font-size:12px;margin:2px 0 6px 8px;">\u8FD8\u6CA1\u6709\u8D26\u53F7 \u2014\u2014 \u70B9\u4E0A\u9762\u300C+ \u52A0\u8D26\u53F7\u300D\u7ED9\u8FD9\u4E2A Gmail \u52A0\u5E73\u53F0\u8D26\u53F7\u3002</div>`;
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;">
+        <button class="btn btn-small btn-secondary" onclick="personaGmailLogin('${sel}')" title="\u6253\u5F00\u8FD9\u4E2A\u90AE\u7BB1\u7684\u6D4F\u89C8\u5668\u767B\u5F55\u5B83\u7684 Gmail\uFF08\u57FA\u7840\u767B\u5F55\uFF0C\u5148\u505A\u8FD9\u6B65\uFF09">\u{1F4E7} \u767B\u5F55Gmail</button>
+        <button class="btn btn-small btn-success" onclick="personaProvisionAll('${sel}','${escapeHtml(p?.email || "")}')" title="\u9010\u5E73\u53F0\uFF1A\u6709\u5C31\u767B\u5F55\u3001\u6CA1\u6709\u5C31\u6CE8\u518C">\u{1F680} \u68C0\u67E5\u5E76\u5F00\u901A\u8D26\u53F7</button>
+        <button class="btn btn-small btn-primary" onclick="window.__addAccountPersona='${sel}';openModal('modalAddAccount');">+ \u52A0\u8D26\u53F7</button>
+        <button class="btn btn-small btn-secondary" style="margin-left:auto;color:#e55;" onclick="deletePersonaAcct('${sel}','${escapeHtml(p?.email || "")}')" title="\u5220\u9664\u8FD9\u4E2A\u90AE\u7BB1\u8EAB\u4EFD">\u5220\u9664\u6B64\u90AE\u7BB1</button>
+      </div></div>`;
+      panel += accts.length ? accts.map((x) => renderAccountCard(x)).join("") : `<div class="card" style="padding:16px;text-align:center;"><div class="text-muted">\u8FD9\u4E2A\u90AE\u7BB1\u8FD8\u6CA1\u6709\u8D26\u53F7 \u2014\u2014 \u70B9\u4E0A\u9762\u300C\u{1F680} \u68C0\u67E5\u5E76\u5F00\u901A\u8D26\u53F7\u300D\u81EA\u52A8\u5F00\u901A\u5404\u5E73\u53F0\uFF0C\u6216\u300C+ \u52A0\u8D26\u53F7\u300D\u624B\u52A8\u52A0\u3002</div></div>`;
     }
-    if (groups.has("__none__")) {
-      const accts = groups.get("__none__");
-      html += `<div class="card" style="margin:14px 0 4px;padding:10px 14px;border-left:4px solid #d97706;">
-      <div style="font-weight:600;">\u{1F9E9} \u672A\u5F52\u5C5E\u8EAB\u4EFD \xB7 ${accts.length} \u4E2A\u8D26\u53F7</div>
-      <div class="text-muted" style="font-size:12px;">\u8FD8\u6CA1\u6302\u5230\u67D0\u4E2A Gmail \u8EAB\u4EFD\u4E0B\u3002\u5728\u8D26\u53F7\u4E0A\u9009\u300C\u5F52\u5C5E\u8EAB\u4EFD\u300D\u5F52\u7C7B\u5373\u53EF\u3002</div>
-    </div>`;
-      html += accts.map((a) => renderAccountCard(a)).join("");
-    }
-    list.innerHTML = html;
+    list.innerHTML = airportBar + tabBar + panel;
   }
+  window.selectEmail = function(id) {
+    selectedPersonaId = id;
+    renderAccounts();
+  };
+  window.setAirportPrompt = async function() {
+    const url = (prompt("\u7C98\u8D34\u4F60\u7684\u673A\u573A\u8BA2\u9605\u94FE\u63A5\uFF08Clash \u8BA2\u9605\uFF09\uFF1A") || "").trim();
+    if (!url) return;
+    showToast("\u6B63\u5728\u62C9\u53D6\u8282\u70B9\u2026", "info");
+    try {
+      const msg = await invoke2("airport_set_subscription", { url });
+      showToast("" + msg, "success");
+      await loadAccounts();
+    } catch (e) {
+      showToast("\u8BA2\u9605\u5931\u8D25\uFF1A" + e, "error");
+    }
+  };
   window.createPersonaPrompt = async function() {
     const email = (prompt("\u8F93\u5165\u4E00\u4E2A\u771F\u5B9E Gmail\uFF08\u8FD9\u4E2A\u90AE\u7BB1\u4F1A\u6210\u4E3A\u4E00\u5957\u72EC\u7ACB\u8EAB\u4EFD\uFF1A\u72EC\u7ACB\u6D4F\u89C8\u5668+IP+\u6307\u7EB9\uFF09\uFF1A") || "").trim();
     if (!email) return;
@@ -1634,8 +1674,9 @@
     }
     showToast("\u6B63\u5728\u521B\u5EFA\u8EAB\u4EFD\u2026\uFF08\u5EFA\u6D4F\u89C8\u5668+\u968F\u673A\u6307\u7EB9+\u5206\u914D\u51FA\u53E3\u8282\u70B9\uFF0C\u7EA6 5-10 \u79D2\uFF09", "info");
     try {
-      await invoke2("persona_create", { email });
-      showToast(`\u8EAB\u4EFD\u5DF2\u5EFA\u597D \u2713 \u5DF2\u6253\u5F00 Google \u767B\u5F55\u9875 \u2192 \u8BF7\u5728\u5F39\u51FA\u7684\u6D4F\u89C8\u5668\u7A97\u53E3\u767B\u5F55 ${email}\uFF08\u57FA\u7840\u767B\u5F55\uFF0C\u53EA\u9700\u4E00\u6B21\uFF1B\u767B\u597D\u540E\u540D\u4E0B\u8D26\u53F7\u624D\u80FD\u81EA\u52A8\u6CE8\u518C/\u767B\u5F55\uFF09`, "info");
+      const dto = await invoke2("persona_create", { email });
+      if (dto && dto.id) selectedPersonaId = dto.id;
+      showToast(`\u90AE\u7BB1\u5DF2\u5EFA\u597D \u2713 \u5DF2\u6253\u5F00 Google \u767B\u5F55\u9875 \u2192 \u8BF7\u5728\u5F39\u51FA\u7684\u6D4F\u89C8\u5668\u7A97\u53E3\u767B\u5F55 ${email}\uFF08\u57FA\u7840\u767B\u5F55\uFF0C\u53EA\u9700\u4E00\u6B21\uFF1B\u767B\u597D\u540E\u624D\u80FD\u81EA\u52A8\u6CE8\u518C/\u767B\u5F55\u8D26\u53F7\uFF09`, "info");
       await loadAccounts();
     } catch (e) {
       showToast("\u521B\u5EFA\u5931\u8D25\uFF1A" + e, "error");

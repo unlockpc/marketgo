@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <!-- CSP disabled for Tauri IPC -->
-  <title>UnMarket</title>
+  <title>MarketGo</title>
   <script>
     console.log('=== WebView IPC Check ===');
     console.log('chrome.webview:', window.chrome?.webview);
@@ -26,7 +26,7 @@
     <!-- Sidebar -->
     <aside class="sidebar">
       <div class="sidebar-header">
-        <h1 class="logo">UnMarket</h1>
+        <h1 class="logo">MarketGo</h1>
         <span class="version">v0.1.0</span>
       </div>
 
@@ -34,6 +34,10 @@
         <a href="#" class="nav-item active" data-page="dashboard">
           <span class="nav-icon">🏠</span>
           <span class="nav-text">Dashboard</span>
+        </a>
+        <a href="#" class="nav-item" data-page="accounts">
+          <span class="nav-icon">📧</span>
+          <span class="nav-text">邮箱账号</span>
         </a>
         <a href="#" class="nav-item" data-page="campaigns">
           <span class="nav-icon">🎯</span>
@@ -55,10 +59,6 @@
           <span class="nav-icon">💬</span>
           <span class="nav-text">Engage</span>
         </a>
-        <a href="#" class="nav-item" data-page="accounts">
-          <span class="nav-icon">👤</span>
-          <span class="nav-text">Accounts</span>
-        </a>
         <a href="#" class="nav-item" data-page="tasks">
           <span class="nav-icon">📋</span>
           <span class="nav-text">Tasks</span>
@@ -74,10 +74,6 @@
         <a href="#" class="nav-item" data-page="metrics">
           <span class="nav-icon">📈</span>
           <span class="nav-text">成效追踪</span>
-        </a>
-        <a href="#" class="nav-item" data-page="personas">
-          <span class="nav-icon">🧑‍🤝‍🧑</span>
-          <span class="nav-text">身份隔离</span>
         </a>
         <a href="#" class="nav-item" data-page="stats">
           <span class="nav-icon">📊</span>
@@ -751,14 +747,14 @@
       <!-- Accounts Page -->
       <div class="page" id="page-accounts">
         <header class="page-header">
-          <h2 data-i18n="accounts.title">Platform Accounts</h2>
-          <button class="btn btn-primary" id="btnAddAccount">
+          <h2>📧 邮箱账号</h2>
+          <button class="btn btn-primary" id="btnAddAccount" style="display:none;">
             <span data-i18n="accounts.addAccount">+ Add Account</span>
           </button>
         </header>
 
-        <!-- Account Health Overview -->
-        <div class="account-health-overview">
+        <!-- Account Health Overview (隐藏：全局健康概览冗余，健康状态已在每个账号卡片上显示) -->
+        <div class="account-health-overview" style="display:none;">
           <div class="health-summary">
             <div class="health-circle" id="overallHealthCircle">
               <svg viewBox="0 0 36 36">
@@ -793,8 +789,8 @@
           </div>
         </div>
 
-        <!-- Auto Registration Section -->
-        <section class="settings-section" style="margin-bottom: 20px;">
+        <!-- Auto Registration Section (隐藏：注册改为邮箱视角下「🚀 检查并开通账号」，全局注册区冗余) -->
+        <section class="settings-section" style="margin-bottom: 20px;display:none;">
           <h3>🤖 <span data-i18n="accounts.autoRegister">Auto-Register (via Unzoo)</span></h3>
           <div class="gmail-status" id="gmailStatus" style="margin-bottom: 15px;">
             <span class="status-badge" id="gmailBadge" data-i18n="accounts.checking">Checking...</span>
@@ -831,7 +827,7 @@
           </div>
         </section>
 
-        <h3 style="margin-bottom: 15px;" data-i18n="accounts.existingAccounts">Existing Accounts</h3>
+        <h3 style="margin-bottom: 15px;display:none;" data-i18n="accounts.existingAccounts">Existing Accounts</h3>
         <div class="accounts-list" id="accountsList">
           <!-- Accounts will be loaded here -->
         </div>

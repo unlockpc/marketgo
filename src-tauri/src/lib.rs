@@ -12046,8 +12046,10 @@ fn mihomo_boot(app: &AppHandle) {
 }
 
 fn sanitize_profile_name(email: &str) -> String {
-    let s: String = email.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
-    format!("um_{}", s)
+    // 按邮箱本地部分（@前）命名，folder-safe，干净易认（如 lixd220@gmail.com → lixd220）
+    let local = email.split('@').next().unwrap_or(email);
+    let s: String = local.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+    if s.is_empty() { format!("acct_{}", &Uuid::new_v4().to_string()[..6]) } else { s }
 }
 
 /// 直接调 /profiles/create，返回 (profile_id=path末段, 完整 path)。
