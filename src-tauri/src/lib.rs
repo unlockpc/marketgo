@@ -8331,6 +8331,161 @@ fn get_ai_config(state: State<AppState>) -> Result<AIConfig, String> {
     })
 }
 
+/// 测试 AI 连接：用最小请求验证「Key + 模型」是否可用。
+/// `key` 优先用前端传入的（用户刚输入、未必已保存）；为空则回退已保存的 Key。
+/// `model` 为前端选中的模型；留空则用该供应商的默认模型。
+/// 返回成功提示串，失败返回可读错误（HTTP 状态 + 供应商错误信息）。
+#[tauri::command]
+async fn test_ai_connection(
+    state: State<'_, AppState>,
+    provider: String,
+    key: Option<String>,
+    model: Option<String>,
+) -> Result<String, String> {
+    // 解析 Key：前端传入优先，否则回退数据库已保存的
+    let api_key = match key {
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            let conn = state.db.lock().map_err(|e| e.to_string())?;
+            let key_name = format!("ai.key.{}", provider);
+            conn.query_row(
+                "SELECT value FROM config WHERE key = ?1",
+                params![key_name],
+                |row| row.get::<_, String>(0),
+            )
+            .ok()
+            .unwrap_or_default()
+        }
+    };
+    if api_key.is_empty() {
+        return Err("未配置 API Key —— 请先在上面填入该供应商的 Key（或先点保存）".to_string());
+    }
+
+    let model = model.map(|m| m.trim().to_string()).filter(|m| !m.is_empty());
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let used_model = match provider.as_str() {
+        "gemini" => test_gemini_connection(&client, &api_key, model.as_deref()).await?,
+        "openai" => {
+            test_openai_compatible(&client, "https://api.openai.com", &api_key,
+                model.as_deref().unwrap_or("gpt-4o-mini")).await?
+        }
+        "deepseek" => {
+            test_openai_compatible(&client, "https://api.deepseek.com", &api_key,
+                model.as_deref().unwrap_or("deepseek-chat")).await?
+        }
+        "qwen" => test_qwen_connection(&client, &api_key, model.as_deref()).await?,
+        other => return Err(format!("未知的 AI 供应商：{}", other)),
+    };
+
+    Ok(format!("✓ 连接成功（{} / {}）", provider, used_model))
+}
+
+// 提取供应商 JSON 错误体里的 error.message（OpenAI 风格）或顶层 message（DashScope 风格）
+fn extract_api_error_message(json: &serde_json::Value) -> String {
+    json.get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(|m| m.as_str())
+        .or_else(|| json.get("message").and_then(|m| m.as_str()))
+        .unwrap_or("未知错误")
+        .to_string()
+}
+
+async fn test_gemini_connection(
+    client: &reqwest::Client,
+    api_key: &str,
+    model: Option<&str>,
+) -> Result<String, String> {
+    let model = model.unwrap_or("gemini-2.0-flash");
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+        model, api_key
+    );
+    let body = serde_json::json!({
+        "contents": [{"parts": [{"text": "ping"}]}],
+        "generationConfig": {"maxOutputTokens": 1}
+    });
+    let resp = client
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("请求失败：{}", e))?;
+    let status = resp.status();
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("解析响应失败：{}", e))?;
+    if !status.is_success() {
+        return Err(format!("HTTP {}：{}", status.as_u16(), extract_api_error_message(&json)));
+    }
+    Ok(model.to_string())
+}
+
+// OpenAI 兼容接口（OpenAI / DeepSeek 等）：POST {base}/v1/chat/completions
+async fn test_openai_compatible(
+    client: &reqwest::Client,
+    base: &str,
+    api_key: &str,
+    model: &str,
+) -> Result<String, String> {
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_tokens": 1
+    });
+    let resp = client
+        .post(format!("{}/v1/chat/completions", base))
+        .header("Authorization", format!("Bearer {}", api_key))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("请求失败：{}", e))?;
+    let status = resp.status();
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("解析响应失败：{}", e))?;
+    if !status.is_success() {
+        return Err(format!("HTTP {}：{}", status.as_u16(), extract_api_error_message(&json)));
+    }
+    Ok(model.to_string())
+}
+
+async fn test_qwen_connection(
+    client: &reqwest::Client,
+    api_key: &str,
+    model: Option<&str>,
+) -> Result<String, String> {
+    let model = model.unwrap_or("qwen-turbo");
+    let body = serde_json::json!({
+        "model": model,
+        "input": {"messages": [{"role": "user", "content": "ping"}]},
+        "parameters": {"max_tokens": 1}
+    });
+    let resp = client
+        .post("https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("请求失败：{}", e))?;
+    let status = resp.status();
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("解析响应失败：{}", e))?;
+    if !status.is_success() {
+        return Err(format!("HTTP {}：{}", status.as_u16(), extract_api_error_message(&json)));
+    }
+    Ok(model.to_string())
+}
+
 #[tauri::command]
 fn check_browser_status() -> bool {
     // Check if Unzoo CLI is available
@@ -14539,6 +14694,7 @@ pub fn run() {
             set_config,
             configure_ai,
             get_ai_config,
+            test_ai_connection,
             fetch_available_models,
             check_browser_status,
             detect_unzoo_path,

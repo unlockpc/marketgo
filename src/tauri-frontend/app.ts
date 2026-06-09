@@ -948,8 +948,9 @@ function initModals() {
   initArticleTypeSelection();
   document.getElementById('btnRefreshStrategies')?.addEventListener('click', loadPublishStrategies);
   document.getElementById('btnSaveAI')?.addEventListener('click', saveAISettings);
+  document.getElementById('btnTestAI')?.addEventListener('click', testAIConnection);
   document.getElementById('btnSaveScheduler')?.addEventListener('click', saveSchedulerSettings);
-  document.getElementById('aiProvider')?.addEventListener('change', () => populateDefaultModels());
+  document.getElementById('aiProvider')?.addEventListener('change', () => { populateDefaultModels(); updateAIKeyVisibility(); });
   document.getElementById('btnRefreshModels')?.addEventListener('click', refreshModels);
   // Engage page
   document.getElementById('btnAddKeyword')?.addEventListener('click', () => openKeywordModal());
@@ -2432,9 +2433,9 @@ let nurtureInProgress: string | null = null;
 
   try {
     showToast(`${t('nurture.startNurture')} (${seconds}${t('nurture.seconds')})`, 'info');
-    // Note: Rust uses snake_case parameter names, platform is retrieved from DB
+    // Tauri 期望 camelCase 参数名（snake_case 会绑不上 → account_id 变空）
     const result = await invoke<string>('quick_nurture', {
-      account_id: accountId,
+      accountId: accountId,
       seconds: seconds
     });
     showToast(`${t('nurture.completed')}: ${result}`, 'success');
@@ -2508,9 +2509,9 @@ let currentNurtureTaskId: string | null = null;
   nurtureTimerInterval = window.setInterval(updateNurtureTimer, 1000);
 
   try {
-    // Call backend
+    // Call backend（Tauri 期望 camelCase 参数名）
     const result = await invoke<string>('quick_nurture', {
-      account_id: accountId,
+      accountId: accountId,
       seconds: seconds
     });
 
@@ -4503,6 +4504,14 @@ function populateDefaultModels() {
     .join('');
 }
 
+// 只显示当前下拉选中的那个供应商的 Key 输入框，其余隐藏
+function updateAIKeyVisibility() {
+  const provider = (document.getElementById('aiProvider') as HTMLSelectElement)?.value;
+  document.querySelectorAll<HTMLElement>('.ai-key-field').forEach((el) => {
+    el.style.display = el.dataset.provider === provider ? '' : 'none';
+  });
+}
+
 // updateModelOptions removed - use populateDefaultModels for defaults, refreshModels for API
 
 async function refreshModels() {
@@ -4533,14 +4542,14 @@ async function refreshModels() {
       btn.textContent = '获取中...';
     }
 
-    // 先保存 API key 到数据库
+    // 先保存 API key 到数据库（注意：Tauri 期望 camelCase 参数名，snake_case 会绑不上 → key 存不进去）
     await invoke('configure_ai', {
       provider,
       model: modelSelect?.value || '',
-      gemini_key: geminiKey || null,
-      openai_key: openaiKey || null,
-      deepseek_key: deepseekKey || null,
-      qwen_key: qwenKey || null,
+      geminiKey: geminiKey || null,
+      openaiKey: openaiKey || null,
+      deepseekKey: deepseekKey || null,
+      qwenKey: qwenKey || null,
     });
 
     // 然后获取模型
@@ -4588,15 +4597,50 @@ async function saveAISettings() {
     await invoke('configure_ai', {
       provider,
       model,
-      gemini_key: geminiKey || null,
-      openai_key: openaiKey || null,
-      deepseek_key: deepseekKey || null,
-      qwen_key: qwenKey || null,
+      geminiKey: geminiKey || null,
+      openaiKey: openaiKey || null,
+      deepseekKey: deepseekKey || null,
+      qwenKey: qwenKey || null,
     });
     showToast(t('msg.aiSettingsSaved'), 'success');
   } catch (error) {
     console.error('Failed to save AI settings:', error);
     showToast('Failed to save AI settings', 'error');
+  }
+}
+
+// 测试当前供应商的「Key + 模型」是否可用：用输入框里的 Key（未必已保存）+ 选中的模型发一个最小请求
+async function testAIConnection() {
+  const provider = (document.getElementById('aiProvider') as HTMLSelectElement)?.value;
+  const model = (document.getElementById('aiModel') as HTMLSelectElement)?.value || '';
+  const keyFieldMap: Record<string, string> = {
+    gemini: 'aiKeyGemini',
+    openai: 'aiKeyOpenai',
+    deepseek: 'aiKeyDeepseek',
+    qwen: 'aiKeyQwen',
+  };
+  const apiKey = (document.getElementById(keyFieldMap[provider]) as HTMLInputElement)?.value || '';
+  const btn = document.getElementById('btnTestAI') as HTMLButtonElement | null;
+  const statusEl = document.getElementById('aiSaveStatus') as HTMLElement | null;
+
+  if (!apiKey.trim()) {
+    showToast(`请先输入 ${aiProviders[provider]?.name || provider} 的 API Key`, 'warning');
+    return;
+  }
+
+  const origText = btn?.textContent || 'Test Connection';
+  try {
+    if (btn) { btn.disabled = true; btn.textContent = '测试中…'; }
+    if (statusEl) { statusEl.textContent = '⏳ 正在测试连接…'; statusEl.style.color = ''; }
+    const msg = await invoke<string>('test_ai_connection', { provider, key: apiKey, model: model || null });
+    if (statusEl) { statusEl.textContent = msg; statusEl.style.color = '#1a9d4a'; }
+    showToast(msg, 'success');
+  } catch (error: any) {
+    const em = error?.toString() || '连接失败';
+    if (statusEl) { statusEl.textContent = '✗ ' + em; statusEl.style.color = '#e55'; }
+    showToast('连接失败：' + em, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = origText; }
   }
 }
 
@@ -4608,6 +4652,7 @@ async function loadAIConfig() {
       if (providerSelect) providerSelect.value = config.provider;
       populateDefaultModels();
     }
+    updateAIKeyVisibility(); // 只显示当前选中供应商的 Key 输入框
     if (config.model) {
       const modelSelect = document.getElementById('aiModel') as HTMLSelectElement;
       if (modelSelect) modelSelect.value = config.model;
@@ -5649,7 +5694,7 @@ async function executeNurtureTask(task: Task) {
 
     try {
       const result = await invoke<string>('quick_nurture', {
-        account_id: accountId,
+        accountId: accountId,
         seconds: seconds || 60
       });
       successCount++;

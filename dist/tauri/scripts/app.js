@@ -909,8 +909,12 @@
     initArticleTypeSelection();
     document.getElementById("btnRefreshStrategies")?.addEventListener("click", loadPublishStrategies);
     document.getElementById("btnSaveAI")?.addEventListener("click", saveAISettings);
+    document.getElementById("btnTestAI")?.addEventListener("click", testAIConnection);
     document.getElementById("btnSaveScheduler")?.addEventListener("click", saveSchedulerSettings);
-    document.getElementById("aiProvider")?.addEventListener("change", () => populateDefaultModels());
+    document.getElementById("aiProvider")?.addEventListener("change", () => {
+      populateDefaultModels();
+      updateAIKeyVisibility();
+    });
     document.getElementById("btnRefreshModels")?.addEventListener("click", refreshModels);
     document.getElementById("btnAddKeyword")?.addEventListener("click", () => openKeywordModal());
     document.getElementById("btnSaveKeyword")?.addEventListener("click", saveKeyword);
@@ -2136,7 +2140,7 @@
     try {
       showToast(`${t("nurture.startNurture")} (${seconds}${t("nurture.seconds")})`, "info");
       const result = await invoke2("quick_nurture", {
-        account_id: accountId,
+        accountId,
         seconds
       });
       showToast(`${t("nurture.completed")}: ${result}`, "success");
@@ -2198,7 +2202,7 @@
     nurtureTimerInterval = window.setInterval(updateNurtureTimer, 1e3);
     try {
       const result = await invoke2("quick_nurture", {
-        account_id: accountId,
+        accountId,
         seconds
       });
       if (nurtureTimerInterval) {
@@ -3643,6 +3647,12 @@
     if (!modelSelect || !aiProviders[provider]) return;
     modelSelect.innerHTML = aiProviders[provider].models.map((m) => `<option value="${m}">${m}</option>`).join("");
   }
+  function updateAIKeyVisibility() {
+    const provider = document.getElementById("aiProvider")?.value;
+    document.querySelectorAll(".ai-key-field").forEach((el) => {
+      el.style.display = el.dataset.provider === provider ? "" : "none";
+    });
+  }
   async function refreshModels() {
     const provider = document.getElementById("aiProvider")?.value;
     const btn = document.getElementById("btnRefreshModels");
@@ -3664,10 +3674,10 @@
       await invoke2("configure_ai", {
         provider,
         model: modelSelect?.value || "",
-        gemini_key: geminiKey || null,
-        openai_key: openaiKey || null,
-        deepseek_key: deepseekKey || null,
-        qwen_key: qwenKey || null
+        geminiKey: geminiKey || null,
+        openaiKey: openaiKey || null,
+        deepseekKey: deepseekKey || null,
+        qwenKey: qwenKey || null
       });
       const models = await invoke2("fetch_available_models", { provider });
       if (models && models.length > 0) {
@@ -3706,15 +3716,61 @@
       await invoke2("configure_ai", {
         provider,
         model,
-        gemini_key: geminiKey || null,
-        openai_key: openaiKey || null,
-        deepseek_key: deepseekKey || null,
-        qwen_key: qwenKey || null
+        geminiKey: geminiKey || null,
+        openaiKey: openaiKey || null,
+        deepseekKey: deepseekKey || null,
+        qwenKey: qwenKey || null
       });
       showToast(t("msg.aiSettingsSaved"), "success");
     } catch (error) {
       console.error("Failed to save AI settings:", error);
       showToast("Failed to save AI settings", "error");
+    }
+  }
+  async function testAIConnection() {
+    const provider = document.getElementById("aiProvider")?.value;
+    const model = document.getElementById("aiModel")?.value || "";
+    const keyFieldMap = {
+      gemini: "aiKeyGemini",
+      openai: "aiKeyOpenai",
+      deepseek: "aiKeyDeepseek",
+      qwen: "aiKeyQwen"
+    };
+    const apiKey = document.getElementById(keyFieldMap[provider])?.value || "";
+    const btn = document.getElementById("btnTestAI");
+    const statusEl = document.getElementById("aiSaveStatus");
+    if (!apiKey.trim()) {
+      showToast(`\u8BF7\u5148\u8F93\u5165 ${aiProviders[provider]?.name || provider} \u7684 API Key`, "warning");
+      return;
+    }
+    const origText = btn?.textContent || "Test Connection";
+    try {
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "\u6D4B\u8BD5\u4E2D\u2026";
+      }
+      if (statusEl) {
+        statusEl.textContent = "\u23F3 \u6B63\u5728\u6D4B\u8BD5\u8FDE\u63A5\u2026";
+        statusEl.style.color = "";
+      }
+      const msg = await invoke2("test_ai_connection", { provider, key: apiKey, model: model || null });
+      if (statusEl) {
+        statusEl.textContent = msg;
+        statusEl.style.color = "#1a9d4a";
+      }
+      showToast(msg, "success");
+    } catch (error) {
+      const em = error?.toString() || "\u8FDE\u63A5\u5931\u8D25";
+      if (statusEl) {
+        statusEl.textContent = "\u2717 " + em;
+        statusEl.style.color = "#e55";
+      }
+      showToast("\u8FDE\u63A5\u5931\u8D25\uFF1A" + em, "error");
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = origText;
+      }
     }
   }
   async function loadAIConfig() {
@@ -3725,6 +3781,7 @@
         if (providerSelect) providerSelect.value = config.provider;
         populateDefaultModels();
       }
+      updateAIKeyVisibility();
       if (config.model) {
         const modelSelect = document.getElementById("aiModel");
         if (modelSelect) modelSelect.value = config.model;
@@ -4630,7 +4687,7 @@ ${a.body}`,
       updateTask(task.id, { progress: i + 1 });
       try {
         const result = await invoke2("quick_nurture", {
-          account_id: accountId,
+          accountId,
           seconds: seconds || 60
         });
         successCount++;
