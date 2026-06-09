@@ -3546,7 +3546,29 @@ let keywords: any[] = [];
 let discoveredPosts: any[] = [];
 let currentReplyPost: any = null;
 
+let engageInboxWired = false;
 async function loadEngagePage() {
+  // 统一互动收件箱 + 自动获客控制台
+  if (!engageInboxWired) {
+    engageInboxWired = true;
+    document.getElementById('btnInboxRefresh')?.addEventListener('click', () => loadEngageInbox());
+    document.getElementById('inboxFilter')?.addEventListener('change', () => loadEngageInbox());
+    document.getElementById('engageAutoToggle')?.addEventListener('change', async (e) => {
+      const on = (e.target as HTMLInputElement).checked;
+      try { await invoke('engage_set_auto', { on, intervalMinutes: null, maxInflight: null }); showToast(on ? '已开启自动获客' : '已关闭自动获客', 'success'); loadEngageControl(); }
+      catch (err) { showToast('' + err, 'error'); }
+    });
+    document.getElementById('engageSaveCfg')?.addEventListener('click', async () => {
+      const on = (document.getElementById('engageAutoToggle') as HTMLInputElement)?.checked ?? true;
+      const intervalMinutes = parseInt((document.getElementById('engageInterval') as HTMLInputElement)?.value || '30', 10);
+      const maxInflight = parseInt((document.getElementById('engageMaxInflight') as HTMLInputElement)?.value || '6', 10);
+      try { await invoke('engage_set_auto', { on, intervalMinutes, maxInflight }); showToast('已保存巡检节奏', 'success'); loadEngageControl(); }
+      catch (err) { showToast('' + err, 'error'); }
+    });
+  }
+  loadEngageControl();
+  loadEngageInbox();
+
   // Load keywords
   await loadKeywords();
 
@@ -3570,6 +3592,84 @@ async function loadEngagePage() {
       products.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
   }
 }
+
+interface InboxItemDto {
+  kind: string; ref_id: string; platform: string; author: string | null;
+  text: string; url: string | null; intent: number; hot: boolean;
+  status: string; created_at: string;
+}
+async function loadEngageControl() {
+  try {
+    const s = await invoke<any>('engage_get_settings');
+    const toggle = document.getElementById('engageAutoToggle') as HTMLInputElement;
+    const label = document.getElementById('engageAutoLabel');
+    const interval = document.getElementById('engageInterval') as HTMLInputElement;
+    const maxIn = document.getElementById('engageMaxInflight') as HTMLInputElement;
+    const status = document.getElementById('engageStatus');
+    if (toggle) toggle.checked = !!s.auto;
+    if (label) label.textContent = s.auto ? '✅ 自动获客运行中' : '已关闭（点开启让引擎自己干）';
+    if (interval && document.activeElement !== interval) interval.value = String(s.interval_minutes || 30);
+    if (maxIn && document.activeElement !== maxIn) maxIn.value = String(s.max_inflight || 6);
+    const modeLabel = s.reply_mode === 'auto' ? '🟢全自动(真发)' : '🟡半自动(进收件箱待审)';
+    const last = s.last_tick ? new Date(s.last_tick).toLocaleTimeString() : '尚未巡检';
+    if (status) status.innerHTML = `模式 <b>${modeLabel}</b> · 启用关键词 <b>${s.keywords_enabled}</b> · 在跑 <b>${s.inflight}</b> · 上次巡检 ${last}`;
+  } catch (e) { /* ignore */ }
+}
+
+async function loadEngageInbox() {
+  const box = document.getElementById('inboxList');
+  const sum = document.getElementById('engageSummary');
+  if (!box) return;
+  const filter = (document.getElementById('inboxFilter') as HTMLSelectElement)?.value || 'all';
+  try {
+    const s = await invoke<any>('engage_summary');
+    if (sum) sum.innerHTML = `🔥待审 <b>${s.pending_review}</b> · 线索 <b>${s.leads_open}</b> · ✅转化 <b>${s.converted}</b> · 提及 <b>${s.mentions}</b>`;
+  } catch {}
+  let items: InboxItemDto[] = [];
+  try { items = (await invoke<InboxItemDto[]>('engage_inbox', { filter })) || []; }
+  catch (e) { box.innerHTML = `<p class="text-muted">加载失败：${escapeHtml('' + e)}</p>`; return; }
+  if (!items.length) { box.innerHTML = '<p class="text-muted">暂无互动。开启关键词发现 + 全自动后，这里会自动汇集线索与待审回复。</p>'; return; }
+  const kindLabel: Record<string, string> = { lead: '线索', pending_reply: '待审回复', mention: '品牌提及' };
+  box.innerHTML = items.map(it => {
+    const hot = it.hot ? `<span style="background:#ff4757;color:#fff;border-radius:8px;padding:1px 6px;font-size:10px;">🔥强意向</span>` : '';
+    const intentColor = it.intent >= 70 ? '#ff4757' : it.intent >= 40 ? '#ffa502' : '#999';
+    const link = it.url ? `<a href="${escapeHtml(it.url)}" target="_blank" class="btn btn-small btn-secondary">打开↗</a>` : '';
+    let actions = link;
+    if (it.kind === 'pending_reply') {
+      actions += ` <button class="btn btn-small btn-primary" onclick="inboxApprove('${it.ref_id}')">✅通过发布</button>
+                   <button class="btn btn-small btn-secondary" onclick="inboxReject('${it.ref_id}')">忽略</button>`;
+    } else if (it.kind === 'lead') {
+      actions += ` <button class="btn btn-small btn-primary" onclick="inboxLead('${it.ref_id}','converted')">✅已转化</button>
+                   <button class="btn btn-small btn-secondary" onclick="inboxLead('${it.ref_id}','dismissed')">忽略</button>`;
+    }
+    return `<div class="card" style="padding:10px 12px;margin-bottom:8px;border-left:3px solid ${it.hot ? '#ff4757' : 'transparent'};">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+          <span class="badge">${kindLabel[it.kind] || it.kind}</span>
+          <span class="badge">${escapeHtml(it.platform)}</span>
+          ${it.author ? `<span class="text-muted" style="font-size:12px;">@${escapeHtml(it.author)}</span>` : ''}
+          ${hot}
+          <span style="color:${intentColor};font-size:11px;font-weight:600;">意向 ${it.intent}</span>
+        </div>
+        <span class="text-muted" style="font-size:11px;">${new Date(it.created_at).toLocaleString()}</span>
+      </div>
+      <div style="font-size:13px;white-space:pre-wrap;margin-bottom:6px;">${escapeHtml((it.text || '').slice(0, 240))}</div>
+      <div class="btn-group" style="gap:6px;flex-wrap:wrap;">${actions}</div>
+    </div>`;
+  }).join('');
+}
+(window as any).inboxApprove = async (id: string) => {
+  try { await invoke('approve_reply', { id, editedContent: null }); showToast('已入队发布', 'success'); loadEngageInbox(); }
+  catch (e) { showToast('' + e, 'error'); }
+};
+(window as any).inboxReject = async (id: string) => {
+  try { await invoke('reject_reply', { id }); showToast('已忽略', 'success'); loadEngageInbox(); }
+  catch (e) { showToast('' + e, 'error'); }
+};
+(window as any).inboxLead = async (id: string, status: string) => {
+  try { await invoke('update_lead_status', { id, status, notes: null }); showToast('已更新', 'success'); loadEngageInbox(); }
+  catch (e) { showToast('' + e, 'error'); }
+};
 
 async function loadKeywords() {
   try {
@@ -6475,6 +6575,14 @@ async function loadContentPage() {
         showToast('已入队，引擎下一拍自动发布', 'success'); refreshPosts();
       } catch (e) { showToast('发布失败: ' + e, 'error'); }
     });
+    // ① AI 配图
+    document.getElementById('btnPostImage')?.addEventListener('click', () => aiGenerateMedia('image'));
+    // ④ AI 视频
+    document.getElementById('btnPostVideo')?.addEventListener('click', () => aiGenerateMedia('video'));
+    // ③ 矩阵铺量
+    document.getElementById('btnPostMatrix')?.addEventListener('click', () => openMatrixModal());
+    // ② 内容日历
+    document.getElementById('btnPostCalendar')?.addEventListener('click', () => toggleCalendar());
   }
   try {
     const products = await invoke<any[]>('list_products');
@@ -6558,6 +6666,265 @@ function postRow(p: PostItemDto): string {
   }
   showToast('已载入到编辑区', 'success');
   window.scrollTo({ top: 0, behavior: 'smooth' });
+};
+
+// ===================== ①④ AI 配图 / AI 视频 =====================
+function aiMediaPrompt(): string {
+  const product = (document.getElementById('postProduct') as HTMLSelectElement)?.selectedOptions?.[0]?.text || '';
+  const title = postFieldVal('postTitle');
+  const body = postFieldVal('postBody');
+  const base = [title, body].filter(Boolean).join('。').slice(0, 400);
+  return base || `为产品「${product}」生成一张高质感、现代、干净的营销配图`;
+}
+async function aiGenerateMedia(kind: 'image' | 'video') {
+  const hint = document.getElementById('aiMediaHint');
+  const prompt = aiMediaPrompt();
+  if (!prompt) { showToast('先写点正文/标题，AI 据此配图', 'error'); return; }
+  const setHint = (t: string) => { if (hint) hint.textContent = t; };
+  try {
+    let path: string;
+    if (kind === 'image') {
+      const ar = (document.getElementById('postImageAR') as HTMLSelectElement)?.value || undefined;
+      setHint('🖼 配图生成中…约 10-20 秒'); showToast('AI 配图生成中…', 'info');
+      path = await invoke<string>('generate_ai_image', { prompt, aspectRatio: ar });
+    } else {
+      setHint('🎬 视频生成中…约 1-3 分钟，请勿关闭'); showToast('AI 视频生成中（1-3 分钟）…', 'info');
+      const plat = (document.getElementById('postPlatform') as HTMLSelectElement)?.value;
+      const ar = (plat === 'douyin' || plat === 'xiaohongshu') ? '9:16' : '16:9';
+      path = await invoke<string>('generate_ai_video', { prompt, model: null, aspectRatio: ar });
+    }
+    // 追加到媒体路径输入框
+    const cur = postFieldVal('postMedia');
+    postSetVal('postMedia', cur ? `${cur}, ${path}` : path);
+    setHint(`✅ 已生成并加入媒体：${path.split(/[\\/]/).pop()}`);
+    showToast(kind === 'image' ? '配图已生成' : '视频已生成', 'success');
+  } catch (e) {
+    setHint(''); showToast((kind === 'image' ? '配图失败: ' : '视频失败: ') + e, 'error');
+  }
+}
+
+// ===================== ② 内容日历 =====================
+let calendarMonth = new Date();
+async function toggleCalendar() {
+  const el = document.getElementById('postCalendar');
+  const list = document.getElementById('postList');
+  if (!el) return;
+  if (el.style.display === 'none') {
+    el.style.display = 'block';
+    if (list) list.style.display = 'none';
+    await renderCalendar();
+  } else {
+    el.style.display = 'none';
+    if (list) list.style.display = 'block';
+  }
+}
+async function renderCalendar() {
+  const el = document.getElementById('postCalendar');
+  if (!el) return;
+  let posts: PostItemDto[] = [];
+  try { posts = (await invoke<PostItemDto[]>('list_posts')) || []; } catch {}
+  // 只取有排期时间的（scheduled_at 或 published_at）
+  const byDay: Record<string, PostItemDto[]> = {};
+  for (const p of posts) {
+    const when = p.scheduled_at || p.published_at;
+    if (!when) continue;
+    const d = new Date(when);
+    if (isNaN(d.getTime())) continue;
+    const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+    (byDay[key] ||= []).push(p);
+  }
+  const y = calendarMonth.getFullYear(), m = calendarMonth.getMonth();
+  const first = new Date(y, m, 1);
+  const startDow = first.getDay();
+  const daysInMonth = new Date(y, m + 1, 0).getDate();
+  const today = new Date();
+  const monthLabel = `${y} 年 ${m + 1} 月`;
+  const dows = ['日', '一', '二', '三', '四', '五', '六'];
+  let cells = '';
+  for (let i = 0; i < startDow; i++) cells += `<div></div>`;
+  const platEmoji: Record<string, string> = { twitter: '𝕏', x: '𝕏', linkedin: '💼', reddit: '👽', xiaohongshu: '📕', douyin: '🎵' };
+  for (let day = 1; day <= daysInMonth; day++) {
+    const key = `${y}-${m}-${day}`;
+    const items = byDay[key] || [];
+    const isToday = today.getFullYear() === y && today.getMonth() === m && today.getDate() === day;
+    const chips = items.slice(0, 4).map(p => {
+      const t = new Date(p.scheduled_at || p.published_at!);
+      const hh = String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0');
+      const st = p.status === 'published' ? '✅' : p.status === 'failed' ? '❌' : '⏰';
+      const acct = (p as any).account_id ? '' : '';
+      return `<div title="${escapeHtml((p.title || '') + ' ' + (p.body || '').slice(0,60))}" style="font-size:10px;background:var(--bg-soft,#f2f3f7);border-radius:4px;padding:1px 4px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;" onclick="postEdit('${p.id}')">${st}${platEmoji[p.platform] || ''} ${hh} ${escapeHtml((p.title || p.body || '').slice(0, 10))}${acct}</div>`;
+    }).join('');
+    const more = items.length > 4 ? `<div style="font-size:10px;color:var(--text-muted,#888);">+${items.length - 4}…</div>` : '';
+    cells += `<div style="border:1px solid var(--border,#eee);border-radius:6px;min-height:74px;padding:4px;${isToday ? 'outline:2px solid var(--accent,#6c5ce7);' : ''}">
+      <div style="font-size:11px;color:${isToday ? 'var(--accent,#6c5ce7)' : 'var(--text-muted,#999)'};font-weight:${isToday ? '700' : '400'};">${day}</div>
+      ${chips}${more}
+    </div>`;
+  }
+  el.innerHTML = `<div class="card" style="padding:14px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+      <button class="btn btn-small btn-secondary" onclick="calMove(-1)">‹ 上月</button>
+      <strong>${monthLabel} · 内容日历</strong>
+      <button class="btn btn-small btn-secondary" onclick="calMove(1)">下月 ›</button>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:4px;">
+      ${dows.map(d => `<div style="text-align:center;font-size:11px;color:var(--text-muted,#999);">${d}</div>`).join('')}
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;">${cells}</div>
+    <div class="text-muted" style="font-size:11px;margin-top:8px;">⏰待发 · ✅已发 · ❌失败 · 点格子里的条目可载入编辑。排期在「定时发布」里设。</div>
+  </div>`;
+}
+(window as any).calMove = (delta: number) => { calendarMonth.setMonth(calendarMonth.getMonth() + delta); renderCalendar(); };
+
+// ===================== ③ 矩阵内容工厂（一创意 → 逐平台成品 + 逐persona差异化 + 配图 → 错峰铺量） =====================
+// factoryItems 是当前工厂的工作台数据；每个元素 = 一个 (平台×邮箱) 成品槽位
+let factoryItems: any[] = [];
+async function openMatrixModal() {
+  const product_id = (document.getElementById('postProduct') as HTMLSelectElement)?.value;
+  if (!product_id) { showToast('请先在上方选产品', 'error'); return; }
+  factoryItems = [];
+  let accts: any[] = [];
+  try { accts = (await invoke<any[]>('list_accounts')) || []; } catch {}
+  accts = accts.filter(a => (a.status || 'active') === 'active');
+  let overlay = document.getElementById('matrixOverlay');
+  if (overlay) overlay.remove();
+  overlay = document.createElement('div');
+  overlay.id = 'matrixOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center;';
+  // 槽位选择：每个活跃账号 = 一个可选 (平台×邮箱) 槽位
+  const slotRows = accts.length
+    ? accts.map((a, i) => `<label style="display:flex;align-items:center;gap:6px;font-size:12px;padding:3px 0;">
+        <input type="checkbox" class="facSlot" data-idx="${i}" value="${a.id}" checked
+          data-platform="${escapeHtml(a.platform || '')}" data-email="${escapeHtml(a.persona_email || a.email || '')}" />
+        <span class="badge">${escapeHtml(a.platform || '?')}</span> ${escapeHtml(a.persona_email || a.email || a.username || a.id)}
+      </label>`).join('')
+    : `<div class="text-muted" style="font-size:12px;">还没有活跃账号。先到「邮箱账号」开通账号，再来矩阵工厂。</div>`;
+  overlay.innerHTML = `<div class="card" style="width:min(820px,94vw);max-height:90vh;overflow:auto;padding:18px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <h3 style="margin:0;">🏭 矩阵内容工厂</h3>
+      <button class="btn btn-small btn-secondary" onclick="closeMatrix()">✕</button>
+    </div>
+    <p class="text-muted" style="font-size:12px;margin:0 0 12px;">一个创意 →（每个邮箱一条）<strong>逐平台正确形态 + 不同人设口吻</strong>的成品文案，按需配图，错峰铺到各 profile，引擎到点自动发。</p>
+    <div style="margin-bottom:10px;">
+      <label class="text-muted" style="font-size:12px;">创意 / 主题（留空=自动围绕产品卖点）</label>
+      <textarea id="facIdea" rows="2" placeholder="例：用一个真实场景说明这工具怎么帮人省时间" style="width:100%;padding:8px;resize:vertical;"></textarea>
+    </div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;">
+      <div style="flex:1;min-width:240px;">
+        <div style="font-size:12px;font-weight:600;margin-bottom:4px;">投放槽位（每个=一个邮箱发一条，${accts.length}）
+          <a href="#" style="font-size:11px;font-weight:400;margin-left:6px;" onclick="facToggleAll(true);return false;">全选</a> ·
+          <a href="#" style="font-size:11px;font-weight:400;" onclick="facToggleAll(false);return false;">全不选</a>
+        </div>
+        <div style="max-height:180px;overflow:auto;border:1px solid var(--border,#eee);border-radius:6px;padding:8px;">${slotRows}</div>
+      </div>
+    </div>
+    <div class="btn-group" style="margin-top:10px;">
+      <button class="btn btn-primary" id="facGenBtn" onclick="factoryGenerate('${product_id}')">✨ 生成成品（逐平台×逐人设）</button>
+    </div>
+    <div id="facPreview" style="margin-top:12px;"></div>
+    <div id="facCommit" style="display:none;border-top:1px solid var(--border,#eee);padding-top:10px;margin-top:12px;">
+      <div class="btn-group" style="margin-bottom:8px;">
+        <button class="btn btn-secondary btn-small" onclick="factoryImageAll('${product_id}')">🖼 给全部需要的配图</button>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <label style="font-size:12px;">开始时间 <input id="facStart" type="datetime-local" style="padding:4px;" /></label>
+        <label style="font-size:12px;">每条间隔 <input id="facInterval" type="number" value="45" min="0" style="width:56px;padding:4px;" /> 分钟</label>
+      </div>
+      <div class="text-muted" style="font-size:11px;margin-top:4px;">留空开始时间=全部存草稿；填了=从该时间起每隔 N 分钟自动发一条（错峰防关联）。</div>
+      <div class="btn-group" style="margin-top:10px;">
+        <button class="btn btn-primary" onclick="factoryCommit()">🚀 铺量（建成 ${accts.length ? '' : ''}定时帖）</button>
+        <button class="btn btn-secondary" onclick="closeMatrix()">取消</button>
+      </div>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+(window as any).closeMatrix = () => { document.getElementById('matrixOverlay')?.remove(); };
+(window as any).facToggleAll = (on: boolean) => {
+  document.querySelectorAll('.facSlot').forEach(e => (e as HTMLInputElement).checked = on);
+};
+(window as any).factoryGenerate = async (productId: string) => {
+  const idea = (document.getElementById('facIdea') as HTMLTextAreaElement)?.value || '';
+  const slots = Array.from(document.querySelectorAll('.facSlot:checked')).map(e => {
+    const el = e as HTMLInputElement;
+    return { account_id: el.value, platform: el.dataset.platform || 'twitter', persona_email: el.dataset.email || '' };
+  });
+  if (!slots.length) { showToast('请至少选一个投放槽位', 'error'); return; }
+  const btn = document.getElementById('facGenBtn') as HTMLButtonElement;
+  const prev = document.getElementById('facPreview');
+  if (btn) { btn.disabled = true; btn.textContent = `✨ 生成中…(${slots.length} 条逐条产出)`; }
+  if (prev) prev.innerHTML = '<div class="text-muted" style="font-size:12px;">AI 正在为每个平台/人设产出成品…约每条 3-6 秒</div>';
+  try {
+    factoryItems = await invoke<any[]>('matrix_factory_generate', { productId, idea, items: slots });
+    renderFactoryPreview();
+    const commit = document.getElementById('facCommit'); if (commit) commit.style.display = 'block';
+    showToast(`已产出 ${factoryItems.length} 条成品`, 'success');
+  } catch (e) {
+    if (prev) prev.innerHTML = `<div style="color:#e55;font-size:12px;">生成失败：${escapeHtml('' + e)}</div>`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '✨ 重新生成成品'; }
+  }
+};
+function renderFactoryPreview() {
+  const prev = document.getElementById('facPreview');
+  if (!prev) return;
+  prev.innerHTML = factoryItems.map((it, i) => {
+    const needImg = !!it.image_prompt && it.platform.toLowerCase() !== 'linkedin' && it.platform.toLowerCase() !== 'reddit';
+    const hasImg = (it.media_paths || []).length > 0;
+    const imgBtn = needImg ? (hasImg
+      ? `<span class="badge" style="background:#2ecc71;color:#fff;">🖼已配图</span>`
+      : `<button class="btn btn-small btn-secondary" onclick="factoryImageOne(${i})">🖼 配图</button>`) : '';
+    return `<div style="border:1px solid var(--border,#eee);border-radius:8px;padding:10px;margin-bottom:8px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+          <span class="badge">${escapeHtml(it.platform)}</span>
+          <span class="text-muted" style="font-size:11px;">${escapeHtml(it.persona_email || '')}</span>
+          <span class="text-muted" style="font-size:11px;">· 人设：${escapeHtml(it.angle || '')}</span>
+        </div>
+        ${imgBtn}
+      </div>
+      ${['twitter', 'x', 'linkedin'].includes(it.platform.toLowerCase()) ? '' : `<input value="${escapeHtml(it.title || '')}" oninput="factoryEdit(${i},'title',this.value)" placeholder="标题" style="width:100%;padding:5px;margin-bottom:4px;font-size:12px;" />`}
+      <textarea rows="4" oninput="factoryEdit(${i},'body',this.value)" style="width:100%;padding:6px;font-size:12px;resize:vertical;">${escapeHtml(it.body || '')}</textarea>
+      ${(it.topics || []).length ? `<div style="font-size:11px;color:var(--accent,#6c5ce7);margin-top:3px;">${(it.topics || []).map((t: string) => '#' + escapeHtml(t)).join(' ')}</div>` : ''}
+      ${hasImg ? `<div class="text-muted" style="font-size:11px;margin-top:3px;">📎 ${escapeHtml((it.media_paths[0] || '').split(/[\\/]/).pop())}</div>` : (needImg && it.image_prompt ? `<div class="text-muted" style="font-size:11px;margin-top:3px;font-style:italic;">配图建议：${escapeHtml(it.image_prompt.slice(0, 70))}</div>` : '')}
+    </div>`;
+  }).join('');
+}
+(window as any).factoryEdit = (i: number, field: string, val: string) => { if (factoryItems[i]) factoryItems[i][field] = val; };
+(window as any).factoryImageOne = async (i: number) => {
+  const it = factoryItems[i]; if (!it) return;
+  showToast(`第${i + 1}条配图生成中…`, 'info');
+  try {
+    const path = await invoke<string>('generate_ai_image', { prompt: it.image_prompt || it.body, aspectRatio: it.aspect_ratio || '1:1' });
+    it.media_paths = [path];
+    renderFactoryPreview();
+    showToast(`第${i + 1}条已配图`, 'success');
+  } catch (e) { showToast('配图失败: ' + e, 'error'); }
+};
+(window as any).factoryImageAll = async () => {
+  const targets = factoryItems.map((it, i) => ({ it, i })).filter(({ it }) =>
+    it.image_prompt && !(it.media_paths || []).length &&
+    it.platform.toLowerCase() !== 'linkedin' && it.platform.toLowerCase() !== 'reddit');
+  if (!targets.length) { showToast('没有需要配图的条目', 'info'); return; }
+  showToast(`正在为 ${targets.length} 条配图…`, 'info');
+  for (const { it, i } of targets) {
+    try {
+      const path = await invoke<string>('generate_ai_image', { prompt: it.image_prompt || it.body, aspectRatio: it.aspect_ratio || '1:1' });
+      it.media_paths = [path]; renderFactoryPreview();
+    } catch (e) { showToast(`第${i + 1}条配图失败: ${e}`, 'error'); }
+  }
+  showToast('全部配图完成', 'success');
+};
+(window as any).factoryCommit = async () => {
+  if (!factoryItems.length) { showToast('请先生成成品', 'error'); return; }
+  const startLocal = (document.getElementById('facStart') as HTMLInputElement)?.value;
+  const start_at = startLocal ? postLocalToUtc(startLocal) : undefined;
+  const interval = parseInt((document.getElementById('facInterval') as HTMLInputElement)?.value || '0', 10);
+  try {
+    const n = await invoke<number>('factory_commit', { items: factoryItems, startAt: start_at, intervalMinutes: interval });
+    showToast(`已铺量 ${n} 条${start_at ? '（已排期，引擎到点自动发）' : '（草稿）'}`, 'success');
+    (window as any).closeMatrix();
+    refreshPosts();
+  } catch (e) { showToast('铺量失败: ' + e, 'error'); }
 };
 
 // ===================== 成效追踪（搜索排名 + 品牌提及） =====================

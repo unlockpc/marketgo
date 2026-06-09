@@ -2889,7 +2889,37 @@
   var keywords = [];
   var discoveredPosts = [];
   var currentReplyPost = null;
+  var engageInboxWired = false;
   async function loadEngagePage() {
+    if (!engageInboxWired) {
+      engageInboxWired = true;
+      document.getElementById("btnInboxRefresh")?.addEventListener("click", () => loadEngageInbox());
+      document.getElementById("inboxFilter")?.addEventListener("change", () => loadEngageInbox());
+      document.getElementById("engageAutoToggle")?.addEventListener("change", async (e) => {
+        const on = e.target.checked;
+        try {
+          await invoke2("engage_set_auto", { on, intervalMinutes: null, maxInflight: null });
+          showToast(on ? "\u5DF2\u5F00\u542F\u81EA\u52A8\u83B7\u5BA2" : "\u5DF2\u5173\u95ED\u81EA\u52A8\u83B7\u5BA2", "success");
+          loadEngageControl();
+        } catch (err) {
+          showToast("" + err, "error");
+        }
+      });
+      document.getElementById("engageSaveCfg")?.addEventListener("click", async () => {
+        const on = document.getElementById("engageAutoToggle")?.checked ?? true;
+        const intervalMinutes = parseInt(document.getElementById("engageInterval")?.value || "30", 10);
+        const maxInflight = parseInt(document.getElementById("engageMaxInflight")?.value || "6", 10);
+        try {
+          await invoke2("engage_set_auto", { on, intervalMinutes, maxInflight });
+          showToast("\u5DF2\u4FDD\u5B58\u5DE1\u68C0\u8282\u594F", "success");
+          loadEngageControl();
+        } catch (err) {
+          showToast("" + err, "error");
+        }
+      });
+    }
+    loadEngageControl();
+    loadEngageInbox();
     await loadKeywords();
     await loadReplyStrategies();
     await loadDiscoveredPosts();
@@ -2902,6 +2932,101 @@
       replySelect.innerHTML = '<option value="">No product (generic reply)</option>' + products.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("");
     }
   }
+  async function loadEngageControl() {
+    try {
+      const s = await invoke2("engage_get_settings");
+      const toggle = document.getElementById("engageAutoToggle");
+      const label = document.getElementById("engageAutoLabel");
+      const interval = document.getElementById("engageInterval");
+      const maxIn = document.getElementById("engageMaxInflight");
+      const status = document.getElementById("engageStatus");
+      if (toggle) toggle.checked = !!s.auto;
+      if (label) label.textContent = s.auto ? "\u2705 \u81EA\u52A8\u83B7\u5BA2\u8FD0\u884C\u4E2D" : "\u5DF2\u5173\u95ED\uFF08\u70B9\u5F00\u542F\u8BA9\u5F15\u64CE\u81EA\u5DF1\u5E72\uFF09";
+      if (interval && document.activeElement !== interval) interval.value = String(s.interval_minutes || 30);
+      if (maxIn && document.activeElement !== maxIn) maxIn.value = String(s.max_inflight || 6);
+      const modeLabel = s.reply_mode === "auto" ? "\u{1F7E2}\u5168\u81EA\u52A8(\u771F\u53D1)" : "\u{1F7E1}\u534A\u81EA\u52A8(\u8FDB\u6536\u4EF6\u7BB1\u5F85\u5BA1)";
+      const last = s.last_tick ? new Date(s.last_tick).toLocaleTimeString() : "\u5C1A\u672A\u5DE1\u68C0";
+      if (status) status.innerHTML = `\u6A21\u5F0F <b>${modeLabel}</b> \xB7 \u542F\u7528\u5173\u952E\u8BCD <b>${s.keywords_enabled}</b> \xB7 \u5728\u8DD1 <b>${s.inflight}</b> \xB7 \u4E0A\u6B21\u5DE1\u68C0 ${last}`;
+    } catch (e) {
+    }
+  }
+  async function loadEngageInbox() {
+    const box = document.getElementById("inboxList");
+    const sum = document.getElementById("engageSummary");
+    if (!box) return;
+    const filter = document.getElementById("inboxFilter")?.value || "all";
+    try {
+      const s = await invoke2("engage_summary");
+      if (sum) sum.innerHTML = `\u{1F525}\u5F85\u5BA1 <b>${s.pending_review}</b> \xB7 \u7EBF\u7D22 <b>${s.leads_open}</b> \xB7 \u2705\u8F6C\u5316 <b>${s.converted}</b> \xB7 \u63D0\u53CA <b>${s.mentions}</b>`;
+    } catch {
+    }
+    let items = [];
+    try {
+      items = await invoke2("engage_inbox", { filter }) || [];
+    } catch (e) {
+      box.innerHTML = `<p class="text-muted">\u52A0\u8F7D\u5931\u8D25\uFF1A${escapeHtml("" + e)}</p>`;
+      return;
+    }
+    if (!items.length) {
+      box.innerHTML = '<p class="text-muted">\u6682\u65E0\u4E92\u52A8\u3002\u5F00\u542F\u5173\u952E\u8BCD\u53D1\u73B0 + \u5168\u81EA\u52A8\u540E\uFF0C\u8FD9\u91CC\u4F1A\u81EA\u52A8\u6C47\u96C6\u7EBF\u7D22\u4E0E\u5F85\u5BA1\u56DE\u590D\u3002</p>';
+      return;
+    }
+    const kindLabel = { lead: "\u7EBF\u7D22", pending_reply: "\u5F85\u5BA1\u56DE\u590D", mention: "\u54C1\u724C\u63D0\u53CA" };
+    box.innerHTML = items.map((it) => {
+      const hot = it.hot ? `<span style="background:#ff4757;color:#fff;border-radius:8px;padding:1px 6px;font-size:10px;">\u{1F525}\u5F3A\u610F\u5411</span>` : "";
+      const intentColor = it.intent >= 70 ? "#ff4757" : it.intent >= 40 ? "#ffa502" : "#999";
+      const link = it.url ? `<a href="${escapeHtml(it.url)}" target="_blank" class="btn btn-small btn-secondary">\u6253\u5F00\u2197</a>` : "";
+      let actions = link;
+      if (it.kind === "pending_reply") {
+        actions += ` <button class="btn btn-small btn-primary" onclick="inboxApprove('${it.ref_id}')">\u2705\u901A\u8FC7\u53D1\u5E03</button>
+                   <button class="btn btn-small btn-secondary" onclick="inboxReject('${it.ref_id}')">\u5FFD\u7565</button>`;
+      } else if (it.kind === "lead") {
+        actions += ` <button class="btn btn-small btn-primary" onclick="inboxLead('${it.ref_id}','converted')">\u2705\u5DF2\u8F6C\u5316</button>
+                   <button class="btn btn-small btn-secondary" onclick="inboxLead('${it.ref_id}','dismissed')">\u5FFD\u7565</button>`;
+      }
+      return `<div class="card" style="padding:10px 12px;margin-bottom:8px;border-left:3px solid ${it.hot ? "#ff4757" : "transparent"};">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+          <span class="badge">${kindLabel[it.kind] || it.kind}</span>
+          <span class="badge">${escapeHtml(it.platform)}</span>
+          ${it.author ? `<span class="text-muted" style="font-size:12px;">@${escapeHtml(it.author)}</span>` : ""}
+          ${hot}
+          <span style="color:${intentColor};font-size:11px;font-weight:600;">\u610F\u5411 ${it.intent}</span>
+        </div>
+        <span class="text-muted" style="font-size:11px;">${new Date(it.created_at).toLocaleString()}</span>
+      </div>
+      <div style="font-size:13px;white-space:pre-wrap;margin-bottom:6px;">${escapeHtml((it.text || "").slice(0, 240))}</div>
+      <div class="btn-group" style="gap:6px;flex-wrap:wrap;">${actions}</div>
+    </div>`;
+    }).join("");
+  }
+  window.inboxApprove = async (id) => {
+    try {
+      await invoke2("approve_reply", { id, editedContent: null });
+      showToast("\u5DF2\u5165\u961F\u53D1\u5E03", "success");
+      loadEngageInbox();
+    } catch (e) {
+      showToast("" + e, "error");
+    }
+  };
+  window.inboxReject = async (id) => {
+    try {
+      await invoke2("reject_reply", { id });
+      showToast("\u5DF2\u5FFD\u7565", "success");
+      loadEngageInbox();
+    } catch (e) {
+      showToast("" + e, "error");
+    }
+  };
+  window.inboxLead = async (id, status) => {
+    try {
+      await invoke2("update_lead_status", { id, status, notes: null });
+      showToast("\u5DF2\u66F4\u65B0", "success");
+      loadEngageInbox();
+    } catch (e) {
+      showToast("" + e, "error");
+    }
+  };
   async function loadKeywords() {
     try {
       keywords = await invoke2("list_keywords");
@@ -5425,6 +5550,10 @@ ${a.body}`,
           showToast("\u53D1\u5E03\u5931\u8D25: " + e, "error");
         }
       });
+      document.getElementById("btnPostImage")?.addEventListener("click", () => aiGenerateMedia("image"));
+      document.getElementById("btnPostVideo")?.addEventListener("click", () => aiGenerateMedia("video"));
+      document.getElementById("btnPostMatrix")?.addEventListener("click", () => openMatrixModal());
+      document.getElementById("btnPostCalendar")?.addEventListener("click", () => toggleCalendar());
     }
     try {
       const products2 = await invoke2("list_products");
@@ -5534,6 +5663,297 @@ ${a.body}`,
     }
     showToast("\u5DF2\u8F7D\u5165\u5230\u7F16\u8F91\u533A", "success");
     window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+  function aiMediaPrompt() {
+    const product = document.getElementById("postProduct")?.selectedOptions?.[0]?.text || "";
+    const title = postFieldVal("postTitle");
+    const body = postFieldVal("postBody");
+    const base = [title, body].filter(Boolean).join("\u3002").slice(0, 400);
+    return base || `\u4E3A\u4EA7\u54C1\u300C${product}\u300D\u751F\u6210\u4E00\u5F20\u9AD8\u8D28\u611F\u3001\u73B0\u4EE3\u3001\u5E72\u51C0\u7684\u8425\u9500\u914D\u56FE`;
+  }
+  async function aiGenerateMedia(kind) {
+    const hint = document.getElementById("aiMediaHint");
+    const prompt2 = aiMediaPrompt();
+    if (!prompt2) {
+      showToast("\u5148\u5199\u70B9\u6B63\u6587/\u6807\u9898\uFF0CAI \u636E\u6B64\u914D\u56FE", "error");
+      return;
+    }
+    const setHint = (t2) => {
+      if (hint) hint.textContent = t2;
+    };
+    try {
+      let path;
+      if (kind === "image") {
+        const ar = document.getElementById("postImageAR")?.value || void 0;
+        setHint("\u{1F5BC} \u914D\u56FE\u751F\u6210\u4E2D\u2026\u7EA6 10-20 \u79D2");
+        showToast("AI \u914D\u56FE\u751F\u6210\u4E2D\u2026", "info");
+        path = await invoke2("generate_ai_image", { prompt: prompt2, aspectRatio: ar });
+      } else {
+        setHint("\u{1F3AC} \u89C6\u9891\u751F\u6210\u4E2D\u2026\u7EA6 1-3 \u5206\u949F\uFF0C\u8BF7\u52FF\u5173\u95ED");
+        showToast("AI \u89C6\u9891\u751F\u6210\u4E2D\uFF081-3 \u5206\u949F\uFF09\u2026", "info");
+        const plat = document.getElementById("postPlatform")?.value;
+        const ar = plat === "douyin" || plat === "xiaohongshu" ? "9:16" : "16:9";
+        path = await invoke2("generate_ai_video", { prompt: prompt2, model: null, aspectRatio: ar });
+      }
+      const cur = postFieldVal("postMedia");
+      postSetVal("postMedia", cur ? `${cur}, ${path}` : path);
+      setHint(`\u2705 \u5DF2\u751F\u6210\u5E76\u52A0\u5165\u5A92\u4F53\uFF1A${path.split(/[\\/]/).pop()}`);
+      showToast(kind === "image" ? "\u914D\u56FE\u5DF2\u751F\u6210" : "\u89C6\u9891\u5DF2\u751F\u6210", "success");
+    } catch (e) {
+      setHint("");
+      showToast((kind === "image" ? "\u914D\u56FE\u5931\u8D25: " : "\u89C6\u9891\u5931\u8D25: ") + e, "error");
+    }
+  }
+  var calendarMonth = /* @__PURE__ */ new Date();
+  async function toggleCalendar() {
+    const el = document.getElementById("postCalendar");
+    const list = document.getElementById("postList");
+    if (!el) return;
+    if (el.style.display === "none") {
+      el.style.display = "block";
+      if (list) list.style.display = "none";
+      await renderCalendar();
+    } else {
+      el.style.display = "none";
+      if (list) list.style.display = "block";
+    }
+  }
+  async function renderCalendar() {
+    const el = document.getElementById("postCalendar");
+    if (!el) return;
+    let posts = [];
+    try {
+      posts = await invoke2("list_posts") || [];
+    } catch {
+    }
+    const byDay = {};
+    for (const p of posts) {
+      const when = p.scheduled_at || p.published_at;
+      if (!when) continue;
+      const d = new Date(when);
+      if (isNaN(d.getTime())) continue;
+      const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+      (byDay[key] ||= []).push(p);
+    }
+    const y = calendarMonth.getFullYear(), m = calendarMonth.getMonth();
+    const first = new Date(y, m, 1);
+    const startDow = first.getDay();
+    const daysInMonth = new Date(y, m + 1, 0).getDate();
+    const today = /* @__PURE__ */ new Date();
+    const monthLabel = `${y} \u5E74 ${m + 1} \u6708`;
+    const dows = ["\u65E5", "\u4E00", "\u4E8C", "\u4E09", "\u56DB", "\u4E94", "\u516D"];
+    let cells = "";
+    for (let i = 0; i < startDow; i++) cells += `<div></div>`;
+    const platEmoji = { twitter: "\u{1D54F}", x: "\u{1D54F}", linkedin: "\u{1F4BC}", reddit: "\u{1F47D}", xiaohongshu: "\u{1F4D5}", douyin: "\u{1F3B5}" };
+    for (let day = 1; day <= daysInMonth; day++) {
+      const key = `${y}-${m}-${day}`;
+      const items = byDay[key] || [];
+      const isToday = today.getFullYear() === y && today.getMonth() === m && today.getDate() === day;
+      const chips = items.slice(0, 4).map((p) => {
+        const t2 = new Date(p.scheduled_at || p.published_at);
+        const hh = String(t2.getHours()).padStart(2, "0") + ":" + String(t2.getMinutes()).padStart(2, "0");
+        const st = p.status === "published" ? "\u2705" : p.status === "failed" ? "\u274C" : "\u23F0";
+        const acct = p.account_id ? "" : "";
+        return `<div title="${escapeHtml((p.title || "") + " " + (p.body || "").slice(0, 60))}" style="font-size:10px;background:var(--bg-soft,#f2f3f7);border-radius:4px;padding:1px 4px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;" onclick="postEdit('${p.id}')">${st}${platEmoji[p.platform] || ""} ${hh} ${escapeHtml((p.title || p.body || "").slice(0, 10))}${acct}</div>`;
+      }).join("");
+      const more = items.length > 4 ? `<div style="font-size:10px;color:var(--text-muted,#888);">+${items.length - 4}\u2026</div>` : "";
+      cells += `<div style="border:1px solid var(--border,#eee);border-radius:6px;min-height:74px;padding:4px;${isToday ? "outline:2px solid var(--accent,#6c5ce7);" : ""}">
+      <div style="font-size:11px;color:${isToday ? "var(--accent,#6c5ce7)" : "var(--text-muted,#999)"};font-weight:${isToday ? "700" : "400"};">${day}</div>
+      ${chips}${more}
+    </div>`;
+    }
+    el.innerHTML = `<div class="card" style="padding:14px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+      <button class="btn btn-small btn-secondary" onclick="calMove(-1)">\u2039 \u4E0A\u6708</button>
+      <strong>${monthLabel} \xB7 \u5185\u5BB9\u65E5\u5386</strong>
+      <button class="btn btn-small btn-secondary" onclick="calMove(1)">\u4E0B\u6708 \u203A</button>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:4px;">
+      ${dows.map((d) => `<div style="text-align:center;font-size:11px;color:var(--text-muted,#999);">${d}</div>`).join("")}
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;">${cells}</div>
+    <div class="text-muted" style="font-size:11px;margin-top:8px;">\u23F0\u5F85\u53D1 \xB7 \u2705\u5DF2\u53D1 \xB7 \u274C\u5931\u8D25 \xB7 \u70B9\u683C\u5B50\u91CC\u7684\u6761\u76EE\u53EF\u8F7D\u5165\u7F16\u8F91\u3002\u6392\u671F\u5728\u300C\u5B9A\u65F6\u53D1\u5E03\u300D\u91CC\u8BBE\u3002</div>
+  </div>`;
+  }
+  window.calMove = (delta) => {
+    calendarMonth.setMonth(calendarMonth.getMonth() + delta);
+    renderCalendar();
+  };
+  var factoryItems = [];
+  async function openMatrixModal() {
+    const product_id = document.getElementById("postProduct")?.value;
+    if (!product_id) {
+      showToast("\u8BF7\u5148\u5728\u4E0A\u65B9\u9009\u4EA7\u54C1", "error");
+      return;
+    }
+    factoryItems = [];
+    let accts = [];
+    try {
+      accts = await invoke2("list_accounts") || [];
+    } catch {
+    }
+    accts = accts.filter((a) => (a.status || "active") === "active");
+    let overlay = document.getElementById("matrixOverlay");
+    if (overlay) overlay.remove();
+    overlay = document.createElement("div");
+    overlay.id = "matrixOverlay";
+    overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center;";
+    const slotRows = accts.length ? accts.map((a, i) => `<label style="display:flex;align-items:center;gap:6px;font-size:12px;padding:3px 0;">
+        <input type="checkbox" class="facSlot" data-idx="${i}" value="${a.id}" checked
+          data-platform="${escapeHtml(a.platform || "")}" data-email="${escapeHtml(a.persona_email || a.email || "")}" />
+        <span class="badge">${escapeHtml(a.platform || "?")}</span> ${escapeHtml(a.persona_email || a.email || a.username || a.id)}
+      </label>`).join("") : `<div class="text-muted" style="font-size:12px;">\u8FD8\u6CA1\u6709\u6D3B\u8DC3\u8D26\u53F7\u3002\u5148\u5230\u300C\u90AE\u7BB1\u8D26\u53F7\u300D\u5F00\u901A\u8D26\u53F7\uFF0C\u518D\u6765\u77E9\u9635\u5DE5\u5382\u3002</div>`;
+    overlay.innerHTML = `<div class="card" style="width:min(820px,94vw);max-height:90vh;overflow:auto;padding:18px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <h3 style="margin:0;">\u{1F3ED} \u77E9\u9635\u5185\u5BB9\u5DE5\u5382</h3>
+      <button class="btn btn-small btn-secondary" onclick="closeMatrix()">\u2715</button>
+    </div>
+    <p class="text-muted" style="font-size:12px;margin:0 0 12px;">\u4E00\u4E2A\u521B\u610F \u2192\uFF08\u6BCF\u4E2A\u90AE\u7BB1\u4E00\u6761\uFF09<strong>\u9010\u5E73\u53F0\u6B63\u786E\u5F62\u6001 + \u4E0D\u540C\u4EBA\u8BBE\u53E3\u543B</strong>\u7684\u6210\u54C1\u6587\u6848\uFF0C\u6309\u9700\u914D\u56FE\uFF0C\u9519\u5CF0\u94FA\u5230\u5404 profile\uFF0C\u5F15\u64CE\u5230\u70B9\u81EA\u52A8\u53D1\u3002</p>
+    <div style="margin-bottom:10px;">
+      <label class="text-muted" style="font-size:12px;">\u521B\u610F / \u4E3B\u9898\uFF08\u7559\u7A7A=\u81EA\u52A8\u56F4\u7ED5\u4EA7\u54C1\u5356\u70B9\uFF09</label>
+      <textarea id="facIdea" rows="2" placeholder="\u4F8B\uFF1A\u7528\u4E00\u4E2A\u771F\u5B9E\u573A\u666F\u8BF4\u660E\u8FD9\u5DE5\u5177\u600E\u4E48\u5E2E\u4EBA\u7701\u65F6\u95F4" style="width:100%;padding:8px;resize:vertical;"></textarea>
+    </div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;">
+      <div style="flex:1;min-width:240px;">
+        <div style="font-size:12px;font-weight:600;margin-bottom:4px;">\u6295\u653E\u69FD\u4F4D\uFF08\u6BCF\u4E2A=\u4E00\u4E2A\u90AE\u7BB1\u53D1\u4E00\u6761\uFF0C${accts.length}\uFF09
+          <a href="#" style="font-size:11px;font-weight:400;margin-left:6px;" onclick="facToggleAll(true);return false;">\u5168\u9009</a> \xB7
+          <a href="#" style="font-size:11px;font-weight:400;" onclick="facToggleAll(false);return false;">\u5168\u4E0D\u9009</a>
+        </div>
+        <div style="max-height:180px;overflow:auto;border:1px solid var(--border,#eee);border-radius:6px;padding:8px;">${slotRows}</div>
+      </div>
+    </div>
+    <div class="btn-group" style="margin-top:10px;">
+      <button class="btn btn-primary" id="facGenBtn" onclick="factoryGenerate('${product_id}')">\u2728 \u751F\u6210\u6210\u54C1\uFF08\u9010\u5E73\u53F0\xD7\u9010\u4EBA\u8BBE\uFF09</button>
+    </div>
+    <div id="facPreview" style="margin-top:12px;"></div>
+    <div id="facCommit" style="display:none;border-top:1px solid var(--border,#eee);padding-top:10px;margin-top:12px;">
+      <div class="btn-group" style="margin-bottom:8px;">
+        <button class="btn btn-secondary btn-small" onclick="factoryImageAll('${product_id}')">\u{1F5BC} \u7ED9\u5168\u90E8\u9700\u8981\u7684\u914D\u56FE</button>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <label style="font-size:12px;">\u5F00\u59CB\u65F6\u95F4 <input id="facStart" type="datetime-local" style="padding:4px;" /></label>
+        <label style="font-size:12px;">\u6BCF\u6761\u95F4\u9694 <input id="facInterval" type="number" value="45" min="0" style="width:56px;padding:4px;" /> \u5206\u949F</label>
+      </div>
+      <div class="text-muted" style="font-size:11px;margin-top:4px;">\u7559\u7A7A\u5F00\u59CB\u65F6\u95F4=\u5168\u90E8\u5B58\u8349\u7A3F\uFF1B\u586B\u4E86=\u4ECE\u8BE5\u65F6\u95F4\u8D77\u6BCF\u9694 N \u5206\u949F\u81EA\u52A8\u53D1\u4E00\u6761\uFF08\u9519\u5CF0\u9632\u5173\u8054\uFF09\u3002</div>
+      <div class="btn-group" style="margin-top:10px;">
+        <button class="btn btn-primary" onclick="factoryCommit()">\u{1F680} \u94FA\u91CF\uFF08\u5EFA\u6210 ${accts.length ? "" : ""}\u5B9A\u65F6\u5E16\uFF09</button>
+        <button class="btn btn-secondary" onclick="closeMatrix()">\u53D6\u6D88</button>
+      </div>
+    </div>
+  </div>`;
+    document.body.appendChild(overlay);
+  }
+  window.closeMatrix = () => {
+    document.getElementById("matrixOverlay")?.remove();
+  };
+  window.facToggleAll = (on) => {
+    document.querySelectorAll(".facSlot").forEach((e) => e.checked = on);
+  };
+  window.factoryGenerate = async (productId) => {
+    const idea = document.getElementById("facIdea")?.value || "";
+    const slots = Array.from(document.querySelectorAll(".facSlot:checked")).map((e) => {
+      const el = e;
+      return { account_id: el.value, platform: el.dataset.platform || "twitter", persona_email: el.dataset.email || "" };
+    });
+    if (!slots.length) {
+      showToast("\u8BF7\u81F3\u5C11\u9009\u4E00\u4E2A\u6295\u653E\u69FD\u4F4D", "error");
+      return;
+    }
+    const btn = document.getElementById("facGenBtn");
+    const prev = document.getElementById("facPreview");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = `\u2728 \u751F\u6210\u4E2D\u2026(${slots.length} \u6761\u9010\u6761\u4EA7\u51FA)`;
+    }
+    if (prev) prev.innerHTML = '<div class="text-muted" style="font-size:12px;">AI \u6B63\u5728\u4E3A\u6BCF\u4E2A\u5E73\u53F0/\u4EBA\u8BBE\u4EA7\u51FA\u6210\u54C1\u2026\u7EA6\u6BCF\u6761 3-6 \u79D2</div>';
+    try {
+      factoryItems = await invoke2("matrix_factory_generate", { productId, idea, items: slots });
+      renderFactoryPreview();
+      const commit = document.getElementById("facCommit");
+      if (commit) commit.style.display = "block";
+      showToast(`\u5DF2\u4EA7\u51FA ${factoryItems.length} \u6761\u6210\u54C1`, "success");
+    } catch (e) {
+      if (prev) prev.innerHTML = `<div style="color:#e55;font-size:12px;">\u751F\u6210\u5931\u8D25\uFF1A${escapeHtml("" + e)}</div>`;
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "\u2728 \u91CD\u65B0\u751F\u6210\u6210\u54C1";
+      }
+    }
+  };
+  function renderFactoryPreview() {
+    const prev = document.getElementById("facPreview");
+    if (!prev) return;
+    prev.innerHTML = factoryItems.map((it, i) => {
+      const needImg = !!it.image_prompt && it.platform.toLowerCase() !== "linkedin" && it.platform.toLowerCase() !== "reddit";
+      const hasImg = (it.media_paths || []).length > 0;
+      const imgBtn = needImg ? hasImg ? `<span class="badge" style="background:#2ecc71;color:#fff;">\u{1F5BC}\u5DF2\u914D\u56FE</span>` : `<button class="btn btn-small btn-secondary" onclick="factoryImageOne(${i})">\u{1F5BC} \u914D\u56FE</button>` : "";
+      return `<div style="border:1px solid var(--border,#eee);border-radius:8px;padding:10px;margin-bottom:8px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+          <span class="badge">${escapeHtml(it.platform)}</span>
+          <span class="text-muted" style="font-size:11px;">${escapeHtml(it.persona_email || "")}</span>
+          <span class="text-muted" style="font-size:11px;">\xB7 \u4EBA\u8BBE\uFF1A${escapeHtml(it.angle || "")}</span>
+        </div>
+        ${imgBtn}
+      </div>
+      ${["twitter", "x", "linkedin"].includes(it.platform.toLowerCase()) ? "" : `<input value="${escapeHtml(it.title || "")}" oninput="factoryEdit(${i},'title',this.value)" placeholder="\u6807\u9898" style="width:100%;padding:5px;margin-bottom:4px;font-size:12px;" />`}
+      <textarea rows="4" oninput="factoryEdit(${i},'body',this.value)" style="width:100%;padding:6px;font-size:12px;resize:vertical;">${escapeHtml(it.body || "")}</textarea>
+      ${(it.topics || []).length ? `<div style="font-size:11px;color:var(--accent,#6c5ce7);margin-top:3px;">${(it.topics || []).map((t2) => "#" + escapeHtml(t2)).join(" ")}</div>` : ""}
+      ${hasImg ? `<div class="text-muted" style="font-size:11px;margin-top:3px;">\u{1F4CE} ${escapeHtml((it.media_paths[0] || "").split(/[\\/]/).pop())}</div>` : needImg && it.image_prompt ? `<div class="text-muted" style="font-size:11px;margin-top:3px;font-style:italic;">\u914D\u56FE\u5EFA\u8BAE\uFF1A${escapeHtml(it.image_prompt.slice(0, 70))}</div>` : ""}
+    </div>`;
+    }).join("");
+  }
+  window.factoryEdit = (i, field, val) => {
+    if (factoryItems[i]) factoryItems[i][field] = val;
+  };
+  window.factoryImageOne = async (i) => {
+    const it = factoryItems[i];
+    if (!it) return;
+    showToast(`\u7B2C${i + 1}\u6761\u914D\u56FE\u751F\u6210\u4E2D\u2026`, "info");
+    try {
+      const path = await invoke2("generate_ai_image", { prompt: it.image_prompt || it.body, aspectRatio: it.aspect_ratio || "1:1" });
+      it.media_paths = [path];
+      renderFactoryPreview();
+      showToast(`\u7B2C${i + 1}\u6761\u5DF2\u914D\u56FE`, "success");
+    } catch (e) {
+      showToast("\u914D\u56FE\u5931\u8D25: " + e, "error");
+    }
+  };
+  window.factoryImageAll = async () => {
+    const targets = factoryItems.map((it, i) => ({ it, i })).filter(({ it }) => it.image_prompt && !(it.media_paths || []).length && it.platform.toLowerCase() !== "linkedin" && it.platform.toLowerCase() !== "reddit");
+    if (!targets.length) {
+      showToast("\u6CA1\u6709\u9700\u8981\u914D\u56FE\u7684\u6761\u76EE", "info");
+      return;
+    }
+    showToast(`\u6B63\u5728\u4E3A ${targets.length} \u6761\u914D\u56FE\u2026`, "info");
+    for (const { it, i } of targets) {
+      try {
+        const path = await invoke2("generate_ai_image", { prompt: it.image_prompt || it.body, aspectRatio: it.aspect_ratio || "1:1" });
+        it.media_paths = [path];
+        renderFactoryPreview();
+      } catch (e) {
+        showToast(`\u7B2C${i + 1}\u6761\u914D\u56FE\u5931\u8D25: ${e}`, "error");
+      }
+    }
+    showToast("\u5168\u90E8\u914D\u56FE\u5B8C\u6210", "success");
+  };
+  window.factoryCommit = async () => {
+    if (!factoryItems.length) {
+      showToast("\u8BF7\u5148\u751F\u6210\u6210\u54C1", "error");
+      return;
+    }
+    const startLocal = document.getElementById("facStart")?.value;
+    const start_at = startLocal ? postLocalToUtc(startLocal) : void 0;
+    const interval = parseInt(document.getElementById("facInterval")?.value || "0", 10);
+    try {
+      const n = await invoke2("factory_commit", { items: factoryItems, startAt: start_at, intervalMinutes: interval });
+      showToast(`\u5DF2\u94FA\u91CF ${n} \u6761${start_at ? "\uFF08\u5DF2\u6392\u671F\uFF0C\u5F15\u64CE\u5230\u70B9\u81EA\u52A8\u53D1\uFF09" : "\uFF08\u8349\u7A3F\uFF09"}`, "success");
+      window.closeMatrix();
+      refreshPosts();
+    } catch (e) {
+      showToast("\u94FA\u91CF\u5931\u8D25: " + e, "error");
+    }
   };
   var metricsWired = false;
   async function loadMetricsPage() {
