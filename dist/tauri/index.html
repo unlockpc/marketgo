@@ -713,6 +713,44 @@
           </div>
         </section>
 
+        <!-- 自动获客控制台（真·Engage 闭环开关 + 状态） -->
+        <section class="settings-section" style="margin-bottom: 20px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+            <h3 style="margin:0;">🤖 自动获客（常驻监控）</h3>
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;">
+              <input type="checkbox" id="engageAutoToggle" style="width:18px;height:18px;" />
+              <span id="engageAutoLabel">开启后引擎自己去获客</span>
+            </label>
+          </div>
+          <p class="text-muted" style="font-size:12px;margin:8px 0;">引擎会用各邮箱的 profile 自动：① 按你的关键词去各平台搜帖、判意向、生成回复；② 监控自己已发帖子的评论并就地回应。低意向自动跳过，命中的进下面收件箱。<strong>半自动</strong>模式下只产出建议待你点通过；<strong>全自动</strong>才真发。</p>
+          <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
+            <label style="font-size:12px;">巡检间隔 <input id="engageInterval" type="number" value="30" min="5" style="width:60px;padding:4px;" /> 分钟</label>
+            <label style="font-size:12px;">同时最多在跑 <input id="engageMaxInflight" type="number" value="6" min="1" max="30" style="width:56px;padding:4px;" /> 条</label>
+            <button class="btn btn-secondary btn-small" id="engageSaveCfg">保存节奏</button>
+            <span id="engageStatus" class="text-muted" style="font-size:12px;"></span>
+          </div>
+        </section>
+
+        <!-- 统一互动收件箱（转化信号 + 品牌提及 + 待审回复） -->
+        <section class="settings-section" style="margin-bottom: 20px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+            <h3 style="margin:0;">📥 统一互动收件箱</h3>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <div id="engageSummary" class="text-muted" style="font-size:12px;"></div>
+              <select id="inboxFilter" class="select" style="width:auto;display:inline-block;">
+                <option value="all">全部</option>
+                <option value="hot">🔥 高意向</option>
+                <option value="pending_reply">待审回复</option>
+                <option value="lead">线索</option>
+                <option value="mention">品牌提及</option>
+              </select>
+              <button class="btn btn-secondary" id="btnInboxRefresh">刷新</button>
+            </div>
+          </div>
+          <p class="text-muted" style="font-size:12px;margin:0 0 10px;">把"求链接/怎么买"等强购买信号自动置顶，合并线索、待审回复、品牌提及，一处响应。</p>
+          <div id="inboxList"><p class="text-muted">加载中…</p></div>
+        </section>
+
         <!-- Keywords -->
         <section class="settings-section" style="margin-bottom: 20px;">
           <h3>🔍 Monitoring Keywords</h3>
@@ -961,7 +999,9 @@
       <div class="page" id="page-content">
         <header class="page-header">
           <h2>📣 内容发布 · 原创 + 定时</h2>
-          <div class="btn-group">
+          <div class="btn-group" style="gap:8px;flex-wrap:wrap;">
+            <button class="btn btn-secondary" id="btnPostMatrix">🧩 矩阵铺量</button>
+            <button class="btn btn-secondary" id="btnPostCalendar">📅 内容日历</button>
             <button class="btn btn-secondary" id="btnPostRefresh">刷新</button>
           </div>
         </header>
@@ -1016,6 +1056,18 @@
             <label class="text-muted" style="font-size:12px;">媒体文件绝对路径（逗号分隔，图文/视频必填）</label>
             <input id="postMedia" placeholder="C:\\Users\\you\\pics\\1.jpg, C:\\...\\2.jpg" style="width:100%;padding:8px;" />
             <span class="text-muted" style="font-size:11px;">小红书=图片（≥1张）；抖音=视频（取第1个）；X=可选配图（≤4张）。</span>
+            <div class="btn-group" style="margin-top:8px;gap:8px;flex-wrap:wrap;">
+              <button class="btn btn-secondary btn-small" id="btnPostImage">🖼 AI 配图</button>
+              <button class="btn btn-secondary btn-small" id="btnPostVideo">🎬 AI 视频</button>
+              <select class="select" id="postImageAR" style="padding:4px;font-size:12px;">
+                <option value="">配图比例·自动</option>
+                <option value="1:1">1:1 方</option>
+                <option value="16:9">16:9 横</option>
+                <option value="9:16">9:16 竖</option>
+                <option value="4:5">4:5 小红书</option>
+              </select>
+              <span class="text-muted" id="aiMediaHint" style="font-size:11px;align-self:center;"></span>
+            </div>
           </div>
 
           <div class="btn-group" style="margin-top:12px;flex-wrap:wrap;gap:8px;">
@@ -1028,6 +1080,7 @@
           <input type="hidden" id="postEditId" />
         </div>
 
+        <div id="postCalendar" style="display:none;margin:0 0 14px;"></div>
         <div id="postList"></div>
       </div>
 
