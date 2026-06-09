@@ -3553,6 +3553,7 @@
   async function loadSettingsProfiles() {
     const select = document.getElementById("browserProfile");
     const statusDiv = document.getElementById("profileStatus");
+    const detailDiv = document.getElementById("browserStatusDetail");
     if (!select) return;
     try {
       const profiles = await invoke2("get_available_browser_profiles");
@@ -3571,6 +3572,9 @@
         statusDiv.innerHTML = `<span style="color: var(--success);">\u2713 \u5DF2\u9009\u62E9: ${selectedProfile}</span>`;
       }
       const status = await invoke2("get_browser_status");
+      if (detailDiv) {
+        detailDiv.innerHTML = status.connected ? `<span class="status-badge" style="background: var(--success); color: #fff;">\u2713 Unzoo \u5DF2\u8FDE\u63A5${status.active_tab ? " \xB7 Tab " + escapeHtml(String(status.active_tab)) : ""}</span>` : `<span class="status-badge" style="background: var(--danger); color: #fff;">\u2715 Unzoo \u672A\u8FDE\u63A5</span>`;
+      }
       if (status.connected) {
         if (statusDiv) {
           statusDiv.innerHTML = `<span style="color: var(--success);">\u2713 \u5DF2\u8FDE\u63A5 (Tab: ${status.active_tab || "Unknown"})</span>`;
@@ -3578,6 +3582,9 @@
       }
     } catch (error) {
       console.error("Failed to load browser profiles:", error);
+      if (detailDiv) {
+        detailDiv.innerHTML = `<span class="status-badge" style="background: var(--danger); color: #fff;">\u2715 \u65E0\u6CD5\u8FDE\u63A5 Unzoo</span>`;
+      }
       if (statusDiv) {
         statusDiv.innerHTML = `<span style="color: var(--danger);">\u26A0 \u65E0\u6CD5\u52A0\u8F7D Profiles: ${error}</span>`;
       }

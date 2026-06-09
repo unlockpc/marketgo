@@ -1846,7 +1846,7 @@ function renderAccounts() {
   </div>`;
 
   // 当前选中邮箱的面板
-  const sel = selectedPersonaId;
+  const sel = selectedPersonaId as string;
   const accts = groups.get(sel) || [];
   let panel = '';
   if (sel === '__none__') {
@@ -4326,6 +4326,7 @@ async function loadSettings() {
 async function loadSettingsProfiles() {
   const select = document.getElementById('browserProfile') as HTMLSelectElement;
   const statusDiv = document.getElementById('profileStatus');
+  const detailDiv = document.getElementById('browserStatusDetail');
   if (!select) return;
 
   try {
@@ -4354,6 +4355,11 @@ async function loadSettingsProfiles() {
 
     // Get browser connection status
     const status = await invoke<any>('get_browser_status');
+    if (detailDiv) {
+      detailDiv.innerHTML = status.connected
+        ? `<span class="status-badge" style="background: var(--success); color: #fff;">✓ Unzoo 已连接${status.active_tab ? ' · Tab ' + escapeHtml(String(status.active_tab)) : ''}</span>`
+        : `<span class="status-badge" style="background: var(--danger); color: #fff;">✕ Unzoo 未连接</span>`;
+    }
     if (status.connected) {
       if (statusDiv) {
         statusDiv.innerHTML = `<span style="color: var(--success);">✓ 已连接 (Tab: ${status.active_tab || 'Unknown'})</span>`;
@@ -4361,6 +4367,9 @@ async function loadSettingsProfiles() {
     }
   } catch (error) {
     console.error('Failed to load browser profiles:', error);
+    if (detailDiv) {
+      detailDiv.innerHTML = `<span class="status-badge" style="background: var(--danger); color: #fff;">✕ 无法连接 Unzoo</span>`;
+    }
     if (statusDiv) {
       statusDiv.innerHTML = `<span style="color: var(--danger);">⚠ 无法加载 Profiles: ${error}</span>`;
     }

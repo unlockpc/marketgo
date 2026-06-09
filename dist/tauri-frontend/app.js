@@ -779,6 +779,18 @@ function navigateTo(page) {
         case 'tasks':
             loadTasksPage();
             break;
+        case 'content':
+            loadContentPage();
+            break;
+        case 'metrics':
+            loadMetricsPage();
+            break;
+        case 'personas':
+            loadPersonasPage();
+            break;
+        case 'marketplaces':
+            loadMarketplacesPage();
+            break;
         case 'stats':
             loadStats();
             break;
@@ -854,8 +866,9 @@ function initModals() {
     initArticleTypeSelection();
     document.getElementById('btnRefreshStrategies')?.addEventListener('click', loadPublishStrategies);
     document.getElementById('btnSaveAI')?.addEventListener('click', saveAISettings);
+    document.getElementById('btnTestAI')?.addEventListener('click', testAIConnection);
     document.getElementById('btnSaveScheduler')?.addEventListener('click', saveSchedulerSettings);
-    document.getElementById('aiProvider')?.addEventListener('change', () => populateDefaultModels());
+    document.getElementById('aiProvider')?.addEventListener('change', () => { populateDefaultModels(); updateAIKeyVisibility(); });
     document.getElementById('btnRefreshModels')?.addEventListener('click', refreshModels);
     // Engage page
     document.getElementById('btnAddKeyword')?.addEventListener('click', () => openKeywordModal());
@@ -904,30 +917,149 @@ async function loadInitialData() {
         showToast(t('msg.failedToLoad'), 'error');
     }
 }
-// Dashboard
+let dashWired = false;
+let dashPollTimer;
 async function loadDashboard() {
-    try {
-        // Load dashboard stats
-        const dashboardData = await invoke('get_dashboard_stats');
-        // Update stat cards
-        document.getElementById('dashActiveTasks').textContent = dashboardData.active_tasks?.toString() || '0';
-        document.getElementById('dashTodayPosts').textContent = dashboardData.today_posts?.toString() || '0';
-        document.getElementById('dashAccountHealth').textContent = (dashboardData.account_health || 0) + '%';
-        document.getElementById('dashSuccessRate').textContent = (dashboardData.success_rate || 0) + '%';
-        // Render active campaigns
-        renderDashboardCampaigns(dashboardData.campaigns || []);
-        // Render recent activity
-        renderDashboardActivity(dashboardData.recent_activity || []);
-        // Render platform health
-        renderPlatformHealth(dashboardData.platform_health || {});
+    if (!dashWired) {
+        dashWired = true;
+        wireAutopilot();
     }
-    catch (error) {
-        console.error('Failed to load dashboard:', error);
-        // Set default values on error
-        document.getElementById('dashActiveTasks').textContent = '0';
-        document.getElementById('dashTodayPosts').textContent = '0';
-        document.getElementById('dashAccountHealth').textContent = '--%';
-        document.getElementById('dashSuccessRate').textContent = '--%';
+    refreshConsole();
+    if (dashPollTimer)
+        clearInterval(dashPollTimer);
+    dashPollTimer = window.setInterval(() => {
+        if (currentPage === 'dashboard')
+            refreshConsole();
+        else if (dashPollTimer) {
+            clearInterval(dashPollTimer);
+            dashPollTimer = undefined;
+        }
+    }, 5000);
+}
+function wireAutopilot() {
+    document.getElementById('btnAutopilot')?.addEventListener('click', async () => {
+        try {
+            const st = await invoke('get_run_state');
+            if (st.autopilot) {
+                await invoke('stop_engine');
+                showToast('已暂停全自动', 'info');
+            }
+            else {
+                await invoke('set_run_option', { key: 'reply_mode', value: 'auto' });
+                await invoke('set_run_option', { key: 'dry_run', value: '0' });
+                try {
+                    await invoke('start_engine');
+                }
+                catch (_e) { /* already running */ }
+                showToast('已开启全自动：引擎自动养号→发现→回复，全程不用你确认', 'success');
+            }
+        }
+        catch (e) {
+            showToast('' + e, 'error');
+        }
+        setTimeout(refreshConsole, 500);
+    });
+    const knob = (id, key, get) => document.getElementById(id)?.addEventListener('change', async (ev) => {
+        try {
+            await invoke('set_run_option', { key, value: get(ev.target) });
+            showToast('已保存（引擎自动遵守）', 'success');
+            refreshConsole();
+        }
+        catch (e) {
+            showToast('' + e, 'error');
+        }
+    });
+    knob('optReplyMode', 'reply_mode', el => el.value);
+    knob('optWarmupGate', 'warmup_gate', el => el.checked ? '1' : '0');
+    knob('optDryRun', 'dry_run', el => el.checked ? '1' : '0');
+    knob('optIntentMin', 'intent_min', el => String(el.value || 40));
+    knob('optQuietStart', 'quiet_start', el => String(el.value || ''));
+    knob('optQuietEnd', 'quiet_end', el => String(el.value || ''));
+}
+function consStatusCard(icon, title, color, desc) {
+    return `<div class="card" style="padding:16px;border-left:5px solid ${color};">
+    <div style="font-size:18px;font-weight:700;">${icon} ${escapeHtml(title)}</div>
+    <div class="text-muted" style="margin-top:6px;font-size:13px;">${escapeHtml(desc)}</div></div>`;
+}
+function consAttn(t, d, btn, act) {
+    return `<div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;gap:8px;">
+    <div><div>${escapeHtml(t)}</div><div class="text-muted" style="font-size:12px;">${escapeHtml(d)}</div></div>
+    <button class="btn btn-small btn-primary" onclick="${act}">${escapeHtml(btn)}</button></div>`;
+}
+function consKpi(label, val, hl) {
+    return `<div style="flex:1;min-width:72px;text-align:center;padding:8px;background:var(--bg-subtle,#f7f7f7);border-radius:8px;">
+    <div style="font-size:20px;font-weight:700;${hl ? 'color:#16a34a;' : ''}">${val}</div>
+    <div class="text-muted" style="font-size:11px;">${label}</div></div>`;
+}
+function consSetVal(id, v) { const e = document.getElementById(id); if (e && document.activeElement !== e)
+    e.value = v; }
+function consSetChk(id, v) { const e = document.getElementById(id); if (e && document.activeElement !== e)
+    e.checked = !!v; }
+async function refreshConsole() {
+    let st = null, ms = null, nur = [];
+    try {
+        st = await invoke('get_run_state');
+    }
+    catch (_e) { /* */ }
+    try {
+        ms = await invoke('get_marketing_stats');
+    }
+    catch (_e) { /* */ }
+    try {
+        nur = await invoke('get_nurture_overview');
+    }
+    catch (_e) { /* */ }
+    const apEl = document.getElementById('consAutopilot');
+    if (!st || !apEl) {
+        if (apEl)
+            apEl.innerHTML = '<div class="text-muted" style="padding:12px;">需要桌面应用运行引擎（请用 npm run tauri:dev 启动）</div>';
+        return;
+    }
+    const btn = document.getElementById('btnAutopilot');
+    if (st.autopilot) {
+        if (btn)
+            btn.textContent = '⏸ 暂停';
+        apEl.innerHTML = consStatusCard('🟢', '全自动运行中', '#16a34a', `引擎自动：养号 → 体检 → 按关键词发现帖子 → AI 判定意向 → 生成并直接发布回复，全程不用你确认。已处理 ${st.processed} 个任务。`);
+    }
+    else if (st.running) {
+        if (btn)
+            btn.textContent = '🟢 转全自动';
+        const why = st.dry_run ? '演练中（只跑不发）' : (st.reply_mode === 'review' ? '半自动（回复要你审核才发）' : '运行中');
+        apEl.innerHTML = consStatusCard('🟡', `引擎运行中 · ${why}`, '#d97706', '点「转全自动」= 直接发布、不再逐条确认。');
+    }
+    else {
+        if (btn)
+            btn.textContent = '🟢 一键全自动';
+        apEl.innerHTML = consStatusCard('⏸', '已暂停', '#6b7280', '点「一键全自动」即可让它自己跑起来（养号+获客回复，无需你确认）。');
+    }
+    const at = document.getElementById('consAttention');
+    if (at) {
+        const items = [];
+        if (st.unhealthy_accounts > 0)
+            items.push(consAttn(`⚠️ ${st.unhealthy_accounts} 个已配置账号掉登录`, '在对应身份的浏览器里重新登录该平台即可', '去身份', `navigateTo('personas')`));
+        if ((st.unconfigured_accounts || 0) > 0)
+            items.push(consAttn(`🧩 ${st.unconfigured_accounts} 个账号待配置`, '还没绑定独立身份(profile/IP)，去「身份隔离」一键配置（这不是故障）', '去配置', `navigateTo('personas')`));
+        if (st.reply_mode === 'review' && st.pending_review > 0)
+            items.push(consAttn(`📝 ${st.pending_review} 条回复待你审核`, '想免确认就把上面「回复模式」改成全自动', '去审核', `navigateTo('tasks')`));
+        if (st.blocked_tasks > 0)
+            items.push(consAttn(`⛔ ${st.blocked_tasks} 个任务卡住`, '多为账号未绑定 profile 或养号期内（养熟会自动解锁）', '去看', `navigateTo('tasks')`));
+        at.innerHTML = items.length
+            ? `<div class="card" style="padding:12px;border-left:4px solid #d97706;"><strong>需要你处理</strong>${items.join('')}</div>`
+            : `<div class="card" style="padding:12px;border-left:4px solid #16a34a;"><strong style="color:#16a34a;">✅ 全自动运行中，目前无需你操作</strong></div>`;
+    }
+    consSetVal('optReplyMode', st.reply_mode);
+    consSetChk('optWarmupGate', st.warmup_gate);
+    consSetChk('optDryRun', st.dry_run);
+    consSetVal('optIntentMin', String(st.intent_min));
+    consSetVal('optQuietStart', st.quiet_start != null ? String(st.quiet_start) : '');
+    consSetVal('optQuietEnd', st.quiet_end != null ? String(st.quiet_end) : '');
+    const today = document.getElementById('consToday');
+    if (today) {
+        const t = ms?.totals;
+        const todayNur = (nur || []).reduce((s, n) => s + (n.today_done || 0), 0);
+        today.innerHTML = t
+            ? `<div style="display:flex;gap:8px;flex-wrap:wrap;">${consKpi('养号场次', todayNur)}${consKpi('发现帖子', t.discovered)}${consKpi('已回复', t.replied)}${consKpi('待审', t.pending_review)}${consKpi('线索', t.leads)}${consKpi('转化', t.converted, true)}</div>`
+            : '<span class="text-muted">暂无数据</span>';
     }
 }
 function renderDashboardCampaigns(campaigns) {
@@ -1449,6 +1581,20 @@ window.editProduct = function (id) {
 async function loadAccounts() {
     try {
         accounts = await invoke('list_accounts');
+        // 加载身份(persona)列表，用于按 Gmail 分组 + 归属下拉
+        try {
+            personasCache = (await invoke('persona_list')) || [];
+        }
+        catch {
+            personasCache = [];
+        }
+        // 加载机场代理状态（节点池），并入邮箱中心页顶部
+        try {
+            airportStatusCache = await invoke('airport_status');
+        }
+        catch {
+            airportStatusCache = null;
+        }
         // Also load browser profiles to show profile info for each account
         await loadBrowserProfiles();
         // Load available profiles for the binding dropdown
@@ -1536,21 +1682,169 @@ async function loadAccountLifecycles() {
         }
     }
 }
+let personasCache = [];
+let airportStatusCache = null;
+let selectedPersonaId = null;
+// 邮箱账号 = 邮箱视角：顶部切换邮箱，下面只显示「当前选中那个邮箱」的账号/养号。切邮箱 → 整片切换。
 function renderAccounts() {
     const list = document.getElementById('accountsList');
     const empty = document.getElementById('emptyAccounts');
     if (!list || !empty)
         return;
-    if (accounts.length === 0) {
-        list.style.display = 'none';
-        empty.style.display = 'block';
-        return;
+    // 机场代理（出口 IP 池）
+    const a = airportStatusCache;
+    const airportBar = `<div class="card" style="margin:0 0 10px;padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-left:4px solid ${a && a.configured ? '#1a9d4a' : '#d97706'};">
+    <span style="font-weight:700;">🌐 机场代理</span>
+    <span class="text-muted" style="font-size:12px;">${a && a.configured ? `节点池 ${a.total} 个（空闲 ${a.free}）· 每个邮箱分一个独立出口 IP` : '未配置——配了才能给邮箱分配独立 IP'}</span>
+    <button class="btn btn-small btn-secondary" style="margin-left:auto;" onclick="setAirportPrompt()">${a && a.configured ? '换/刷新订阅' : '设置机场订阅'}</button>
+  </div>`;
+    const groups = new Map();
+    for (const acc of accounts) {
+        const key = acc.persona_id || '__none__';
+        if (!groups.has(key))
+            groups.set(key, []);
+        groups.get(key).push(acc);
     }
+    const hasUnassigned = groups.has('__none__');
+    const tabIds = [...personasCache.map((p) => p.id), ...(hasUnassigned ? ['__none__'] : [])];
     list.style.display = 'block';
     empty.style.display = 'none';
-    // Find matching profiles for each account
-    const getProfileForAccount = (accountId) => browserProfiles.find(p => p.account_id === accountId);
-    list.innerHTML = accounts.map(account => {
+    if (tabIds.length === 0) {
+        list.innerHTML = airportBar + `<div class="card" style="padding:18px;text-align:center;">
+      <div class="text-muted">还没有邮箱。用一个真实 Gmail 新建第一个 →</div>
+      <button class="btn btn-primary" style="margin-top:10px;" onclick="createPersonaPrompt()">+ 新建 Gmail</button></div>`;
+        return;
+    }
+    // 默认选中：保持上次，或第一个
+    if (!selectedPersonaId || !tabIds.includes(selectedPersonaId))
+        selectedPersonaId = tabIds[0];
+    // 邮箱切换条（tab）
+    const tabs = tabIds.map((id) => {
+        const active = id === selectedPersonaId;
+        let label;
+        if (id === '__none__')
+            label = `🧩 未归属(${groups.get('__none__').length})`;
+        else {
+            const p = personasCache.find((x) => x.id === id);
+            label = `📧 ${p?.email || '邮箱'}`;
+        }
+        return `<button class="btn btn-small ${active ? 'btn-primary' : 'btn-secondary'}" onclick="selectEmail('${id}')">${escapeHtml(label)}</button>`;
+    }).join('');
+    const tabBar = `<div class="card" style="margin:0 0 12px;padding:10px 14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+    <span style="font-weight:700;">📧 邮箱：</span>${tabs}
+    <button class="btn btn-small btn-primary" style="margin-left:auto;" onclick="createPersonaPrompt()" title="用一个真实 Gmail 新建一套独立身份">+ 新建 Gmail</button>
+  </div>`;
+    // 当前选中邮箱的面板
+    const sel = selectedPersonaId;
+    const accts = groups.get(sel) || [];
+    let panel = '';
+    if (sel === '__none__') {
+        panel = `<div class="card" style="margin:0 0 8px;padding:10px 14px;border-left:4px solid #d97706;">
+      <div style="font-weight:600;">🧩 未归属邮箱 · ${accts.length} 个账号</div>
+      <div class="text-muted" style="font-size:12px;">这些账号还没挂到某个 Gmail 下。在账号上选「归属身份」归类即可。</div></div>`;
+        panel += accts.map((x) => renderAccountCard(x)).join('');
+    }
+    else {
+        const p = personasCache.find((x) => x.id === sel);
+        panel = `<div class="card" style="margin:0 0 8px;padding:12px 14px;border-left:4px solid #4a8cff;">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span style="font-weight:700;font-size:15px;">📧 ${escapeHtml(p?.email || '邮箱')}</span>
+        <span class="text-muted" style="font-size:12px;">${p?.region ? escapeHtml(p.region) : '🌐 节点未分配'}${p?.profile_id ? ' · 独立浏览器 ' + escapeHtml(p.profile_id) : ''} · ${accts.length} 个账号</span>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;">
+        <button class="btn btn-small btn-secondary" onclick="personaGmailLogin('${sel}')" title="打开这个邮箱的浏览器登录它的 Gmail（基础登录，先做这步）">📧 登录Gmail</button>
+        <button class="btn btn-small btn-success" onclick="personaProvisionAll('${sel}','${escapeHtml(p?.email || '')}')" title="逐平台：有就登录、没有就注册">🚀 检查并开通账号</button>
+        <button class="btn btn-small btn-primary" onclick="window.__addAccountPersona='${sel}';openModal('modalAddAccount');">+ 加账号</button>
+        <button class="btn btn-small btn-secondary" style="margin-left:auto;color:#e55;" onclick="deletePersonaAcct('${sel}','${escapeHtml(p?.email || '')}')" title="删除这个邮箱身份">删除此邮箱</button>
+      </div></div>`;
+        panel += accts.length
+            ? accts.map((x) => renderAccountCard(x)).join('')
+            : `<div class="card" style="padding:16px;text-align:center;"><div class="text-muted">这个邮箱还没有账号 —— 点上面「🚀 检查并开通账号」自动开通各平台，或「+ 加账号」手动加。</div></div>`;
+    }
+    list.innerHTML = airportBar + tabBar + panel;
+}
+// 切换当前邮箱视角
+window.selectEmail = function (id) { selectedPersonaId = id; renderAccounts(); };
+// 设置/刷新机场订阅（出口 IP 池）
+window.setAirportPrompt = async function () {
+    const url = (prompt('粘贴你的机场订阅链接（Clash 订阅）：') || '').trim();
+    if (!url)
+        return;
+    showToast('正在拉取节点…', 'info');
+    try {
+        const msg = await invoke('airport_set_subscription', { url });
+        showToast('' + msg, 'success');
+        await loadAccounts();
+    }
+    catch (e) {
+        showToast('订阅失败：' + e, 'error');
+    }
+};
+// 在邮箱账号页直接新建一个 Gmail 身份（自动建 profile+指纹+分配节点）
+window.createPersonaPrompt = async function () {
+    const email = (prompt('输入一个真实 Gmail（这个邮箱会成为一套独立身份：独立浏览器+IP+指纹）：') || '').trim();
+    if (!email)
+        return;
+    if (!email.includes('@')) {
+        showToast('请输入有效的 Gmail 地址', 'error');
+        return;
+    }
+    showToast('正在创建身份…（建浏览器+随机指纹+分配出口节点，约 5-10 秒）', 'info');
+    try {
+        const dto = await invoke('persona_create', { email });
+        if (dto && dto.id)
+            selectedPersonaId = dto.id; // 建好自动切到这个新邮箱
+        showToast(`邮箱已建好 ✓ 已打开 Google 登录页 → 请在弹出的浏览器窗口登录 ${email}（基础登录，只需一次；登好后才能自动注册/登录账号）`, 'info');
+        await loadAccounts();
+    }
+    catch (e) {
+        showToast('创建失败：' + e, 'error');
+    }
+};
+// 以邮箱为单位：逐平台「有就登录、没有就注册」，账号自动开通到这个邮箱名下
+window.personaProvisionAll = async function (id, email) {
+    if (!confirm(`用 ${email} 检查并开通各平台账号？\n会逐个平台：有就登录、没有就注册（友好平台全自动；X/Reddit 会打开登录页让你点一下）。\n前提：这个邮箱的 Gmail 已在它的浏览器里登录。`))
+        return;
+    showToast(`正在用 ${email} 开通各平台账号…（逐个平台跑，可能要几分钟，请耐心等）`, 'info');
+    try {
+        const msg = await invoke('persona_provision_all', { personaId: id });
+        showToast('' + msg, 'success');
+        await loadAccounts();
+    }
+    catch (e) {
+        showToast('' + e, 'error');
+    }
+};
+// 打开某身份的浏览器到 Google 登录页（补登/重登该 Gmail）
+window.personaGmailLogin = async function (id) {
+    try {
+        const msg = await invoke('persona_open_gmail_login', { personaId: id });
+        showToast('' + msg, 'info');
+    }
+    catch (e) {
+        showToast('' + e, 'error');
+    }
+};
+// 删除一个 Gmail 身份（连带其独立浏览器，释放节点）
+window.deletePersonaAcct = async function (id, email) {
+    if (!confirm(`删除身份 ${email}？\n会删掉它的独立浏览器并释放出口节点；名下账号会变成「未归属」。`))
+        return;
+    try {
+        await invoke('persona_delete', { id });
+        showToast('身份已删除', 'success');
+        await loadAccounts();
+    }
+    catch (e) {
+        showToast('删除失败：' + e, 'error');
+    }
+};
+function personaSelectOptions(selectedId) {
+    const opts = personasCache.map((p) => `<option value="${p.id}" ${p.id === selectedId ? 'selected' : ''}>${escapeHtml(p.email)}</option>`).join('');
+    return `<option value="">未归属（用全局 Profile）</option>${opts}`;
+}
+function renderAccountCard(account) {
+    {
+        const getProfileForAccount = (accountId) => browserProfiles.find(p => p.account_id === accountId);
         const profile = getProfileForAccount(account.id);
         const hasProfile = !!profile;
         const stealthBadge = profile?.stealth_enabled
@@ -1599,9 +1893,9 @@ function renderAccounts() {
     ` : '';
         // Build profile binding dropdown options
         const profileOptions = availableProfiles.map(p => `<option value="${escapeHtml(p.id)}" ${account.profile_id === p.id ? 'selected' : ''}>${escapeHtml(p.name)} (${escapeHtml(p.id)})</option>`).join('');
-        const boundProfileBadge = account.profile_id
-            ? `<span class="badge badge-profile" title="绑定 Profile: ${escapeHtml(account.profile_id)}">🔗 ${escapeHtml(account.profile_id.substring(0, 15))}...</span>`
-            : '<span class="badge badge-no-profile" title="使用全局 Profile">📌 全局</span>';
+        const personaBadge = account.persona_email
+            ? `<span class="badge badge-profile" title="身份: ${escapeHtml(account.persona_email)}（共用其浏览器+IP）">🧑‍🤝‍🧑 ${escapeHtml(account.persona_email)}</span>`
+            : '<span class="badge badge-no-profile" title="未归属身份">🧩 未归属</span>';
         return `
       <div class="account-item ${hasProfile ? 'has-profile' : ''}">
         <div class="account-info">
@@ -1609,14 +1903,14 @@ function renderAccounts() {
           <span class="account-username">${escapeHtml(account.username || account.email || 'N/A')}</span>
           ${stageBadge}
           ${healthBadge}
-          ${boundProfileBadge}
+          ${personaBadge}
           <span class="account-badges">${stealthBadge}${fingerprintBadge}${proxyBadge}</span>
         </div>
         ${todayProgress}
         <div class="account-profile-binding" style="margin: 8px 0;">
-          <select class="select select-small" onchange="bindProfileToAccount('${account.id}', this.value)" style="width: auto; min-width: 200px;">
-            <option value="">-- 使用全局 Profile --</option>
-            ${profileOptions}
+          <label class="text-muted" style="font-size:12px;">归属身份：</label>
+          <select class="select select-small" onchange="setAccountPersona('${account.id}', this.value)" style="width: auto; min-width: 220px;">
+            ${personaSelectOptions(account.persona_id)}
           </select>
         </div>
         <div class="account-nurture-stats" style="margin: 5px 0; font-size: 12px; color: var(--text-muted);">
@@ -1624,6 +1918,7 @@ function renderAccounts() {
           ${account.last_nurture_at ? ` • ${t('nurture.lastNurture')}: ${formatTimeAgo(account.last_nurture_at)}` : ''}
         </div>
         <div class="account-actions">
+          <button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="自动登录：查登录→Google登录→否则注册">🔑 自动登录</button>
           <button class="btn btn-small btn-success" data-nurture-account="${account.id}" onclick="openNurtureModal('${account.id}', '${escapeHtml(account.platform)}', '${escapeHtml(account.username || account.email || 'N/A')}')" title="${t('nurture.quickNurture')}">🌱 ${t('nurture.quickNurture')}</button>
           ${stage === 'new' ? `<button class="btn btn-small btn-warning" onclick="startWarmup('${account.id}')" title="开始养号">🔥 开始养号</button>` : ''}
           ${!hasProfile ? `<button class="btn btn-small btn-secondary" onclick="createProfileForAccount('${account.id}', '${escapeHtml(account.platform)}')">${t('accounts.createProfile')}</button>` : ''}
@@ -1634,8 +1929,50 @@ function renderAccounts() {
         </div>
       </div>
     `;
-    }).join('');
+    }
 }
+// 自动登录单个账号（查登录→Google登录→否则注册），在其身份的浏览器里跑
+window.autoLoginAccount = async function (accountId, platform) {
+    showToast(`正在处理 ${platform}…（查登录→自动登录，可能需要几十秒）`, 'info');
+    try {
+        const msg = await invoke('account_auto_login', { accountId });
+        if (('' + msg).startsWith('MANUAL::')) {
+            showToast(('' + msg).replace('MANUAL::', ''), 'info'); // 已打开登录页，待你点一下
+        }
+        else {
+            showToast('' + msg, 'success');
+        }
+        await loadAccounts();
+    }
+    catch (error) {
+        showToast('' + error, 'error');
+    }
+};
+// 一键登录某身份下的所有账号
+window.personaLoginAll = async function (personaId) {
+    if (!confirm('自动登录这个身份下的所有账号？\n会逐个尝试：查登录→Google登录→否则注册。遇到需手机/验证码的会停下提示你。'))
+        return;
+    showToast('开始批量自动登录…（每个账号几十秒，请耐心等）', 'info');
+    try {
+        const msg = await invoke('persona_login_all', { personaId });
+        showToast('' + msg, 'success');
+        await loadAccounts();
+    }
+    catch (error) {
+        showToast('' + error, 'error');
+    }
+};
+// 把账号归属到某个 Gmail 身份（之后自动共用该身份的 profile/IP/指纹）
+window.setAccountPersona = async function (accountId, personaId) {
+    try {
+        await invoke('set_account_persona', { accountId, personaId: personaId || null });
+        showToast(personaId ? '已归属到该身份（自动共用其浏览器+IP）' : '已解除归属', 'success');
+        await loadAccounts();
+    }
+    catch (error) {
+        showToast('' + error, 'error');
+    }
+};
 // Start warmup for a new account
 window.startWarmup = async function (accountId) {
     try {
@@ -1828,7 +2165,16 @@ async function saveAccount() {
         return;
     }
     try {
-        await invoke('add_account', { platform, username, password: password || '' });
+        const created = await invoke('add_account', { platform, username, password: password || '' });
+        // 若是从某个身份卡片点的「+给这个身份加账号」，自动归属到该身份
+        const personaId = window.__addAccountPersona;
+        if (personaId && created?.id) {
+            try {
+                await invoke('set_account_persona', { accountId: created.id, personaId });
+            }
+            catch { }
+        }
+        window.__addAccountPersona = undefined;
         closeModal('modalAddAccount');
         await loadAccounts();
         showToast(t('msg.accountAdded'), 'success');
@@ -1976,9 +2322,9 @@ window.quickNurtureAccount = async function (accountId, platform, seconds = 60) 
     }
     try {
         showToast(`${t('nurture.startNurture')} (${seconds}${t('nurture.seconds')})`, 'info');
-        // Note: Rust uses snake_case parameter names, platform is retrieved from DB
+        // Tauri 期望 camelCase 参数名（snake_case 会绑不上 → account_id 变空）
         const result = await invoke('quick_nurture', {
-            account_id: accountId,
+            accountId: accountId,
             seconds: seconds
         });
         showToast(`${t('nurture.completed')}: ${result}`, 'success');
@@ -2053,9 +2399,9 @@ window.startNurtureFromModal = async function () {
     updateNurtureTimer();
     nurtureTimerInterval = window.setInterval(updateNurtureTimer, 1000);
     try {
-        // Call backend
+        // Call backend（Tauri 期望 camelCase 参数名）
         const result = await invoke('quick_nurture', {
-            account_id: accountId,
+            accountId: accountId,
             seconds: seconds
         });
         // Clear timer
@@ -2276,9 +2622,14 @@ window.startBatchNurtureTask = function () {
         return;
     }
     const duration = parseInt(document.getElementById('batchNurtureDuration')?.value || '60');
-    const continuous = document.getElementById('batchNurtureContinuous')?.checked || false;
-    // Create the nurture task
-    window.createNurtureTask(selectedAccounts, duration, continuous);
+    // 入队持久化养号任务（由 Rust 引擎按调度执行；不再用刷新即丢的前端内存队列）
+    invoke('enqueue_nurture', { accountIds: selectedAccounts, duration })
+        .then((n) => {
+        showToast(`已入队 ${n} 条养号任务，引擎将自动执行（未绑定 profile 的账号已跳过）`, n > 0 ? 'success' : 'error');
+        if (currentPage === 'tasks')
+            refreshTasksPage();
+    })
+        .catch((e) => showToast('入队失败: ' + e, 'error'));
     // Close modal
     closeModal('modalBatchNurture');
 };
@@ -3020,7 +3371,40 @@ async function publishAllDirect() {
 let keywords = [];
 let discoveredPosts = [];
 let currentReplyPost = null;
+let engageInboxWired = false;
 async function loadEngagePage() {
+    // 统一互动收件箱 + 自动获客控制台
+    if (!engageInboxWired) {
+        engageInboxWired = true;
+        document.getElementById('btnInboxRefresh')?.addEventListener('click', () => loadEngageInbox());
+        document.getElementById('inboxFilter')?.addEventListener('change', () => loadEngageInbox());
+        document.getElementById('engageAutoToggle')?.addEventListener('change', async (e) => {
+            const on = e.target.checked;
+            try {
+                await invoke('engage_set_auto', { on, intervalMinutes: null, maxInflight: null });
+                showToast(on ? '已开启自动获客' : '已关闭自动获客', 'success');
+                loadEngageControl();
+            }
+            catch (err) {
+                showToast('' + err, 'error');
+            }
+        });
+        document.getElementById('engageSaveCfg')?.addEventListener('click', async () => {
+            const on = document.getElementById('engageAutoToggle')?.checked ?? true;
+            const intervalMinutes = parseInt(document.getElementById('engageInterval')?.value || '30', 10);
+            const maxInflight = parseInt(document.getElementById('engageMaxInflight')?.value || '6', 10);
+            try {
+                await invoke('engage_set_auto', { on, intervalMinutes, maxInflight });
+                showToast('已保存巡检节奏', 'success');
+                loadEngageControl();
+            }
+            catch (err) {
+                showToast('' + err, 'error');
+            }
+        });
+    }
+    loadEngageControl();
+    loadEngageInbox();
     // Load keywords
     await loadKeywords();
     // Load reply strategies
@@ -3040,6 +3424,113 @@ async function loadEngagePage() {
             products.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
     }
 }
+async function loadEngageControl() {
+    try {
+        const s = await invoke('engage_get_settings');
+        const toggle = document.getElementById('engageAutoToggle');
+        const label = document.getElementById('engageAutoLabel');
+        const interval = document.getElementById('engageInterval');
+        const maxIn = document.getElementById('engageMaxInflight');
+        const status = document.getElementById('engageStatus');
+        if (toggle)
+            toggle.checked = !!s.auto;
+        if (label)
+            label.textContent = s.auto ? '✅ 自动获客运行中' : '已关闭（点开启让引擎自己干）';
+        if (interval && document.activeElement !== interval)
+            interval.value = String(s.interval_minutes || 30);
+        if (maxIn && document.activeElement !== maxIn)
+            maxIn.value = String(s.max_inflight || 6);
+        const modeLabel = s.reply_mode === 'auto' ? '🟢全自动(真发)' : '🟡半自动(进收件箱待审)';
+        const last = s.last_tick ? new Date(s.last_tick).toLocaleTimeString() : '尚未巡检';
+        if (status)
+            status.innerHTML = `模式 <b>${modeLabel}</b> · 启用关键词 <b>${s.keywords_enabled}</b> · 在跑 <b>${s.inflight}</b> · 上次巡检 ${last}`;
+    }
+    catch (e) { /* ignore */ }
+}
+async function loadEngageInbox() {
+    const box = document.getElementById('inboxList');
+    const sum = document.getElementById('engageSummary');
+    if (!box)
+        return;
+    const filter = document.getElementById('inboxFilter')?.value || 'all';
+    try {
+        const s = await invoke('engage_summary');
+        if (sum)
+            sum.innerHTML = `🔥待审 <b>${s.pending_review}</b> · 线索 <b>${s.leads_open}</b> · ✅转化 <b>${s.converted}</b> · 提及 <b>${s.mentions}</b>`;
+    }
+    catch { }
+    let items = [];
+    try {
+        items = (await invoke('engage_inbox', { filter })) || [];
+    }
+    catch (e) {
+        box.innerHTML = `<p class="text-muted">加载失败：${escapeHtml('' + e)}</p>`;
+        return;
+    }
+    if (!items.length) {
+        box.innerHTML = '<p class="text-muted">暂无互动。开启关键词发现 + 全自动后，这里会自动汇集线索与待审回复。</p>';
+        return;
+    }
+    const kindLabel = { lead: '线索', pending_reply: '待审回复', mention: '品牌提及' };
+    box.innerHTML = items.map(it => {
+        const hot = it.hot ? `<span style="background:#ff4757;color:#fff;border-radius:8px;padding:1px 6px;font-size:10px;">🔥强意向</span>` : '';
+        const intentColor = it.intent >= 70 ? '#ff4757' : it.intent >= 40 ? '#ffa502' : '#999';
+        const link = it.url ? `<a href="${escapeHtml(it.url)}" target="_blank" class="btn btn-small btn-secondary">打开↗</a>` : '';
+        let actions = link;
+        if (it.kind === 'pending_reply') {
+            actions += ` <button class="btn btn-small btn-primary" onclick="inboxApprove('${it.ref_id}')">✅通过发布</button>
+                   <button class="btn btn-small btn-secondary" onclick="inboxReject('${it.ref_id}')">忽略</button>`;
+        }
+        else if (it.kind === 'lead') {
+            actions += ` <button class="btn btn-small btn-primary" onclick="inboxLead('${it.ref_id}','converted')">✅已转化</button>
+                   <button class="btn btn-small btn-secondary" onclick="inboxLead('${it.ref_id}','dismissed')">忽略</button>`;
+        }
+        return `<div class="card" style="padding:10px 12px;margin-bottom:8px;border-left:3px solid ${it.hot ? '#ff4757' : 'transparent'};">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+          <span class="badge">${kindLabel[it.kind] || it.kind}</span>
+          <span class="badge">${escapeHtml(it.platform)}</span>
+          ${it.author ? `<span class="text-muted" style="font-size:12px;">@${escapeHtml(it.author)}</span>` : ''}
+          ${hot}
+          <span style="color:${intentColor};font-size:11px;font-weight:600;">意向 ${it.intent}</span>
+        </div>
+        <span class="text-muted" style="font-size:11px;">${new Date(it.created_at).toLocaleString()}</span>
+      </div>
+      <div style="font-size:13px;white-space:pre-wrap;margin-bottom:6px;">${escapeHtml((it.text || '').slice(0, 240))}</div>
+      <div class="btn-group" style="gap:6px;flex-wrap:wrap;">${actions}</div>
+    </div>`;
+    }).join('');
+}
+window.inboxApprove = async (id) => {
+    try {
+        await invoke('approve_reply', { id, editedContent: null });
+        showToast('已入队发布', 'success');
+        loadEngageInbox();
+    }
+    catch (e) {
+        showToast('' + e, 'error');
+    }
+};
+window.inboxReject = async (id) => {
+    try {
+        await invoke('reject_reply', { id });
+        showToast('已忽略', 'success');
+        loadEngageInbox();
+    }
+    catch (e) {
+        showToast('' + e, 'error');
+    }
+};
+window.inboxLead = async (id, status) => {
+    try {
+        await invoke('update_lead_status', { id, status, notes: null });
+        showToast('已更新', 'success');
+        loadEngageInbox();
+    }
+    catch (e) {
+        showToast('' + e, 'error');
+    }
+};
 async function loadKeywords() {
     try {
         keywords = await invoke('list_keywords');
@@ -3632,6 +4123,7 @@ async function loadSettings() {
 async function loadSettingsProfiles() {
     const select = document.getElementById('browserProfile');
     const statusDiv = document.getElementById('profileStatus');
+    const detailDiv = document.getElementById('browserStatusDetail');
     if (!select)
         return;
     try {
@@ -3656,6 +4148,11 @@ async function loadSettingsProfiles() {
         }
         // Get browser connection status
         const status = await invoke('get_browser_status');
+        if (detailDiv) {
+            detailDiv.innerHTML = status.connected
+                ? `<span class="status-badge" style="background: var(--success); color: #fff;">✓ Unzoo 已连接${status.active_tab ? ' · Tab ' + escapeHtml(String(status.active_tab)) : ''}</span>`
+                : `<span class="status-badge" style="background: var(--danger); color: #fff;">✕ Unzoo 未连接</span>`;
+        }
         if (status.connected) {
             if (statusDiv) {
                 statusDiv.innerHTML = `<span style="color: var(--success);">✓ 已连接 (Tab: ${status.active_tab || 'Unknown'})</span>`;
@@ -3664,6 +4161,9 @@ async function loadSettingsProfiles() {
     }
     catch (error) {
         console.error('Failed to load browser profiles:', error);
+        if (detailDiv) {
+            detailDiv.innerHTML = `<span class="status-badge" style="background: var(--danger); color: #fff;">✕ 无法连接 Unzoo</span>`;
+        }
         if (statusDiv) {
             statusDiv.innerHTML = `<span style="color: var(--danger);">⚠ 无法加载 Profiles: ${error}</span>`;
         }
@@ -3875,6 +4375,13 @@ function populateDefaultModels() {
         .map((m) => `<option value="${m}">${m}</option>`)
         .join('');
 }
+// 只显示当前下拉选中的那个供应商的 Key 输入框，其余隐藏
+function updateAIKeyVisibility() {
+    const provider = document.getElementById('aiProvider')?.value;
+    document.querySelectorAll('.ai-key-field').forEach((el) => {
+        el.style.display = el.dataset.provider === provider ? '' : 'none';
+    });
+}
 // updateModelOptions removed - use populateDefaultModels for defaults, refreshModels for API
 async function refreshModels() {
     const provider = document.getElementById('aiProvider')?.value;
@@ -3899,14 +4406,14 @@ async function refreshModels() {
             btn.disabled = true;
             btn.textContent = '获取中...';
         }
-        // 先保存 API key 到数据库
+        // 先保存 API key 到数据库（注意：Tauri 期望 camelCase 参数名，snake_case 会绑不上 → key 存不进去）
         await invoke('configure_ai', {
             provider,
             model: modelSelect?.value || '',
-            gemini_key: geminiKey || null,
-            openai_key: openaiKey || null,
-            deepseek_key: deepseekKey || null,
-            qwen_key: qwenKey || null,
+            geminiKey: geminiKey || null,
+            openaiKey: openaiKey || null,
+            deepseekKey: deepseekKey || null,
+            qwenKey: qwenKey || null,
         });
         // 然后获取模型
         const models = await invoke('fetch_available_models', { provider });
@@ -3955,16 +4462,65 @@ async function saveAISettings() {
         await invoke('configure_ai', {
             provider,
             model,
-            gemini_key: geminiKey || null,
-            openai_key: openaiKey || null,
-            deepseek_key: deepseekKey || null,
-            qwen_key: qwenKey || null,
+            geminiKey: geminiKey || null,
+            openaiKey: openaiKey || null,
+            deepseekKey: deepseekKey || null,
+            qwenKey: qwenKey || null,
         });
         showToast(t('msg.aiSettingsSaved'), 'success');
     }
     catch (error) {
         console.error('Failed to save AI settings:', error);
         showToast('Failed to save AI settings', 'error');
+    }
+}
+// 测试当前供应商的「Key + 模型」是否可用：用输入框里的 Key（未必已保存）+ 选中的模型发一个最小请求
+async function testAIConnection() {
+    const provider = document.getElementById('aiProvider')?.value;
+    const model = document.getElementById('aiModel')?.value || '';
+    const keyFieldMap = {
+        gemini: 'aiKeyGemini',
+        openai: 'aiKeyOpenai',
+        deepseek: 'aiKeyDeepseek',
+        qwen: 'aiKeyQwen',
+    };
+    const apiKey = document.getElementById(keyFieldMap[provider])?.value || '';
+    const btn = document.getElementById('btnTestAI');
+    const statusEl = document.getElementById('aiSaveStatus');
+    if (!apiKey.trim()) {
+        showToast(`请先输入 ${aiProviders[provider]?.name || provider} 的 API Key`, 'warning');
+        return;
+    }
+    const origText = btn?.textContent || 'Test Connection';
+    try {
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = '测试中…';
+        }
+        if (statusEl) {
+            statusEl.textContent = '⏳ 正在测试连接…';
+            statusEl.style.color = '';
+        }
+        const msg = await invoke('test_ai_connection', { provider, key: apiKey, model: model || null });
+        if (statusEl) {
+            statusEl.textContent = msg;
+            statusEl.style.color = '#1a9d4a';
+        }
+        showToast(msg, 'success');
+    }
+    catch (error) {
+        const em = error?.toString() || '连接失败';
+        if (statusEl) {
+            statusEl.textContent = '✗ ' + em;
+            statusEl.style.color = '#e55';
+        }
+        showToast('连接失败：' + em, 'error');
+    }
+    finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = origText;
+        }
     }
 }
 async function loadAIConfig() {
@@ -3976,6 +4532,7 @@ async function loadAIConfig() {
                 providerSelect.value = config.provider;
             populateDefaultModels();
         }
+        updateAIKeyVisibility(); // 只显示当前选中供应商的 Key 输入框
         if (config.model) {
             const modelSelect = document.getElementById('aiModel');
             if (modelSelect)
@@ -4951,7 +5508,7 @@ async function executeNurtureTask(task) {
         updateTask(task.id, { progress: i + 1 });
         try {
             const result = await invoke('quick_nurture', {
-                account_id: accountId,
+                accountId: accountId,
                 seconds: seconds || 60
             });
             successCount++;
@@ -5000,9 +5557,526 @@ window.createNurtureTask = function (accountIds, seconds, continuous = false) {
     navigateTo('tasks');
     return task;
 };
+let engineControlsWired = false;
+let tasksPollTimer;
 function loadTasksPage() {
-    renderTasks();
+    wireEngineControls();
+    refreshTasksPage();
+    // Live refresh while the user is on the Tasks page so the queue drains visibly.
+    if (tasksPollTimer)
+        clearInterval(tasksPollTimer);
+    tasksPollTimer = window.setInterval(() => {
+        if (currentPage === 'tasks')
+            refreshTasksPage();
+        else if (tasksPollTimer) {
+            clearInterval(tasksPollTimer);
+            tasksPollTimer = undefined;
+        }
+    }, 3000);
 }
+function wireEngineControls() {
+    if (engineControlsWired)
+        return;
+    engineControlsWired = true;
+    document.getElementById('btnStartEngine')?.addEventListener('click', async () => {
+        try {
+            await invoke('start_engine');
+            showToast('引擎已启动', 'success');
+        }
+        catch (e) {
+            showToast('启动失败: ' + e, 'error');
+        }
+        setTimeout(refreshTasksPage, 400);
+    });
+    document.getElementById('btnStopEngine')?.addEventListener('click', async () => {
+        try {
+            await invoke('stop_engine');
+            showToast('引擎停止中…', 'info');
+        }
+        catch (e) {
+            showToast('停止失败: ' + e, 'error');
+        }
+        setTimeout(refreshTasksPage, 400);
+    });
+    // 选择器自检
+    document.getElementById('btnSelCheck')?.addEventListener('click', async () => {
+        const platform = document.getElementById('selCheckPlatform')?.value?.trim();
+        const keyword = document.getElementById('selCheckKeyword')?.value?.trim();
+        const out = document.getElementById('selCheckResult');
+        if (!platform) {
+            showToast('请填写平台', 'error');
+            return;
+        }
+        if (out)
+            out.textContent = `检测中（启动 profile + 导航 ${platform} 搜索页，约 6 秒）…`;
+        try {
+            const r = await invoke('check_selector', { platform, keyword: keyword || undefined });
+            if (out)
+                out.textContent =
+                    `平台: ${r.platform}\n` +
+                        `搜索页: ${r.search_url}\n` +
+                        `页面标题: ${r.page_title}\n` +
+                        `使用 profile: ${r.profile_used}\n` +
+                        `选择器: ${r.selector}\n` +
+                        `页面总链接: ${r.total_links}    命中: ${r.matched}\n` +
+                        `结论: ${r.note}\n` +
+                        (r.samples.length ? `样本:\n  ${r.samples.join('\n  ')}` : '样本: (无)');
+        }
+        catch (e) {
+            if (out)
+                out.textContent = '检测失败: ' + e;
+        }
+    });
+    // 回复模式切换：review = 半自动（入审核队列）/ auto = 全自动（直接发布）
+    document.getElementById('replyModeSelect')?.addEventListener('change', async (ev) => {
+        const mode = ev.target.value;
+        try {
+            await invoke('set_engine_reply_mode', { mode });
+            showToast(mode === 'auto' ? '已切换为全自动：引擎将直接发布回复' : '已切换为半自动：回复进入审核队列等你批准', 'success');
+        }
+        catch (e) {
+            showToast('切换失败: ' + e, 'error');
+        }
+    });
+}
+async function refreshTasksPage() {
+    try {
+        const [status, dbTasks, replyMode, pending, nurture, leads, mstats] = await Promise.all([
+            invoke('get_engine_status'),
+            invoke('list_tasks', {}),
+            invoke('get_engine_reply_mode').catch(() => 'review'),
+            invoke('list_pending_replies').catch(() => []),
+            invoke('get_nurture_overview').catch(() => []),
+            invoke('list_leads', {}).catch(() => []),
+            invoke('get_marketing_stats').catch(() => null),
+        ]);
+        const sel = document.getElementById('replyModeSelect');
+        if (sel && document.activeElement !== sel)
+            sel.value = replyMode;
+        renderPendingReplies(pending);
+        renderNurtureOverview(nurture);
+        renderLeads(leads);
+        if (mstats)
+            renderMarketingStats(mstats);
+        const sp = document.getElementById('taskStatPending');
+        const sr = document.getElementById('taskStatRunning');
+        const sc = document.getElementById('taskStatCompleted');
+        if (sp)
+            sp.textContent = `${status.pending} pending`;
+        if (sr)
+            sr.textContent = `${status.running_count} running`;
+        if (sc)
+            sc.textContent = `${status.completed + status.failed + status.blocked} done`;
+        const es = document.getElementById('engineState');
+        if (es)
+            es.textContent = status.running ? `运行中 (已处理 ${status.processed})` : '已停止';
+        renderDbTasks(dbTasks);
+    }
+    catch (_e) {
+        const es = document.getElementById('engineState');
+        if (es)
+            es.textContent = '不可用 (需桌面应用)';
+    }
+}
+function renderDbTasks(list) {
+    const container = document.getElementById('tasksList');
+    if (!container)
+        return;
+    if (!list.length) {
+        container.innerHTML = `<div class="tasks-empty"><div class="tasks-empty-icon">📋</div><p>暂无任务</p>
+      <p class="text-muted">在「推广活动」创建并启动 Campaign 会生成任务，启动引擎后自动执行</p></div>`;
+        return;
+    }
+    const icon = {
+        pending: '⏳', running: '⚡', completed: '✅', failed: '❌', blocked: '⚠️', cancelled: '🚫'
+    };
+    // Friendly labels for task types (two distinct reply kinds).
+    const typeLabel = {
+        article: '📝 发布', post: '📝 发布', publish: '📝 发布', tweet: '📝 发布',
+        reply: '🔍 关键词回复', reply_keyword: '🔍 关键词回复', engage: '🔍 关键词回复',
+        reply_mention: '💬 评论回复',
+    };
+    container.innerHTML = list.map(t => {
+        const ttypeText = typeLabel[t.task_type] || t.task_type;
+        const actions = [];
+        if (t.status === 'blocked')
+            actions.push(`<button class="btn btn-small btn-primary" onclick="unblockTask('${t.id}')">解除阻塞</button>`);
+        if (t.status === 'failed' || t.status === 'cancelled' || t.status === 'blocked')
+            actions.push(`<button class="btn btn-small btn-secondary" onclick="retryTask('${t.id}')">重试</button>`);
+        if (t.status === 'pending' || t.status === 'blocked')
+            actions.push(`<button class="btn btn-small btn-secondary" onclick="cancelTask('${t.id}')">取消</button>`);
+        const reason = t.error_message
+            ? `<div class="text-muted" style="font-size:12px;color:var(--warning,#e0a800);margin-top:4px;">${escapeHtml(t.error_message)}</div>` : '';
+        return `<div class="task-item" style="padding:12px;border-bottom:1px solid var(--border,#eee);">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
+        <div>
+          <span style="font-size:16px;">${icon[t.status] || '•'}</span>
+          <strong>${escapeHtml(ttypeText)}</strong>
+          <span class="text-muted">${escapeHtml(t.platform || '—')}</span>
+          <span class="task-stat">${escapeHtml(t.status)}</span>
+          ${t.retry_count ? `<span class="text-muted">retry ${t.retry_count}</span>` : ''}
+          ${reason}
+        </div>
+        <div class="btn-group">${actions.join('')}</div>
+      </div>
+    </div>`;
+    }).join('');
+}
+// 意向分徽标（高=绿，中=橙，低=灰）
+function intentBadge(score) {
+    const s = score ?? 0;
+    const color = s >= 70 ? '#16a34a' : s >= 40 ? '#d97706' : '#6b7280';
+    return `<span class="task-stat" style="background:${color};color:#fff;" title="买家意向分">意向 ${s}</span>`;
+}
+function renderPendingReplies(list) {
+    const badge = document.getElementById('reviewCount');
+    if (badge)
+        badge.textContent = String(list.length);
+    const c = document.getElementById('reviewList');
+    if (!c)
+        return;
+    if (!list.length) {
+        c.innerHTML = `<div class="text-muted" style="padding:12px;font-size:13px;">暂无待审回复。半自动模式下，引擎读取真实帖子、AI 生成回复后会在这里等你批准；全自动模式则直接发布。</div>`;
+        return;
+    }
+    c.innerHTML = list.map(r => `
+    <div class="task-item" style="padding:12px;border-bottom:1px solid var(--border,#eee);">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+        <div>
+          <span class="task-stat">${escapeHtml(r.platform)}</span>
+          <span class="text-muted" style="font-size:12px;">${escapeHtml(r.reply_type === 'mention' ? '评论回复' : '关键词回复')}</span>
+          ${intentBadge(r.intent_score)}
+          ${r.product_mentioned ? '<span class="task-stat" style="background:#2563eb;color:#fff;">软提产品</span>' : ''}
+          <a href="${escapeHtml(r.post_url)}" target="_blank" class="text-muted" style="font-size:12px;">原帖 ↗</a>
+        </div>
+        <div class="btn-group">
+          <button class="btn btn-small btn-primary" onclick="approveReply('${r.id}')">批准发布</button>
+          <button class="btn btn-small btn-secondary" onclick="rejectReply('${r.id}')">驳回</button>
+        </div>
+      </div>
+      ${(r.post_title || r.post_content) ? `<div class="text-muted" style="font-size:12px;margin-top:4px;">帖子：${escapeHtml((r.post_title && r.post_title.trim()) ? r.post_title : (r.post_content || '').slice(0, 160))}</div>` : ''}
+      <textarea id="rv_${r.id}" style="width:100%;box-sizing:border-box;margin-top:6px;min-height:62px;font-size:13px;padding:6px;border:1px solid var(--border,#ddd);border-radius:6px;">${escapeHtml(r.reply_content)}</textarea>
+      ${r.reason ? `<div class="text-muted" style="font-size:11px;margin-top:2px;">AI 判定：${escapeHtml(r.reason)}</div>` : ''}
+    </div>`).join('');
+}
+window.approveReply = async (id) => {
+    const ta = document.getElementById('rv_' + id);
+    const editedContent = ta?.value;
+    try {
+        const r = await invoke('approve_reply', { id, editedContent });
+        if (r.success)
+            showToast('已发布回复', 'success');
+        else
+            showToast('发布失败: ' + (r.error || '未知错误'), 'error');
+        refreshTasksPage();
+    }
+    catch (e) {
+        showToast('' + e, 'error');
+    }
+};
+window.rejectReply = async (id) => {
+    try {
+        await invoke('reject_reply', { id });
+        showToast('已驳回，该帖跳过', 'info');
+        refreshTasksPage();
+    }
+    catch (e) {
+        showToast('' + e, 'error');
+    }
+};
+function renderNurtureOverview(list) {
+    const c = document.getElementById('nurtureOverview');
+    if (!c)
+        return;
+    if (!list.length) {
+        c.innerHTML = `<div class="text-muted" style="padding:12px;font-size:13px;">暂无账号。养号调度引擎会按平台策略 + 号龄分期，在活跃时段自动给已绑定 profile 的账号安排浏览，提升权重、降低封号风险。</div>`;
+        return;
+    }
+    const healthBadge = {
+        healthy: '<span class="task-stat" style="background:#16a34a;color:#fff;">健康</span>',
+        logged_out: '<span class="task-stat" style="background:#dc2626;color:#fff;">掉登录</span>',
+        shadowbanned: '<span class="task-stat" style="background:#dc2626;color:#fff;">疑似封禁</span>',
+        banned: '<span class="task-stat" style="background:#dc2626;color:#fff;">已封</span>',
+        unknown: '<span class="task-stat" style="background:#6b7280;color:#fff;">待体检</span>',
+    };
+    const phaseLabel = { warmup: '🐣 新号期', growth: '📈 成长期', mature: '🌳 成熟期', '—': '— 无策略' };
+    const fmt = (s) => s >= 3600 ? `${(s / 3600).toFixed(1)}h` : `${Math.round(s / 60)}m`;
+    const rows = list.map(a => {
+        const pct = a.today_target > 0 ? Math.min(100, Math.round((a.today_done / a.today_target) * 100)) : 0;
+        const prog = a.today_target > 0
+            ? `<div style="display:inline-block;width:90px;height:8px;background:#e5e7eb;border-radius:4px;vertical-align:middle;overflow:hidden;"><div style="width:${pct}%;height:100%;background:#16a34a;"></div></div> ${a.today_done}/${a.today_target}`
+            : '<span class="text-muted">—</span>';
+        return `<tr style="border-bottom:1px solid var(--border,#eee);">
+      <td style="padding:6px 8px;">${escapeHtml(a.platform)} ${a.bound ? '' : '<span class="text-muted" style="font-size:11px;">(未绑定)</span>'}</td>
+      <td style="padding:6px 8px;">${phaseLabel[a.phase] || a.phase} <span class="text-muted" style="font-size:11px;">${a.age_days}天</span></td>
+      <td style="padding:6px 8px;">${prog}</td>
+      <td style="padding:6px 8px;">${fmt(a.total_seconds)}</td>
+      <td style="padding:6px 8px;">${healthBadge[a.health_status] || healthBadge.unknown}</td>
+    </tr>`;
+    }).join('');
+    c.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px;">
+    <thead><tr style="text-align:left;color:var(--text-muted,#888);">
+      <th style="padding:4px 8px;">平台</th><th style="padding:4px 8px;">分期/号龄</th>
+      <th style="padding:4px 8px;">今日进度</th><th style="padding:4px 8px;">累计</th><th style="padding:4px 8px;">健康</th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+}
+function renderLeads(list) {
+    const badge = document.getElementById('leadsCount');
+    if (badge)
+        badge.textContent = String(list.length);
+    const c = document.getElementById('leadsList');
+    if (!c)
+        return;
+    if (!list.length) {
+        c.innerHTML = `<div class="text-muted" style="padding:12px;font-size:13px;">暂无线索。每条真实发出的回复都会生成一条线索，在这里跟踪对方是否回应、是否转化。</div>`;
+        return;
+    }
+    const statusLabel = {
+        engaged: '已触达', replied_back: '已回应', converted: '✅ 已转化', dismissed: '已忽略',
+    };
+    c.innerHTML = list.map(l => `
+    <div class="task-item" style="padding:10px 12px;border-bottom:1px solid var(--border,#eee);">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+        <div style="min-width:0;">
+          <span class="task-stat">${escapeHtml(l.platform)}</span>
+          ${intentBadge(l.intent_score)}
+          <span class="task-stat" style="background:#334155;color:#fff;">${statusLabel[l.status] || l.status}</span>
+          ${l.author ? `<span class="text-muted" style="font-size:12px;">${escapeHtml(l.author.slice(0, 40))}</span>` : ''}
+          ${l.post_url ? `<a href="${escapeHtml(l.post_url)}" target="_blank" class="text-muted" style="font-size:12px;">原帖↗</a>` : ''}
+          ${l.our_reply ? `<div class="text-muted" style="font-size:12px;margin-top:3px;">我方：${escapeHtml(l.our_reply.slice(0, 120))}</div>` : ''}
+        </div>
+        <div class="btn-group" style="flex-shrink:0;">
+          <button class="btn btn-small btn-primary" onclick="markLead('${l.id}','converted')">转化</button>
+          <button class="btn btn-small btn-secondary" onclick="markLead('${l.id}','replied_back')">已回应</button>
+          <button class="btn btn-small btn-secondary" onclick="markLead('${l.id}','dismissed')">忽略</button>
+        </div>
+      </div>
+    </div>`).join('');
+}
+window.markLead = async (id, status) => {
+    try {
+        await invoke('update_lead_status', { id, status });
+        showToast('线索已更新', 'success');
+        refreshTasksPage();
+    }
+    catch (e) {
+        showToast('' + e, 'error');
+    }
+};
+function renderMarketingStats(s) {
+    const c = document.getElementById('marketingStats');
+    if (!c)
+        return;
+    const t = s.totals;
+    const card = (label, val, hl) => `<div style="flex:1;min-width:80px;text-align:center;padding:6px;background:var(--bg-subtle,#f8f8f8);border-radius:8px;">
+       <div style="font-size:20px;font-weight:700;${hl ? 'color:#16a34a;' : ''}">${val}</div>
+       <div class="text-muted" style="font-size:11px;">${label}</div></div>`;
+    const platRows = s.by_platform
+        .filter(p => p.discovered > 0 || p.leads > 0)
+        .map(p => `<tr style="border-bottom:1px solid var(--border,#eee);">
+      <td style="padding:4px 8px;">${escapeHtml(p.platform)}</td>
+      <td style="padding:4px 8px;">${p.discovered}</td>
+      <td style="padding:4px 8px;">${p.skipped}</td>
+      <td style="padding:4px 8px;">${p.replied}</td>
+      <td style="padding:4px 8px;">${p.avg_intent}</td>
+      <td style="padding:4px 8px;">${p.leads}</td>
+      <td style="padding:4px 8px;color:#16a34a;">${p.converted}</td>
+    </tr>`).join('');
+    const kw = s.top_keywords.length
+        ? s.top_keywords.map(([k, n, ai]) => `<span class="task-stat" title="发现 ${n}，平均意向 ${ai}">${escapeHtml(k)} · ${n}/意向${ai}</span>`).join(' ')
+        : '<span class="text-muted" style="font-size:12px;">暂无</span>';
+    c.innerHTML = `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+      ${card('发现帖子', t.discovered)}${card('已跳过', t.skipped)}${card('已回复', t.replied)}
+      ${card('待审', t.pending_review)}${card('线索', t.leads)}${card('转化', t.converted, true)}
+    </div>
+    <table style="width:100%;border-collapse:collapse;font-size:12px;">
+      <thead><tr style="text-align:left;color:var(--text-muted,#888);">
+        <th style="padding:4px 8px;">平台</th><th style="padding:4px 8px;">发现</th><th style="padding:4px 8px;">跳过</th>
+        <th style="padding:4px 8px;">回复</th><th style="padding:4px 8px;">均意向</th><th style="padding:4px 8px;">线索</th><th style="padding:4px 8px;">转化</th>
+      </tr></thead><tbody>${platRows}</tbody></table>
+    <div style="margin-top:8px;"><span class="text-muted" style="font-size:12px;">热门关键词：</span> ${kw}</div>`;
+}
+let mpProductId = '';
+let mpSubmissions = [];
+let mpWired = false;
+async function loadMarketplacesPage() {
+    if (!mpWired) {
+        mpWired = true;
+        document.getElementById('btnMpRefresh')?.addEventListener('click', () => refreshMarketplaces());
+        document.getElementById('mpProductSelect')?.addEventListener('change', (e) => {
+            mpProductId = e.target.value;
+            refreshMarketplaces();
+        });
+        document.getElementById('btnMpSaveRepo')?.addEventListener('click', async () => {
+            const repoUrl = document.getElementById('mpRepoUrl')?.value?.trim();
+            const installCmd = document.getElementById('mpInstallCmd')?.value?.trim();
+            if (!mpProductId || !repoUrl) {
+                showToast('请选择产品并填仓库地址', 'error');
+                return;
+            }
+            try {
+                await invoke('set_product_repo', { productId: mpProductId, repoUrl, installCmd });
+                showToast('已保存仓库信息', 'success');
+            }
+            catch (e) {
+                showToast('' + e, 'error');
+            }
+        });
+        document.getElementById('btnMpCopyListing')?.addEventListener('click', () => {
+            const body = document.getElementById('mpListingBody')?.textContent || '';
+            navigator.clipboard?.writeText(body);
+            showToast('已复制', 'success');
+        });
+    }
+    // populate products
+    try {
+        const products = await invoke('list_products');
+        const sel = document.getElementById('mpProductSelect');
+        if (sel) {
+            sel.innerHTML = (products || []).map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+            if (!mpProductId && products && products.length)
+                mpProductId = products[0].id;
+            if (mpProductId)
+                sel.value = mpProductId;
+            const cur = (products || []).find(p => p.id === mpProductId);
+            document.getElementById('mpRepoUrl').value = cur?.repo_url || '';
+            document.getElementById('mpInstallCmd').value = cur?.install_cmd || '';
+        }
+    }
+    catch (e) {
+        console.error(e);
+    }
+    refreshMarketplaces();
+}
+async function refreshMarketplaces() {
+    if (!mpProductId) {
+        const c = document.getElementById('mpList');
+        if (c)
+            c.innerHTML = '<p class="text-muted" style="padding:12px;">请先在「产品」页创建一个产品。</p>';
+        return;
+    }
+    try {
+        mpSubmissions = await invoke('list_marketplace_submissions', { productId: mpProductId });
+    }
+    catch (e) {
+        mpSubmissions = [];
+    }
+    renderMpList();
+}
+function renderMpList() {
+    const c = document.getElementById('mpList');
+    if (!c)
+        return;
+    const methodLabel = { form: '表单(可自动预填)', github_pr: 'GitHub PR', cli: 'CLI/注册', auto_index: 'GitHub 自动索引' };
+    const statusLabel = {
+        pending: '未开始', materials_ready: '资料已就绪', submitting: '提交中', prefilled: '已填好待人工核对',
+        needs_review: '⚠️需人工(登录/必填/验证码)', submitted: '✅已提交', listed: '✅已上架', failed: '失败', skipped: '跳过',
+    };
+    const groups = { mcp: [], skill: [], both: [] };
+    mpSubmissions.forEach(s => (groups[s.kind] || (groups[s.kind] = [])).push(s));
+    const section = (title, list) => !list.length ? '' : `
+    <div class="card" style="margin:12px 0;padding:12px;">
+      <strong>${title}</strong>
+      <div style="margin-top:8px;">${list.map(rowHtml).join('')}</div>
+    </div>`;
+    c.innerHTML = section('🔌 MCP 市场', groups.mcp) + section('🧩 Skill 市场', groups.skill) + section('🔁 通用', groups.both);
+    function rowHtml(s) {
+        const hasListing = !!s.listing;
+        const actions = [
+            `<button class="btn btn-small btn-primary" onclick="mpGenerate('${s.marketplace_id}')">${hasListing ? '重生成资料' : '生成资料'}</button>`,
+        ];
+        if (hasListing)
+            actions.push(`<button class="btn btn-small btn-secondary" onclick="mpView('${s.marketplace_id}')">查看资料</button>`);
+        if (s.submit_method === 'form')
+            actions.push(`<button class="btn btn-small btn-success" onclick="mpSubmit('${s.marketplace_id}')" ${hasListing ? '' : 'disabled'}>🤖 自动提交</button>`);
+        if (s.submit_url)
+            actions.push(`<a class="btn btn-small btn-secondary" href="${escapeHtml(s.submit_url)}" target="_blank">打开提交页↗</a>`);
+        actions.push(`<button class="btn btn-small btn-secondary" onclick="mpMark('${s.marketplace_id}','listed')">标记已上架</button>`);
+        return `<div class="task-item" style="padding:8px 10px;border-bottom:1px solid var(--border,#eee);">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+        <div>
+          <strong>${escapeHtml(s.marketplace_name)}</strong>
+          <span class="task-stat">${methodLabel[s.submit_method] || s.submit_method}</span>
+          <span class="task-stat" style="background:${s.status === 'listed' ? '#16a34a' : s.status === 'pending' ? '#6b7280' : '#2563eb'};color:#fff;">${statusLabel[s.status] || s.status}</span>
+          ${s.notes ? `<span class="text-muted" style="font-size:11px;">${escapeHtml(s.notes)}</span>` : ''}
+        </div>
+        <div class="btn-group" style="flex-wrap:wrap;">${actions.join('')}</div>
+      </div>
+    </div>`;
+    }
+}
+window.mpGenerate = async (mid) => {
+    showToast('AI 正在生成上架资料…', 'info');
+    try {
+        await invoke('generate_marketplace_listing', { productId: mpProductId, marketplaceId: mid });
+        showToast('资料已生成', 'success');
+        refreshMarketplaces();
+    }
+    catch (e) {
+        showToast('生成失败: ' + e, 'error');
+    }
+};
+window.mpView = (mid) => {
+    const s = mpSubmissions.find(x => x.marketplace_id === mid);
+    if (!s)
+        return;
+    document.getElementById('mpListingTitle').textContent = `${s.marketplace_name} — 上架资料`;
+    document.getElementById('mpListingBody').textContent = s.listing || '(无)';
+    document.getElementById('mpListingModal').style.display = 'flex';
+};
+window.mpSubmit = async (mid) => {
+    try {
+        const msg = await invoke('submit_marketplace', { productId: mpProductId, marketplaceId: mid });
+        showToast(msg, 'success');
+        refreshMarketplaces();
+    }
+    catch (e) {
+        showToast('' + e, 'error');
+    }
+};
+window.mpMark = async (mid) => {
+    const s = mpSubmissions.find(x => x.marketplace_id === mid);
+    try {
+        await invoke('mark_submission', { productId: mpProductId, marketplaceId: mid, kind: s?.kind || 'mcp', status: 'listed', resultUrl: null });
+        showToast('已标记上架', 'success');
+        refreshMarketplaces();
+    }
+    catch (e) {
+        showToast('' + e, 'error');
+    }
+};
+// Inline action handlers for the task list buttons.
+window.unblockTask = async (id) => {
+    try {
+        await invoke('unblock_task', { id });
+        showToast('已解除阻塞，将重新执行', 'success');
+        refreshTasksPage();
+    }
+    catch (e) {
+        showToast('' + e, 'error');
+    }
+};
+window.cancelTask = async (id) => {
+    try {
+        await invoke('cancel_task', { id });
+        showToast('已取消', 'success');
+        refreshTasksPage();
+    }
+    catch (e) {
+        showToast('' + e, 'error');
+    }
+};
+window.retryTask = async (id) => {
+    try {
+        await invoke('retry_task', { id });
+        showToast('已重新入队', 'success');
+        refreshTasksPage();
+    }
+    catch (e) {
+        showToast('' + e, 'error');
+    }
+};
 function renderTasks() {
     const container = document.getElementById('tasksList');
     if (!container)
@@ -5180,4 +6254,960 @@ function queueDiscoverTask() {
     showToast('Discovery task added to queue', 'success');
     navigateTo('tasks');
 }
+let postWired = false;
+function postFieldVal(id) {
+    return document.getElementById(id)?.value?.trim() || '';
+}
+function postSetVal(id, v) {
+    const el = document.getElementById(id);
+    if (el)
+        el.value = v;
+}
+function postLocalToUtc(local) {
+    if (!local)
+        return undefined;
+    const d = new Date(local);
+    if (isNaN(d.getTime()))
+        return undefined;
+    return d.toISOString();
+}
+function postCollect() {
+    const editId = postFieldVal('postEditId');
+    const topics = postFieldVal('postTopics').split(',').map(s => s.trim()).filter(Boolean);
+    const media = postFieldVal('postMedia').split(',').map(s => s.trim()).filter(Boolean);
+    const account_id = document.getElementById('postAccount')?.value || undefined;
+    const scheduled_at = postLocalToUtc(postFieldVal('postSchedule'));
+    return {
+        id: editId || undefined,
+        product_id: document.getElementById('postProduct')?.value || undefined,
+        platform: document.getElementById('postPlatform')?.value || 'twitter',
+        account_id,
+        title: postFieldVal('postTitle') || undefined,
+        body: postFieldVal('postBody'),
+        topics,
+        media_paths: media,
+        scheduled_at,
+    };
+}
+async function postPopulateAccounts() {
+    const platform = document.getElementById('postPlatform')?.value || 'twitter';
+    const sel = document.getElementById('postAccount');
+    if (!sel)
+        return;
+    let list = [];
+    try {
+        list = (await invoke('list_accounts')) || [];
+    }
+    catch {
+        list = [];
+    }
+    const alias = (p) => (p === 'x' ? 'twitter' : p).toLowerCase();
+    const matched = list.filter(a => alias(a.platform || '') === alias(platform));
+    const pool = matched.length ? matched : list;
+    sel.innerHTML = `<option value="">（继承全局默认 profile）</option>` +
+        pool.map(a => `<option value="${a.id}">${escapeHtml(a.username || a.name || a.id)} · ${escapeHtml(a.platform || '')}</option>`).join('');
+}
+async function loadContentPage() {
+    if (!postWired) {
+        postWired = true;
+        document.getElementById('btnPostRefresh')?.addEventListener('click', () => refreshPosts());
+        document.getElementById('postPlatform')?.addEventListener('change', () => postPopulateAccounts());
+        document.getElementById('btnPostClear')?.addEventListener('click', () => {
+            ['postEditId', 'postTitle', 'postBody', 'postTopics', 'postMedia', 'postSchedule'].forEach(i => postSetVal(i, ''));
+            showToast('已清空', 'success');
+        });
+        document.getElementById('btnPostGen')?.addEventListener('click', async () => {
+            const product_id = document.getElementById('postProduct')?.value;
+            const platform = document.getElementById('postPlatform')?.value;
+            if (!product_id) {
+                showToast('请先选产品', 'error');
+                return;
+            }
+            const lang = platform === 'xiaohongshu' || platform === 'douyin' ? 'zh' : 'en';
+            showToast('AI 生成中…', 'info');
+            try {
+                const g = await invoke('generate_post_content', { productId: product_id, platform, language: lang });
+                if (g.title && !postFieldVal('postTitle'))
+                    postSetVal('postTitle', g.title);
+                postSetVal('postBody', g.body || '');
+                postSetVal('postTopics', (g.topics || []).join(', '));
+                showToast('文案已生成', 'success');
+            }
+            catch (e) {
+                showToast('生成失败: ' + e, 'error');
+            }
+        });
+        document.getElementById('btnPostSave')?.addEventListener('click', async () => {
+            const p = postCollect();
+            if (!p.body && !p.media_paths.length) {
+                showToast('正文或媒体至少要有一个', 'error');
+                return;
+            }
+            try {
+                const id = await invoke('save_post', { post: p });
+                postSetVal('postEditId', id);
+                showToast('草稿已保存', 'success');
+                refreshPosts();
+            }
+            catch (e) {
+                showToast('保存失败: ' + e, 'error');
+            }
+        });
+        document.getElementById('btnPostSchedule')?.addEventListener('click', async () => {
+            const p = postCollect();
+            if (!p.scheduled_at) {
+                showToast('请先选定时时间', 'error');
+                return;
+            }
+            if (!p.body && !p.media_paths.length) {
+                showToast('正文或媒体至少要有一个', 'error');
+                return;
+            }
+            try {
+                const id = await invoke('save_post', { post: p });
+                await invoke('schedule_post', { id, scheduledAt: p.scheduled_at });
+                postSetVal('postEditId', id);
+                showToast('已排期，到点自动发布', 'success');
+                refreshPosts();
+            }
+            catch (e) {
+                showToast('排期失败: ' + e, 'error');
+            }
+        });
+        document.getElementById('btnPostNow')?.addEventListener('click', async () => {
+            const p = postCollect();
+            if (!p.body && !p.media_paths.length) {
+                showToast('正文或媒体至少要有一个', 'error');
+                return;
+            }
+            try {
+                const id = await invoke('save_post', { post: { ...p, scheduled_at: undefined } });
+                await invoke('publish_post_now', { id });
+                postSetVal('postEditId', id);
+                showToast('已入队，引擎下一拍自动发布', 'success');
+                refreshPosts();
+            }
+            catch (e) {
+                showToast('发布失败: ' + e, 'error');
+            }
+        });
+        // ① AI 配图
+        document.getElementById('btnPostImage')?.addEventListener('click', () => aiGenerateMedia('image'));
+        // ④ AI 视频
+        document.getElementById('btnPostVideo')?.addEventListener('click', () => aiGenerateMedia('video'));
+        // ③ 矩阵铺量
+        document.getElementById('btnPostMatrix')?.addEventListener('click', () => openMatrixModal());
+        // ② 内容日历
+        document.getElementById('btnPostCalendar')?.addEventListener('click', () => toggleCalendar());
+    }
+    try {
+        const products = await invoke('list_products');
+        const sel = document.getElementById('postProduct');
+        if (sel)
+            sel.innerHTML = (products || []).map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+    }
+    catch (e) {
+        console.error(e);
+    }
+    await postPopulateAccounts();
+    refreshPosts();
+}
+const POST_STATUS_LABEL = {
+    draft: '草稿', scheduled: '⏰已排期', publishing: '🔄发布中', published: '✅已发布', failed: '❌失败', canceled: '已取消',
+};
+async function refreshPosts() {
+    const c = document.getElementById('postList');
+    if (!c)
+        return;
+    let posts = [];
+    try {
+        posts = (await invoke('list_posts')) || [];
+    }
+    catch (e) {
+        posts = [];
+    }
+    if (!posts.length) {
+        c.innerHTML = '<p class="text-muted" style="padding:12px;">还没有内容。上面写一条，存草稿 / 定时 / 立即发布。</p>';
+        return;
+    }
+    c.innerHTML = `<div class="card" style="padding:8px;">${posts.map(postRow).join('')}</div>`;
+}
+function postRow(p) {
+    const when = p.scheduled_at ? new Date(p.scheduled_at).toLocaleString() : '';
+    const sub = p.status === 'scheduled' && when ? `⏰ ${when}`
+        : p.published_at ? `发布于 ${new Date(p.published_at).toLocaleString()}`
+            : p.error ? `<span style="color:#e55">${escapeHtml(p.error.slice(0, 80))}</span>` : '';
+    const preview = escapeHtml((p.title ? p.title + ' — ' : '') + (p.body || '').slice(0, 90));
+    const mediaTag = p.media_type !== 'none' ? `<span class="badge">${p.media_type === 'video' ? '🎬视频' : '🖼图文'}×${p.media_paths.length}</span>` : '';
+    const actions = [];
+    if (p.status === 'draft' || p.status === 'failed')
+        actions.push(`<button class="btn btn-small btn-primary" onclick="postPublishNow('${p.id}')">🚀发布</button>`);
+    if (p.status === 'scheduled' || p.status === 'publishing')
+        actions.push(`<button class="btn btn-small btn-secondary" onclick="postCancel('${p.id}')">取消</button>`);
+    if (p.result_url && p.status === 'published')
+        actions.push(`<a class="btn btn-small btn-secondary" href="${escapeHtml(p.result_url)}" target="_blank">打开↗</a>`);
+    actions.push(`<button class="btn btn-small btn-secondary" onclick="postEdit('${p.id}')">编辑</button>`);
+    actions.push(`<button class="btn btn-small btn-secondary" onclick="postDelete('${p.id}')">删</button>`);
+    return `<div class="task-item" style="padding:8px 10px;border-bottom:1px solid var(--border,#eee);">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+      <div style="min-width:0;flex:1;">
+        <div style="font-size:13px;">${preview}</div>
+        <div class="text-muted" style="font-size:11px;margin-top:2px;">
+          <span class="badge">${escapeHtml(p.platform)}</span> ${mediaTag}
+          <strong>${POST_STATUS_LABEL[p.status] || p.status}</strong> ${sub}
+        </div>
+      </div>
+      <div class="btn-group" style="gap:4px;flex-wrap:wrap;">${actions.join('')}</div>
+    </div>
+  </div>`;
+}
+window.postPublishNow = async (id) => {
+    try {
+        await invoke('publish_post_now', { id });
+        showToast('已入队发布', 'success');
+        refreshPosts();
+    }
+    catch (e) {
+        showToast('' + e, 'error');
+    }
+};
+window.postCancel = async (id) => {
+    try {
+        await invoke('cancel_post', { id });
+        showToast('已取消', 'success');
+        refreshPosts();
+    }
+    catch (e) {
+        showToast('' + e, 'error');
+    }
+};
+window.postDelete = async (id) => {
+    try {
+        await invoke('delete_post', { id });
+        showToast('已删除', 'success');
+        refreshPosts();
+    }
+    catch (e) {
+        showToast('' + e, 'error');
+    }
+};
+window.postEdit = async (id) => {
+    let posts = [];
+    try {
+        posts = (await invoke('list_posts')) || [];
+    }
+    catch { }
+    const p = posts.find(x => x.id === id);
+    if (!p)
+        return;
+    postSetVal('postEditId', p.id);
+    document.getElementById('postPlatform').value = p.platform === 'x' ? 'twitter' : p.platform;
+    await postPopulateAccounts();
+    if (p.account_id)
+        document.getElementById('postAccount').value = p.account_id;
+    if (p.product_id)
+        document.getElementById('postProduct').value = p.product_id;
+    postSetVal('postTitle', p.title || '');
+    postSetVal('postBody', p.body || '');
+    postSetVal('postTopics', (p.topics || []).join(', '));
+    postSetVal('postMedia', (p.media_paths || []).join(', '));
+    if (p.scheduled_at) {
+        const d = new Date(p.scheduled_at);
+        const pad = (n) => String(n).padStart(2, '0');
+        postSetVal('postSchedule', `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`);
+    }
+    showToast('已载入到编辑区', 'success');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+};
+// ===================== ①④ AI 配图 / AI 视频 =====================
+function aiMediaPrompt() {
+    const product = document.getElementById('postProduct')?.selectedOptions?.[0]?.text || '';
+    const title = postFieldVal('postTitle');
+    const body = postFieldVal('postBody');
+    const base = [title, body].filter(Boolean).join('。').slice(0, 400);
+    return base || `为产品「${product}」生成一张高质感、现代、干净的营销配图`;
+}
+async function aiGenerateMedia(kind) {
+    const hint = document.getElementById('aiMediaHint');
+    const prompt = aiMediaPrompt();
+    if (!prompt) {
+        showToast('先写点正文/标题，AI 据此配图', 'error');
+        return;
+    }
+    const setHint = (t) => { if (hint)
+        hint.textContent = t; };
+    try {
+        let path;
+        if (kind === 'image') {
+            const ar = document.getElementById('postImageAR')?.value || undefined;
+            setHint('🖼 配图生成中…约 10-20 秒');
+            showToast('AI 配图生成中…', 'info');
+            path = await invoke('generate_ai_image', { prompt, aspectRatio: ar });
+        }
+        else {
+            setHint('🎬 视频生成中…约 1-3 分钟，请勿关闭');
+            showToast('AI 视频生成中（1-3 分钟）…', 'info');
+            const plat = document.getElementById('postPlatform')?.value;
+            const ar = (plat === 'douyin' || plat === 'xiaohongshu') ? '9:16' : '16:9';
+            path = await invoke('generate_ai_video', { prompt, model: null, aspectRatio: ar });
+        }
+        // 追加到媒体路径输入框
+        const cur = postFieldVal('postMedia');
+        postSetVal('postMedia', cur ? `${cur}, ${path}` : path);
+        setHint(`✅ 已生成并加入媒体：${path.split(/[\\/]/).pop()}`);
+        showToast(kind === 'image' ? '配图已生成' : '视频已生成', 'success');
+    }
+    catch (e) {
+        setHint('');
+        showToast((kind === 'image' ? '配图失败: ' : '视频失败: ') + e, 'error');
+    }
+}
+// ===================== ② 内容日历 =====================
+let calendarMonth = new Date();
+async function toggleCalendar() {
+    const el = document.getElementById('postCalendar');
+    const list = document.getElementById('postList');
+    if (!el)
+        return;
+    if (el.style.display === 'none') {
+        el.style.display = 'block';
+        if (list)
+            list.style.display = 'none';
+        await renderCalendar();
+    }
+    else {
+        el.style.display = 'none';
+        if (list)
+            list.style.display = 'block';
+    }
+}
+async function renderCalendar() {
+    const el = document.getElementById('postCalendar');
+    if (!el)
+        return;
+    let posts = [];
+    try {
+        posts = (await invoke('list_posts')) || [];
+    }
+    catch { }
+    // 只取有排期时间的（scheduled_at 或 published_at）
+    const byDay = {};
+    for (const p of posts) {
+        const when = p.scheduled_at || p.published_at;
+        if (!when)
+            continue;
+        const d = new Date(when);
+        if (isNaN(d.getTime()))
+            continue;
+        const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+        (byDay[key] ||= []).push(p);
+    }
+    const y = calendarMonth.getFullYear(), m = calendarMonth.getMonth();
+    const first = new Date(y, m, 1);
+    const startDow = first.getDay();
+    const daysInMonth = new Date(y, m + 1, 0).getDate();
+    const today = new Date();
+    const monthLabel = `${y} 年 ${m + 1} 月`;
+    const dows = ['日', '一', '二', '三', '四', '五', '六'];
+    let cells = '';
+    for (let i = 0; i < startDow; i++)
+        cells += `<div></div>`;
+    const platEmoji = { twitter: '𝕏', x: '𝕏', linkedin: '💼', reddit: '👽', xiaohongshu: '📕', douyin: '🎵' };
+    for (let day = 1; day <= daysInMonth; day++) {
+        const key = `${y}-${m}-${day}`;
+        const items = byDay[key] || [];
+        const isToday = today.getFullYear() === y && today.getMonth() === m && today.getDate() === day;
+        const chips = items.slice(0, 4).map(p => {
+            const t = new Date(p.scheduled_at || p.published_at);
+            const hh = String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0');
+            const st = p.status === 'published' ? '✅' : p.status === 'failed' ? '❌' : '⏰';
+            const acct = p.account_id ? '' : '';
+            return `<div title="${escapeHtml((p.title || '') + ' ' + (p.body || '').slice(0, 60))}" style="font-size:10px;background:var(--bg-soft,#f2f3f7);border-radius:4px;padding:1px 4px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;" onclick="postEdit('${p.id}')">${st}${platEmoji[p.platform] || ''} ${hh} ${escapeHtml((p.title || p.body || '').slice(0, 10))}${acct}</div>`;
+        }).join('');
+        const more = items.length > 4 ? `<div style="font-size:10px;color:var(--text-muted,#888);">+${items.length - 4}…</div>` : '';
+        cells += `<div style="border:1px solid var(--border,#eee);border-radius:6px;min-height:74px;padding:4px;${isToday ? 'outline:2px solid var(--accent,#6c5ce7);' : ''}">
+      <div style="font-size:11px;color:${isToday ? 'var(--accent,#6c5ce7)' : 'var(--text-muted,#999)'};font-weight:${isToday ? '700' : '400'};">${day}</div>
+      ${chips}${more}
+    </div>`;
+    }
+    el.innerHTML = `<div class="card" style="padding:14px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+      <button class="btn btn-small btn-secondary" onclick="calMove(-1)">‹ 上月</button>
+      <strong>${monthLabel} · 内容日历</strong>
+      <button class="btn btn-small btn-secondary" onclick="calMove(1)">下月 ›</button>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:4px;">
+      ${dows.map(d => `<div style="text-align:center;font-size:11px;color:var(--text-muted,#999);">${d}</div>`).join('')}
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;">${cells}</div>
+    <div class="text-muted" style="font-size:11px;margin-top:8px;">⏰待发 · ✅已发 · ❌失败 · 点格子里的条目可载入编辑。排期在「定时发布」里设。</div>
+  </div>`;
+}
+window.calMove = (delta) => { calendarMonth.setMonth(calendarMonth.getMonth() + delta); renderCalendar(); };
+// ===================== ③ 矩阵内容工厂（一创意 → 逐平台成品 + 逐persona差异化 + 配图 → 错峰铺量） =====================
+// factoryItems 是当前工厂的工作台数据；每个元素 = 一个 (平台×邮箱) 成品槽位
+let factoryItems = [];
+async function openMatrixModal() {
+    const product_id = document.getElementById('postProduct')?.value;
+    if (!product_id) {
+        showToast('请先在上方选产品', 'error');
+        return;
+    }
+    factoryItems = [];
+    let accts = [];
+    try {
+        accts = (await invoke('list_accounts')) || [];
+    }
+    catch { }
+    accts = accts.filter(a => (a.status || 'active') === 'active');
+    let overlay = document.getElementById('matrixOverlay');
+    if (overlay)
+        overlay.remove();
+    overlay = document.createElement('div');
+    overlay.id = 'matrixOverlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center;';
+    // 槽位选择：每个活跃账号 = 一个可选 (平台×邮箱) 槽位
+    const slotRows = accts.length
+        ? accts.map((a, i) => `<label style="display:flex;align-items:center;gap:6px;font-size:12px;padding:3px 0;">
+        <input type="checkbox" class="facSlot" data-idx="${i}" value="${a.id}" checked
+          data-platform="${escapeHtml(a.platform || '')}" data-email="${escapeHtml(a.persona_email || a.email || '')}" />
+        <span class="badge">${escapeHtml(a.platform || '?')}</span> ${escapeHtml(a.persona_email || a.email || a.username || a.id)}
+      </label>`).join('')
+        : `<div class="text-muted" style="font-size:12px;">还没有活跃账号。先到「邮箱账号」开通账号，再来矩阵工厂。</div>`;
+    overlay.innerHTML = `<div class="card" style="width:min(820px,94vw);max-height:90vh;overflow:auto;padding:18px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <h3 style="margin:0;">🏭 矩阵内容工厂</h3>
+      <button class="btn btn-small btn-secondary" onclick="closeMatrix()">✕</button>
+    </div>
+    <p class="text-muted" style="font-size:12px;margin:0 0 12px;">一个创意 →（每个邮箱一条）<strong>逐平台正确形态 + 不同人设口吻</strong>的成品文案，按需配图，错峰铺到各 profile，引擎到点自动发。</p>
+    <div style="margin-bottom:10px;">
+      <label class="text-muted" style="font-size:12px;">创意 / 主题（留空=自动围绕产品卖点）</label>
+      <textarea id="facIdea" rows="2" placeholder="例：用一个真实场景说明这工具怎么帮人省时间" style="width:100%;padding:8px;resize:vertical;"></textarea>
+    </div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;">
+      <div style="flex:1;min-width:240px;">
+        <div style="font-size:12px;font-weight:600;margin-bottom:4px;">投放槽位（每个=一个邮箱发一条，${accts.length}）
+          <a href="#" style="font-size:11px;font-weight:400;margin-left:6px;" onclick="facToggleAll(true);return false;">全选</a> ·
+          <a href="#" style="font-size:11px;font-weight:400;" onclick="facToggleAll(false);return false;">全不选</a>
+        </div>
+        <div style="max-height:180px;overflow:auto;border:1px solid var(--border,#eee);border-radius:6px;padding:8px;">${slotRows}</div>
+      </div>
+    </div>
+    <div class="btn-group" style="margin-top:10px;">
+      <button class="btn btn-primary" id="facGenBtn" onclick="factoryGenerate('${product_id}')">✨ 生成成品（逐平台×逐人设）</button>
+    </div>
+    <div id="facPreview" style="margin-top:12px;"></div>
+    <div id="facCommit" style="display:none;border-top:1px solid var(--border,#eee);padding-top:10px;margin-top:12px;">
+      <div class="btn-group" style="margin-bottom:8px;">
+        <button class="btn btn-secondary btn-small" onclick="factoryImageAll('${product_id}')">🖼 给全部需要的配图</button>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <label style="font-size:12px;">开始时间 <input id="facStart" type="datetime-local" style="padding:4px;" /></label>
+        <label style="font-size:12px;">每条间隔 <input id="facInterval" type="number" value="45" min="0" style="width:56px;padding:4px;" /> 分钟</label>
+      </div>
+      <div class="text-muted" style="font-size:11px;margin-top:4px;">留空开始时间=全部存草稿；填了=从该时间起每隔 N 分钟自动发一条（错峰防关联）。</div>
+      <div class="btn-group" style="margin-top:10px;">
+        <button class="btn btn-primary" onclick="factoryCommit()">🚀 铺量（建成 ${accts.length ? '' : ''}定时帖）</button>
+        <button class="btn btn-secondary" onclick="closeMatrix()">取消</button>
+      </div>
+    </div>
+  </div>`;
+    document.body.appendChild(overlay);
+}
+window.closeMatrix = () => { document.getElementById('matrixOverlay')?.remove(); };
+window.facToggleAll = (on) => {
+    document.querySelectorAll('.facSlot').forEach(e => e.checked = on);
+};
+window.factoryGenerate = async (productId) => {
+    const idea = document.getElementById('facIdea')?.value || '';
+    const slots = Array.from(document.querySelectorAll('.facSlot:checked')).map(e => {
+        const el = e;
+        return { account_id: el.value, platform: el.dataset.platform || 'twitter', persona_email: el.dataset.email || '' };
+    });
+    if (!slots.length) {
+        showToast('请至少选一个投放槽位', 'error');
+        return;
+    }
+    const btn = document.getElementById('facGenBtn');
+    const prev = document.getElementById('facPreview');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = `✨ 生成中…(${slots.length} 条逐条产出)`;
+    }
+    if (prev)
+        prev.innerHTML = '<div class="text-muted" style="font-size:12px;">AI 正在为每个平台/人设产出成品…约每条 3-6 秒</div>';
+    try {
+        factoryItems = await invoke('matrix_factory_generate', { productId, idea, items: slots });
+        renderFactoryPreview();
+        const commit = document.getElementById('facCommit');
+        if (commit)
+            commit.style.display = 'block';
+        showToast(`已产出 ${factoryItems.length} 条成品`, 'success');
+    }
+    catch (e) {
+        if (prev)
+            prev.innerHTML = `<div style="color:#e55;font-size:12px;">生成失败：${escapeHtml('' + e)}</div>`;
+    }
+    finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = '✨ 重新生成成品';
+        }
+    }
+};
+function renderFactoryPreview() {
+    const prev = document.getElementById('facPreview');
+    if (!prev)
+        return;
+    prev.innerHTML = factoryItems.map((it, i) => {
+        const needImg = !!it.image_prompt && it.platform.toLowerCase() !== 'linkedin' && it.platform.toLowerCase() !== 'reddit';
+        const hasImg = (it.media_paths || []).length > 0;
+        const imgBtn = needImg ? (hasImg
+            ? `<span class="badge" style="background:#2ecc71;color:#fff;">🖼已配图</span>`
+            : `<button class="btn btn-small btn-secondary" onclick="factoryImageOne(${i})">🖼 配图</button>`) : '';
+        return `<div style="border:1px solid var(--border,#eee);border-radius:8px;padding:10px;margin-bottom:8px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+          <span class="badge">${escapeHtml(it.platform)}</span>
+          <span class="text-muted" style="font-size:11px;">${escapeHtml(it.persona_email || '')}</span>
+          <span class="text-muted" style="font-size:11px;">· 人设：${escapeHtml(it.angle || '')}</span>
+        </div>
+        ${imgBtn}
+      </div>
+      ${['twitter', 'x', 'linkedin'].includes(it.platform.toLowerCase()) ? '' : `<input value="${escapeHtml(it.title || '')}" oninput="factoryEdit(${i},'title',this.value)" placeholder="标题" style="width:100%;padding:5px;margin-bottom:4px;font-size:12px;" />`}
+      <textarea rows="4" oninput="factoryEdit(${i},'body',this.value)" style="width:100%;padding:6px;font-size:12px;resize:vertical;">${escapeHtml(it.body || '')}</textarea>
+      ${(it.topics || []).length ? `<div style="font-size:11px;color:var(--accent,#6c5ce7);margin-top:3px;">${(it.topics || []).map((t) => '#' + escapeHtml(t)).join(' ')}</div>` : ''}
+      ${hasImg ? `<div class="text-muted" style="font-size:11px;margin-top:3px;">📎 ${escapeHtml((it.media_paths[0] || '').split(/[\\/]/).pop())}</div>` : (needImg && it.image_prompt ? `<div class="text-muted" style="font-size:11px;margin-top:3px;font-style:italic;">配图建议：${escapeHtml(it.image_prompt.slice(0, 70))}</div>` : '')}
+    </div>`;
+    }).join('');
+}
+window.factoryEdit = (i, field, val) => { if (factoryItems[i])
+    factoryItems[i][field] = val; };
+window.factoryImageOne = async (i) => {
+    const it = factoryItems[i];
+    if (!it)
+        return;
+    showToast(`第${i + 1}条配图生成中…`, 'info');
+    try {
+        const path = await invoke('generate_ai_image', { prompt: it.image_prompt || it.body, aspectRatio: it.aspect_ratio || '1:1' });
+        it.media_paths = [path];
+        renderFactoryPreview();
+        showToast(`第${i + 1}条已配图`, 'success');
+    }
+    catch (e) {
+        showToast('配图失败: ' + e, 'error');
+    }
+};
+window.factoryImageAll = async () => {
+    const targets = factoryItems.map((it, i) => ({ it, i })).filter(({ it }) => it.image_prompt && !(it.media_paths || []).length &&
+        it.platform.toLowerCase() !== 'linkedin' && it.platform.toLowerCase() !== 'reddit');
+    if (!targets.length) {
+        showToast('没有需要配图的条目', 'info');
+        return;
+    }
+    showToast(`正在为 ${targets.length} 条配图…`, 'info');
+    for (const { it, i } of targets) {
+        try {
+            const path = await invoke('generate_ai_image', { prompt: it.image_prompt || it.body, aspectRatio: it.aspect_ratio || '1:1' });
+            it.media_paths = [path];
+            renderFactoryPreview();
+        }
+        catch (e) {
+            showToast(`第${i + 1}条配图失败: ${e}`, 'error');
+        }
+    }
+    showToast('全部配图完成', 'success');
+};
+window.factoryCommit = async () => {
+    if (!factoryItems.length) {
+        showToast('请先生成成品', 'error');
+        return;
+    }
+    const startLocal = document.getElementById('facStart')?.value;
+    const start_at = startLocal ? postLocalToUtc(startLocal) : undefined;
+    const interval = parseInt(document.getElementById('facInterval')?.value || '0', 10);
+    try {
+        const n = await invoke('factory_commit', { items: factoryItems, startAt: start_at, intervalMinutes: interval });
+        showToast(`已铺量 ${n} 条${start_at ? '（已排期，引擎到点自动发）' : '（草稿）'}`, 'success');
+        window.closeMatrix();
+        refreshPosts();
+    }
+    catch (e) {
+        showToast('铺量失败: ' + e, 'error');
+    }
+};
+let metricsWired = false;
+async function loadMetricsPage() {
+    if (!metricsWired) {
+        metricsWired = true;
+        document.getElementById('btnMetricsRefresh')?.addEventListener('click', () => { refreshKeywords(); refreshMetricsOverview(); metricsLoadSettings(); });
+        document.getElementById('btnKwAdd')?.addEventListener('click', addKeyword);
+        document.getElementById('btnMetricsCollect')?.addEventListener('click', collectMetricsNow);
+        document.getElementById('metricsTrends')?.addEventListener('change', async (e) => {
+            const on = e.target.checked;
+            try {
+                await invoke('metrics_set_trends', { on });
+                showToast(on ? '已开启 Trends 采集' : '已关闭 Trends 采集', 'success');
+            }
+            catch (err) {
+                showToast('' + err, 'error');
+            }
+        });
+    }
+    metricsLoadSettings();
+    refreshKeywords();
+    refreshMetricsOverview();
+}
+async function metricsLoadSettings() {
+    try {
+        const s = await invoke('metrics_get_settings');
+        const el = document.getElementById('metricsSettings');
+        const last = s.last_tick ? new Date(s.last_tick).toLocaleString() : '尚未采集';
+        if (el)
+            el.innerHTML = `采集 profile：<b>${escapeHtml(s.profile)}</b> · 地区：<b>${escapeHtml(s.region)}</b> · 上次采集：<b>${escapeHtml(last)}</b> · 引擎每日自动跑一次`;
+        const cb = document.getElementById('metricsTrends');
+        if (cb)
+            cb.checked = !!s.trends_on;
+    }
+    catch (e) { /* ignore */ }
+}
+async function addKeyword() {
+    const kw = document.getElementById('kwInput')?.value?.trim();
+    const kind = document.getElementById('kwKind')?.value || 'longtail';
+    const domain = document.getElementById('kwDomain')?.value?.trim() || 'doaipm.com';
+    if (!kw) {
+        showToast('请输入关键词', 'error');
+        return;
+    }
+    try {
+        await invoke('metrics_add_keyword', { keyword: kw, kind, targetDomain: domain });
+        document.getElementById('kwInput').value = '';
+        showToast('已添加', 'success');
+        refreshKeywords();
+    }
+    catch (e) {
+        showToast('' + e, 'error');
+    }
+}
+const KIND_LABEL = { brand: '品牌词·守', longtail: '长尾词·攻', mention: '品牌提及' };
+async function refreshKeywords() {
+    const box = document.getElementById('kwList');
+    if (!box)
+        return;
+    let kws = [];
+    try {
+        kws = (await invoke('metrics_list_keywords')) || [];
+    }
+    catch (e) {
+        box.innerHTML = `<span class="text-muted">加载失败：${escapeHtml('' + e)}</span>`;
+        return;
+    }
+    if (!kws.length) {
+        box.innerHTML = '<span class="text-muted" style="font-size:12px;">还没有关键词，添加几个开始追踪。</span>';
+        return;
+    }
+    const groups = ['brand', 'longtail', 'mention'];
+    box.innerHTML = groups.map(g => {
+        const rows = kws.filter(k => k.kind === g);
+        if (!rows.length)
+            return '';
+        return `<div style="margin-bottom:8px;">
+      <div class="text-muted" style="font-size:11px;margin-bottom:4px;">${KIND_LABEL[g] || g}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;">
+        ${rows.map(k => `<span style="display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border:1px solid var(--border,#ddd);border-radius:14px;font-size:12px;opacity:${k.enabled ? '1' : '0.45'};">
+          <span title="目标域名：${escapeHtml(k.target_domain)}">${escapeHtml(k.keyword)}</span>
+          <a href="#" title="${k.enabled ? '停用' : '启用'}" onclick="metricsToggleKw('${k.id}',${k.enabled ? 'false' : 'true'});return false;" style="text-decoration:none;">${k.enabled ? '⏸' : '▶'}</a>
+          <a href="#" title="删除" onclick="metricsDeleteKw('${k.id}');return false;" style="text-decoration:none;color:#e55;">✕</a>
+        </span>`).join('')}
+      </div></div>`;
+    }).join('');
+}
+window.metricsToggleKw = async (id, enabled) => {
+    try {
+        await invoke('metrics_toggle_keyword', { id, enabled });
+        refreshKeywords();
+    }
+    catch (e) {
+        showToast('' + e, 'error');
+    }
+};
+window.metricsDeleteKw = async (id) => {
+    try {
+        await invoke('metrics_delete_keyword', { id });
+        showToast('已删除', 'success');
+        refreshKeywords();
+    }
+    catch (e) {
+        showToast('' + e, 'error');
+    }
+};
+async function collectMetricsNow() {
+    const btn = document.getElementById('btnMetricsCollect');
+    const orig = btn ? btn.innerText : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.innerText = '采集中…（约 1 分钟）';
+    }
+    try {
+        const msg = await invoke('metrics_collect_now');
+        showToast(msg || '采集完成', 'success');
+        refreshMetricsOverview();
+        metricsLoadSettings();
+    }
+    catch (e) {
+        showToast('采集失败：' + e, 'error');
+    }
+    finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerText = orig;
+        }
+    }
+}
+// 迷你折线图（SVG）。invert=true 用于排名（数值越小越好 → 画在上方）。
+function sparkline(series, invert) {
+    const vals = series.filter(v => v != null);
+    if (vals.length < 2)
+        return '<span class="text-muted" style="font-size:11px;">数据点不足</span>';
+    const w = 130, h = 30, pad = 3;
+    let min = Math.min(...vals), max = Math.max(...vals);
+    if (min === max) {
+        min -= 1;
+        max += 1;
+    }
+    const n = series.length;
+    const pts = [];
+    series.forEach((v, i) => {
+        if (v == null)
+            return;
+        const x = pad + (i * (w - 2 * pad)) / (n - 1);
+        let ny = (v - min) / (max - min); // 0..1
+        if (invert)
+            ny = 1 - ny; // 排名：小值在上
+        const y = pad + (1 - ny) * (h - 2 * pad);
+        pts.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+    });
+    return `<svg width="${w}" height="${h}" style="vertical-align:middle;">
+    <polyline points="${pts.join(' ')}" fill="none" stroke="#4a8cff" stroke-width="1.6" />
+    ${pts.length ? `<circle cx="${pts[pts.length - 1].split(',')[0]}" cy="${pts[pts.length - 1].split(',')[1]}" r="2.4" fill="#4a8cff" />` : ''}
+  </svg>`;
+}
+function rankText(v) {
+    return v == null ? '<span class="text-muted">未进前30</span>' : `#${v}`;
+}
+function deltaBadge(latest, previous, lowerBetter) {
+    if (latest == null || previous == null)
+        return '';
+    const improved = lowerBetter ? latest < previous : latest > previous;
+    const worse = lowerBetter ? latest > previous : latest < previous;
+    const diff = Math.abs(latest - previous);
+    if (diff === 0)
+        return '<span class="text-muted" style="font-size:11px;">持平</span>';
+    const color = improved ? '#1a9d4a' : (worse ? '#e55' : 'var(--text-muted)');
+    const arrow = improved ? '↑' : '↓';
+    return `<span style="font-size:11px;color:${color};">${arrow}${diff}</span>`;
+}
+async function refreshMetricsOverview() {
+    const box = document.getElementById('metricsOverview');
+    if (!box)
+        return;
+    let rows = [];
+    try {
+        rows = (await invoke('metrics_overview')) || [];
+    }
+    catch (e) {
+        box.innerHTML = `<div class="card" style="padding:14px;"><span class="text-muted">加载失败：${escapeHtml('' + e)}</span></div>`;
+        return;
+    }
+    if (!rows.length) {
+        box.innerHTML = `<div class="card" style="padding:18px;text-align:center;">
+      <div style="font-size:13px;">还没有任何采集数据。</div>
+      <div class="text-muted" style="font-size:12px;margin-top:6px;">点右上角「🔍 立即采集」跑第一轮，建立基线（约 1 分钟）。</div>
+    </div>`;
+        return;
+    }
+    const section = (title, hint, list, lowerBetter, fmt) => {
+        if (!list.length)
+            return '';
+        return `<div class="card" style="margin:0 0 14px;padding:14px;">
+      <h3 style="margin:0 0 4px;font-size:14px;">${title}</h3>
+      <div class="text-muted" style="font-size:11px;margin-bottom:10px;">${hint}</div>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead><tr style="text-align:left;color:var(--text-muted);font-size:11px;">
+          <th style="padding:4px 6px;">关键词</th><th style="padding:4px 6px;">最新</th><th style="padding:4px 6px;">变化</th>
+          <th style="padding:4px 6px;">趋势(近${Math.max(...list.map(r => r.series.length))}次)</th><th style="padding:4px 6px;">采样</th><th style="padding:4px 6px;">更新</th>
+        </tr></thead>
+        <tbody>
+        ${list.map(r => `<tr style="border-top:1px solid var(--border,#eee);">
+          <td style="padding:6px;">${escapeHtml(r.keyword)}</td>
+          <td style="padding:6px;font-weight:600;">${fmt(r.latest)}</td>
+          <td style="padding:6px;">${deltaBadge(r.latest, r.previous, lowerBetter)}</td>
+          <td style="padding:6px;">${sparkline(r.series, lowerBetter)}</td>
+          <td style="padding:6px;" class="text-muted">${r.samples}</td>
+          <td class="text-muted" style="padding:6px;font-size:11px;">${r.captured_at ? escapeHtml(new Date(r.captured_at).toLocaleDateString()) : '—'}</td>
+        </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+    };
+    const brand = rows.filter(r => r.source === 'serp' && r.kind === 'brand');
+    const longtail = rows.filter(r => r.source === 'serp' && r.kind === 'longtail');
+    const mention = rows.filter(r => r.source === 'mention');
+    const trends = rows.filter(r => r.source === 'trends');
+    box.innerHTML =
+        section('🛡 品牌词排名（守，应永远 #1）', '自己的词必须守住。掉出 #1 = 警报。', brand, true, rankText) +
+            section('⚔️ 长尾词排名（攻，越低越好）', '想抢的内容词。从「未进前30」往 #1 爬就是成效。', longtail, true, rankText) +
+            section('📣 品牌提及（领先指标，越多越好）', '第三方独立域名提到你的数量。比 Trends 早几个月反应。', mention, false, (v) => v == null ? '0' : '' + v) +
+            (trends.length ? section('📊 Google Trends（默认关）', '小品牌通常无数据；有数据才会显示数值。', trends, false, (v) => v == null ? '无数据' : '有数据') : '');
+}
+let personasWired = false;
+async function loadPersonasPage() {
+    if (!personasWired) {
+        personasWired = true;
+        document.getElementById('btnPersonaRefresh')?.addEventListener('click', () => { refreshAirport(); refreshPersonas(); });
+        document.getElementById('btnAirportSave')?.addEventListener('click', saveAirport);
+        document.getElementById('btnPersonaCreate')?.addEventListener('click', createPersona);
+    }
+    refreshAirport();
+    refreshPersonas();
+}
+async function refreshAirport() {
+    const el = document.getElementById('airportStatus');
+    if (!el)
+        return;
+    try {
+        const s = await invoke('airport_status');
+        if (!s.configured) {
+            el.innerHTML = '<span style="color:#d97706;">还没配置机场订阅</span> —— 先在下面粘贴你的 Clash 订阅链接，才能给身份分配出口 IP。';
+        }
+        else {
+            const regions = (s.by_region || []).slice(0, 8).map((r) => `${r[0]}×${r[1]}`).join(' · ');
+            el.innerHTML = `✅ 节点池：<b>${s.total}</b> 个（空闲 <b>${s.free}</b> / 占用 ${s.in_use}）· 内核端口 ${s.kernel_port}<br><span style="font-size:11px;">${escapeHtml(regions)}</span>`;
+        }
+    }
+    catch (e) {
+        el.innerHTML = `<span style="color:#e55;">读取失败：${escapeHtml('' + e)}</span>`;
+    }
+}
+async function saveAirport() {
+    const url = document.getElementById('airportUrl')?.value?.trim();
+    if (!url) {
+        showToast('请粘贴机场订阅链接', 'error');
+        return;
+    }
+    const btn = document.getElementById('btnAirportSave');
+    const orig = btn ? btn.innerText : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.innerText = '拉取中…';
+    }
+    try {
+        const msg = await invoke('airport_set_subscription', { url });
+        showToast(msg || '已保存', 'success');
+        document.getElementById('airportUrl').value = '';
+        refreshAirport();
+    }
+    catch (e) {
+        showToast('订阅失败：' + e, 'error');
+    }
+    finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerText = orig;
+        }
+    }
+}
+async function createPersona() {
+    const email = document.getElementById('personaEmail')?.value?.trim();
+    if (!email) {
+        showToast('请输入一个 Gmail', 'error');
+        return;
+    }
+    const btn = document.getElementById('btnPersonaCreate');
+    const orig = btn ? btn.innerText : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.innerText = '创建中…（5-10秒）';
+    }
+    try {
+        await invoke('persona_create', { email });
+        document.getElementById('personaEmail').value = '';
+        showToast('身份已创建（独立浏览器+IP+指纹）', 'success');
+        refreshPersonas();
+        refreshAirport();
+    }
+    catch (e) {
+        showToast('创建失败：' + e, 'error');
+    }
+    finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerText = orig;
+        }
+    }
+}
+async function refreshPersonas() {
+    const box = document.getElementById('personaList');
+    if (!box)
+        return;
+    let rows = [];
+    try {
+        rows = (await invoke('persona_list')) || [];
+    }
+    catch (e) {
+        box.innerHTML = `<div class="card" style="padding:14px;"><span class="text-muted">加载失败：${escapeHtml('' + e)}</span></div>`;
+        return;
+    }
+    if (!rows.length) {
+        box.innerHTML = `<div class="card" style="padding:18px;text-align:center;">
+      <div style="font-size:13px;">还没有身份。</div>
+      <div class="text-muted" style="font-size:12px;margin-top:6px;">上面填个 Gmail 点「创建身份」，就有了第一套独立浏览器+IP。</div>
+    </div>`;
+        return;
+    }
+    box.innerHTML = rows.map(p => `
+    <div class="card" style="margin:0 0 8px;padding:12px 14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <div style="flex:1;min-width:200px;">
+        <div style="font-weight:600;">${escapeHtml(p.email)}</div>
+        <div class="text-muted" style="font-size:12px;margin-top:2px;">
+          ${p.region ? escapeHtml(p.region) : '🌐 节点未分配'}
+          ${p.node_name ? `· <span title="${escapeHtml(p.node_name)}">${escapeHtml(p.node_name.slice(0, 18))}</span>` : ''}
+          ${p.local_port ? `· 端口 ${p.local_port}` : ''}
+          · 账号 ${p.account_count}
+        </div>
+        <div id="ip_${p.id}" class="text-muted" style="font-size:11px;margin-top:3px;"></div>
+      </div>
+      <div class="btn-group" style="gap:6px;">
+        <button class="btn btn-small btn-secondary" onclick="personaTestIp('${p.id}')">测出口IP</button>
+        <button class="btn btn-small btn-secondary" style="color:#e55;" onclick="personaDelete('${p.id}','${escapeHtml(p.email)}')">删除</button>
+      </div>
+    </div>`).join('');
+}
+window.personaTestIp = async (id) => {
+    const el = document.getElementById('ip_' + id);
+    if (el)
+        el.innerHTML = '测试中…（会开一下该身份的浏览器）';
+    try {
+        const r = await invoke('persona_test_ip', { id });
+        if (el)
+            el.innerHTML = '🌍 ' + escapeHtml(r);
+    }
+    catch (e) {
+        if (el)
+            el.innerHTML = `<span style="color:#e55;">测试失败：${escapeHtml('' + e)}</span>`;
+    }
+};
+window.personaDelete = async (id, email) => {
+    if (!confirm(`删除身份 ${email}？\n会同时删掉它的独立浏览器并释放出口节点。`))
+        return;
+    try {
+        await invoke('persona_delete', { id });
+        showToast('已删除', 'success');
+        refreshPersonas();
+        refreshAirport();
+    }
+    catch (e) {
+        showToast('删除失败：' + e, 'error');
+    }
+};
 //# sourceMappingURL=app.js.map

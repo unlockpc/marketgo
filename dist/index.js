@@ -24,8 +24,6 @@ import { analyzeCommand } from './cli/analyze.js';
 import { registerCommand } from './cli/register.js';
 import { gmailCommand } from './cli/gmail.js';
 import { queueCommand } from './cli/queue.js';
-import { taskCommand } from './cli/task.js';
-import { daemonCommand } from './cli/daemon.js';
 import { initializeApp } from './core/init.js';
 const VERSION = '0.1.0';
 const program = new Command();
@@ -79,10 +77,6 @@ program.addCommand(aiCommand);
 program.addCommand(runCommand);
 // Queue management
 program.addCommand(queueCommand);
-// Task engine (new architecture)
-program.addCommand(taskCommand);
-// Scheduler daemon (7x24)
-program.addCommand(daemonCommand);
 // Stats commands
 program.addCommand(statsCommand);
 // Parse and execute
