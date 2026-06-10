@@ -39,7 +39,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": ["resources/mihomo.exe"],
+    "resources": ["resources/mihomo.exe", "resources/mihomo"],
     "windows": {
       "wix": null,
       "nsis": {
