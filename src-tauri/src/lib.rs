@@ -964,6 +964,42 @@ fn platform_meta(platform: &str) -> Option<PlatformMeta> {
     Some(PlatformMeta { scene, region, mode })
 }
 
+#[derive(Serialize)]
+struct PlatformCatalogItem {
+    platform: String,
+    name: String,
+    scene: String,
+    region: String,
+    mode: String,
+    provisioned: bool,
+}
+
+/// 返回某身份的平台开通目录：全部 29 个平台 + 该身份是否已开通(登录态 healthy)。
+/// 供前端「开通账号」选择器分组渲染、决定哪些预选锁定。
+#[tauri::command]
+fn persona_platform_catalog(state: State<AppState>, persona_id: String) -> Result<Vec<PlatformCatalogItem>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let mut out = Vec::with_capacity(PLATFORM_KEYS.len());
+    for &p in PLATFORM_KEYS {
+        let meta = match platform_meta(p) { Some(m) => m, None => continue };
+        let name = get_platform_config(p).map(|c| c.name.to_string()).unwrap_or_else(|| p.to_string());
+        let provisioned: bool = conn.query_row(
+            "SELECT 1 FROM accounts WHERE persona_id=?1 AND platform=?2 AND health_status='healthy' LIMIT 1",
+            params![persona_id, p],
+            |_| Ok(true),
+        ).unwrap_or(false);
+        out.push(PlatformCatalogItem {
+            platform: p.to_string(),
+            name,
+            scene: meta.scene.to_string(),
+            region: meta.region.to_string(),
+            mode: meta.mode.to_string(),
+            provisioned,
+        });
+    }
+    Ok(out)
+}
+
 // Platform reply configs - 回复策略（更自然的推广方式）
 #[derive(Clone)]
 struct ReplyConfig {
@@ -15642,6 +15678,7 @@ pub fn run() {
             persona_open_gmail_login,
             persona_delete,
             persona_test_ip,
+            persona_platform_catalog,
             airport_set_subscription,
             airport_status,
             list_pending_replies,
@@ -15753,6 +15790,17 @@ mod platform_meta_tests {
         let scenes: HashSet<_> = PLATFORM_KEYS.iter().map(|k| platform_meta(k).unwrap().scene).collect();
         for s in ["research", "product", "social", "content", "career", "lifestyle"] {
             assert!(scenes.contains(s), "missing scene {}", s);
+        }
+    }
+
+    #[test]
+    fn catalog_items_cover_all_keys_with_name() {
+        // 不依赖 DB：仅验证 name 解析 + meta 覆盖
+        for k in PLATFORM_KEYS {
+            let m = platform_meta(k).unwrap();
+            let name = get_platform_config(k).map(|c| c.name.to_string());
+            assert!(name.is_some(), "platform {} 在 get_platform_config 里没有配置", k);
+            assert!(!m.scene.is_empty() && !m.region.is_empty() && !m.mode.is_empty());
         }
     }
 }
