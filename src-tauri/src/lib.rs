@@ -908,6 +908,62 @@ struct PlatformConfig {
     google_button_selector: Option<&'static str>,
 }
 
+/// 平台分类元数据：场景(scene) / 地区(region) / 开通模式(mode)。
+/// 单一事实来源；前端「开通账号」选择器据此分组与渲染。
+#[derive(Clone, Copy)]
+struct PlatformMeta {
+    scene: &'static str,   // research|product|social|content|career|lifestyle
+    region: &'static str,  // us|jp|kr|ru|cn|global
+    mode: &'static str,    // auto(🟢 Google自动) | manual(🟡 开登录页手动)
+}
+
+/// 可在「开通账号」里分类展示的全部平台 key（29 个）。
+const PLATFORM_KEYS: &[&str] = &[
+    "github", "devto", "hashnode", "hackernews", "qiita", "zenn", "habr", "v2ex", "segmentfault", "csdn", "oschina",
+    "producthunt", "betalist", "alternativeto", "indiehackers",
+    "twitter", "reddit", "facebook", "telegram", "weibo", "jike", "vk",
+    "medium", "note", "zhihu", "naver_blog",
+    "linkedin",
+    "xiaohongshu", "sspai",
+];
+
+/// 平台 → 场景/地区/开通模式。mode=auto 当且仅当支持 Google 登录且非敌意平台(X/Reddit)。
+fn platform_meta(platform: &str) -> Option<PlatformMeta> {
+    let (scene, region, mode) = match platform {
+        "github" => ("research", "us", "auto"),
+        "devto" => ("research", "us", "auto"),
+        "hashnode" => ("research", "us", "auto"),
+        "hackernews" => ("research", "us", "manual"),
+        "qiita" => ("research", "jp", "auto"),
+        "zenn" => ("research", "jp", "auto"),
+        "habr" => ("research", "ru", "auto"),
+        "v2ex" => ("research", "cn", "auto"),
+        "segmentfault" => ("research", "cn", "auto"),
+        "csdn" => ("research", "cn", "manual"),
+        "oschina" => ("research", "cn", "manual"),
+        "producthunt" => ("product", "us", "auto"),
+        "betalist" => ("product", "us", "auto"),
+        "alternativeto" => ("product", "us", "auto"),
+        "indiehackers" => ("product", "us", "auto"),
+        "twitter" | "x" => ("social", "us", "manual"),
+        "reddit" => ("social", "us", "manual"),
+        "facebook" => ("social", "us", "manual"),
+        "telegram" => ("social", "global", "manual"),
+        "weibo" => ("social", "cn", "manual"),
+        "jike" | "okjike" => ("social", "cn", "manual"),
+        "vk" => ("social", "ru", "manual"),
+        "medium" => ("content", "us", "auto"),
+        "note" | "note_japan" => ("content", "jp", "auto"),
+        "zhihu" => ("content", "cn", "manual"),
+        "naver_blog" => ("content", "kr", "manual"),
+        "linkedin" => ("career", "us", "auto"),
+        "xiaohongshu" | "redbook" => ("lifestyle", "cn", "manual"),
+        "sspai" => ("lifestyle", "cn", "manual"),
+        _ => return None,
+    };
+    Some(PlatformMeta { scene, region, mode })
+}
+
 // Platform reply configs - 回复策略（更自然的推广方式）
 #[derive(Clone)]
 struct ReplyConfig {
@@ -12106,21 +12162,37 @@ fn mihomo_home_dir() -> PathBuf {
 fn mihomo_config_path() -> PathBuf { mihomo_home_dir().join("config.yaml") }
 fn mihomo_sub_path() -> PathBuf { mihomo_home_dir().join("subscription.yaml") }
 
-/// 解析内置 mihomo.exe 路径（资源目录优先，回退到 exe 同级）。
+/// 内置 mihomo 二进制文件名（Windows 用 .exe，其它系统用无扩展名）。
+#[cfg(windows)]
+const MIHOMO_BIN: &str = "mihomo.exe";
+#[cfg(not(windows))]
+const MIHOMO_BIN: &str = "mihomo";
+
+/// 解析内置 mihomo 路径（资源目录优先，回退到 exe 同级）。按系统选对应二进制。
 fn mihomo_exe_path(app: &AppHandle) -> Result<PathBuf, String> {
     if let Ok(dir) = app.path().resource_dir() {
-        for cand in [dir.join("resources").join("mihomo.exe"), dir.join("mihomo.exe")] {
+        for cand in [dir.join("resources").join(MIHOMO_BIN), dir.join(MIHOMO_BIN)] {
             if cand.exists() { return Ok(cand); }
         }
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            for cand in [dir.join("resources").join("mihomo.exe"), dir.join("mihomo.exe")] {
+            for cand in [dir.join("resources").join(MIHOMO_BIN), dir.join(MIHOMO_BIN)] {
                 if cand.exists() { return Ok(cand); }
             }
         }
     }
-    Err("找不到内置 mihomo.exe（请重新安装）".into())
+    Err(format!("找不到内置 {}（请重新安装）", MIHOMO_BIN))
+}
+
+/// 判断是不是机场塞进 proxies 里的"信息展示项"（剩余流量/套餐到期/官网导航等），这些不是真节点。
+fn is_junk_node_name(name: &str, typ: &str) -> bool {
+    // 只接受真实代理协议；info 项有时也写成 vless，所以还要看名字
+    const REAL_TYPES: &[&str] = &["ss","ssr","vmess","vless","trojan","hysteria","hysteria2","hy2","tuic","wireguard","wg","snell","anytls","mieru","socks5","http"];
+    if !REAL_TYPES.contains(&typ.to_ascii_lowercase().as_str()) { return true; }
+    let junk = ["剩余","套餐","到期","流量","重置","距离","导航","官网","网址","订阅","过期","续费","客服",
+        "公告","通知","更新","邮箱","群","频道","telegram","whatsapp","expire","reset","traffic","http://","https://",".com",".net",".org","：",":GB"];
+    junk.iter().any(|k| name.contains(k))
 }
 
 /// 节点名 → 粗略地区标签（用于 UI 展示）。
@@ -12205,6 +12277,18 @@ async fn mihomo_reload() -> Result<(), String> {
 
 fn mihomo_spawn(app: &AppHandle) -> Result<(), String> {
     let exe = mihomo_exe_path(app)?;
+    // Unix：确保二进制可执行（打包/拷贝可能丢失 +x，导致 spawn 报 Permission denied）
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&exe) {
+            let mut perm = meta.permissions();
+            if perm.mode() & 0o111 == 0 {
+                perm.set_mode(perm.mode() | 0o755);
+                let _ = std::fs::set_permissions(&exe, perm);
+            }
+        }
+    }
     if !mihomo_config_path().exists() {
         let cfg = build_mihomo_config(&[]).unwrap_or_default();
         std::fs::write(mihomo_config_path(), cfg).ok();
@@ -12569,17 +12653,27 @@ async fn airport_set_subscription(app: AppHandle, url: String) -> Result<String,
     if proxies.is_empty() { return Err("订阅里节点为空".into()); }
     std::fs::write(mihomo_sub_path(), &text).map_err(|e| e.to_string())?;
 
-    // 入池：upsert 节点名；标记本次不存在的为下线
+    // 入池：只收真实节点，过滤掉机场的信息展示项（剩余流量/套餐到期/官网等）
     let names: Vec<(String,String)> = proxies.iter().filter_map(|p| {
         let n = p.get("name").and_then(|x| x.as_str())?.to_string();
         let t = p.get("type").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        if is_junk_node_name(&n, &t) { return None; }
         Some((n, t))
     }).collect();
+    if names.is_empty() { return Err("订阅里没有可用节点（全是信息展示项？请确认是 Clash 订阅）".into()); }
     let count = names.len();
+    let valid: std::collections::HashSet<String> = names.iter().map(|(n,_)| n.clone()).collect();
+    let mut repaired = 0usize;
     {
         let state = app.state::<AppState>();
         let conn = state.db.lock().map_err(|_| "db".to_string())?;
+
+        // 是否换了订阅：和上次保存的订阅链接对比
+        let prev_url = engine_cfg_get(&conn, "airport_sub_url").unwrap_or_default();
+        let sub_changed = prev_url.trim() != url;
         engine_cfg_set(&conn, "airport_sub_url", &url);
+
+        // 入池：upsert 本次订阅的有效节点
         for (name, typ) in &names {
             let region = node_region(name);
             let _ = conn.execute(
@@ -12587,11 +12681,55 @@ async fn airport_set_subscription(app: AppHandle, url: String) -> Result<String,
                  ON CONFLICT(name) DO UPDATE SET region=?2, type=?3, last_seen=datetime('now')",
                 params![name, region, typ]);
         }
+
+        // 决定要重配的身份：
+        //   换了订阅 → 全部身份重配一遍（旧节点名多半已失效）
+        //   同一家订阅 → 只兜底处理节点恰好消失的身份（正常情况下为空，不动配对）
+        let personas: Vec<(String, String)> = {
+            let mut s = conn.prepare("SELECT id, node_name FROM personas WHERE node_name IS NOT NULL AND node_name<>''").map_err(|e| e.to_string())?;
+            let rows: Vec<(String,String)> = s.query_map([], |r| Ok((r.get::<_,String>(0)?, r.get::<_,String>(1)?))).map_err(|e| e.to_string())?
+                .flatten().collect();
+            rows
+        };
+        let targets: Vec<(String, String)> = personas.into_iter()
+            .filter(|(_, n)| sub_changed || !valid.contains(n))
+            .collect();
+
+        for (pid, old_node) in &targets {
+            // 同地区优先：尽量让身份的出口地区保持不变（美国身份仍派美国节点）
+            let want_region = node_region(old_node);
+            let pick = conn.query_row(
+                "SELECT name FROM nodes WHERE in_use=0 AND region=?1 ORDER BY name LIMIT 1",
+                params![want_region], |r| r.get::<_,String>(0))
+                .or_else(|_| conn.query_row(
+                    "SELECT name FROM nodes WHERE in_use=0 ORDER BY name LIMIT 1", [], |r| r.get::<_,String>(0)));
+            if let Ok(new_node) = pick {
+                if new_node == *old_node { continue; } // 同一节点仍有效，无需替换
+                let _ = conn.execute("UPDATE nodes SET in_use=1 WHERE name=?1", params![new_node]);
+                let _ = conn.execute("UPDATE personas SET node_name=?1 WHERE id=?2", params![new_node, pid]);
+                // 释放旧节点占用；若已不在新订阅里则一并清掉（幽灵节点）
+                if valid.contains(old_node) {
+                    let _ = conn.execute("UPDATE nodes SET in_use=0 WHERE name=?1", params![old_node]);
+                } else {
+                    let _ = conn.execute("DELETE FROM nodes WHERE name=?1", params![old_node]);
+                }
+                repaired += 1;
+            }
+        }
+
+        // 清理：删掉本次订阅里已不存在、且没被身份占用的旧节点
+        if let Ok(mut stmt) = conn.prepare("SELECT name FROM nodes WHERE in_use=0") {
+            let stale: Vec<String> = stmt.query_map([], |r| r.get::<_,String>(0)).ok()
+                .map(|it| it.flatten().filter(|n| !valid.contains(n)).collect()).unwrap_or_default();
+            for n in stale { let _ = conn.execute("DELETE FROM nodes WHERE name=?1", params![n]); }
+        }
+
         regenerate_mihomo_config(&conn)?;
     }
     mihomo_ensure_running(&app).await?;
     mihomo_reload().await?;
-    Ok(format!("订阅已更新：{} 个节点入池，内核已就绪", count))
+    let tail = if repaired > 0 { format!("，已为 {} 个身份重新配对节点", repaired) } else { String::new() };
+    Ok(format!("订阅已更新：{} 个有效节点入池，内核已就绪{}", count, tail))
 }
 
 #[derive(Serialize)]
@@ -15571,4 +15709,50 @@ pub fn run() {
                 mihomo_stop(); // 退出时关掉自带 mihomo 内核，避免残留进程
             }
         });
+}
+
+#[cfg(test)]
+mod platform_meta_tests {
+    use super::*;
+
+    #[test]
+    fn all_29_keys_have_meta() {
+        assert_eq!(PLATFORM_KEYS.len(), 29);
+        for k in PLATFORM_KEYS {
+            assert!(platform_meta(k).is_some(), "missing meta for {}", k);
+        }
+    }
+
+    #[test]
+    fn mode_counts_15_auto_14_manual() {
+        let auto = PLATFORM_KEYS.iter().filter(|k| platform_meta(k).unwrap().mode == "auto").count();
+        let manual = PLATFORM_KEYS.iter().filter(|k| platform_meta(k).unwrap().mode == "manual").count();
+        assert_eq!(auto, 15, "auto count");
+        assert_eq!(manual, 14, "manual count");
+    }
+
+    #[test]
+    fn spot_checks() {
+        let g = platform_meta("github").unwrap();
+        assert_eq!((g.scene, g.region, g.mode), ("research", "us", "auto"));
+        let x = platform_meta("xiaohongshu").unwrap();
+        assert_eq!((x.scene, x.region, x.mode), ("lifestyle", "cn", "manual"));
+        // 敌意平台：虽支持 google_oauth 但仍为 manual
+        assert_eq!(platform_meta("twitter").unwrap().mode, "manual");
+        assert_eq!(platform_meta("reddit").unwrap().mode, "manual");
+        // 别名解析
+        assert!(platform_meta("redbook").is_some());
+        assert!(platform_meta("okjike").is_some());
+        // 未知平台
+        assert!(platform_meta("unknown_xyz").is_none());
+    }
+
+    #[test]
+    fn all_six_scenes_present() {
+        use std::collections::HashSet;
+        let scenes: HashSet<_> = PLATFORM_KEYS.iter().map(|k| platform_meta(k).unwrap().scene).collect();
+        for s in ["research", "product", "social", "content", "career", "lifestyle"] {
+            assert!(scenes.contains(s), "missing scene {}", s);
+        }
+    }
 }
