@@ -969,6 +969,139 @@ function closeModal(id: string) { document.getElementById(id)?.classList.remove(
 (window as any).openModal = openModal;
 (window as any).closeModal = closeModal;
 
+// 自建输入弹窗：替代 Tauri webview 里被禁用的原生 prompt()（原生 prompt 直接返回 null，点了像没反应）
+function uiPrompt(opts: { title: string; label?: string; placeholder?: string; value?: string; okText?: string }): Promise<string | null> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal active';
+    overlay.innerHTML = `
+      <div class="modal-content" style="max-width:480px;">
+        <div class="modal-header"><h3>${escapeHtml(opts.title)}</h3><button class="modal-close" data-cancel>&times;</button></div>
+        <div class="modal-body">
+          ${opts.label ? `<label style="display:block;margin-bottom:6px;">${escapeHtml(opts.label)}</label>` : ''}
+          <input type="text" class="input" id="__uiPromptInput" placeholder="${escapeHtml(opts.placeholder || '')}" value="${escapeHtml(opts.value || '')}" style="width:100%;">
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" data-cancel>取消</button>
+          <button class="btn btn-primary" data-ok>${escapeHtml(opts.okText || '确定')}</button>
+        </div>
+      </div>`;
+    const input = () => overlay.querySelector('#__uiPromptInput') as HTMLInputElement;
+    let done = false;
+    const finish = (val: string | null) => {
+      if (done) return; done = true;
+      overlay.remove();
+      resolve(val);
+    };
+    overlay.querySelectorAll('[data-cancel]').forEach(el => el.addEventListener('click', () => finish(null)));
+    overlay.querySelector('[data-ok]')?.addEventListener('click', () => finish(input().value.trim()));
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(null); });
+    overlay.addEventListener('keydown', (e) => {
+      if ((e as KeyboardEvent).key === 'Enter') finish(input().value.trim());
+      else if ((e as KeyboardEvent).key === 'Escape') finish(null);
+    });
+    document.body.appendChild(overlay);
+    setTimeout(() => input()?.focus(), 30);
+  });
+}
+(window as any).uiPrompt = uiPrompt;
+
+// 自建确认弹窗：替代 Tauri webview 里被禁用的原生 confirm()（原生 confirm 直接返回 false，点了像没反应）
+function uiConfirm(message: string, opts?: { title?: string; okText?: string; cancelText?: string; danger?: boolean }): Promise<boolean> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal active';
+    const bodyHtml = escapeHtml(message).replace(/\n/g, '<br>');
+    overlay.innerHTML = `
+      <div class="modal-content" style="max-width:440px;">
+        <div class="modal-header"><h3>${escapeHtml(opts?.title || '确认')}</h3><button class="modal-close" data-cancel>&times;</button></div>
+        <div class="modal-body"><div style="font-size:14px;line-height:1.6;">${bodyHtml}</div></div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" data-cancel>${escapeHtml(opts?.cancelText || '取消')}</button>
+          <button class="btn ${opts?.danger ? 'btn-danger' : 'btn-primary'}" data-ok>${escapeHtml(opts?.okText || '确定')}</button>
+        </div>
+      </div>`;
+    let done = false;
+    const finish = (val: boolean) => { if (done) return; done = true; overlay.remove(); resolve(val); };
+    overlay.querySelectorAll('[data-cancel]').forEach(el => el.addEventListener('click', () => finish(false)));
+    overlay.querySelector('[data-ok]')?.addEventListener('click', () => finish(true));
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(false); });
+    overlay.addEventListener('keydown', (e) => {
+      if ((e as KeyboardEvent).key === 'Enter') finish(true);
+      else if ((e as KeyboardEvent).key === 'Escape') finish(false);
+    });
+    document.body.appendChild(overlay);
+    setTimeout(() => (overlay.querySelector('[data-ok]') as HTMLElement)?.focus(), 30);
+  });
+}
+(window as any).uiConfirm = uiConfirm;
+
+// ===== 开通账号：平台选择器（场景分组 + 地区标签 + 模式徽章） =====
+const SCENE_LABELS: Record<string, string> = {
+  research: '💻 研发/技术', product: '🚀 产品/创业', social: '🌐 通用/大众社交',
+  content: '📝 知识/内容', career: '💼 职场/商务', lifestyle: '🛍️ 生活/种草',
+};
+const SCENE_ORDER = ['research', 'product', 'social', 'content', 'career', 'lifestyle'];
+const REGION_FLAGS: Record<string, string> = { us: '🇺🇸', jp: '🇯🇵', kr: '🇰🇷', ru: '🇷🇺', cn: '🇨🇳', global: '🌐' };
+
+interface CatalogItem { platform: string; name: string; scene: string; region: string; mode: string; provisioned: boolean; }
+
+// 弹出分组复选框，返回用户【新勾选】的平台 key（已开通的锁定不计入）；取消返回 null
+function pickProvisionPlatforms(email: string, catalog: CatalogItem[]): Promise<string[] | null> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal active';
+    const groups = SCENE_ORDER.map(s => ({ s, items: catalog.filter(c => c.scene === s) })).filter(g => g.items.length);
+    const groupHtml = groups.map(g => `
+      <div style="margin:12px 0 6px;font-weight:700;">${SCENE_LABELS[g.s] || g.s}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;">
+        ${g.items.map(c => {
+          const flag = REGION_FLAGS[c.region] || '🌐';
+          const badge = c.provisioned
+            ? '<span style="color:#16a34a;">已开通·锁定</span>'
+            : (c.mode === 'auto' ? '<span style="color:#16a34a;">🟢自动</span>' : '<span style="color:#d97706;">🟡需手动</span>');
+          return `<label style="display:flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:8px;padding:6px 10px;${c.provisioned ? 'opacity:.6;' : 'cursor:pointer;'}">
+            <input type="checkbox" data-plat="${escapeHtml(c.platform)}" ${c.provisioned ? 'checked disabled' : ''}>
+            <span>${escapeHtml(c.name)} ${flag} ${badge}</span>
+          </label>`;
+        }).join('')}
+      </div>`).join('');
+
+    overlay.innerHTML = `
+      <div class="modal-content" style="max-width:700px;max-height:82vh;display:flex;flex-direction:column;">
+        <div class="modal-header"><h3>用 ${escapeHtml(email)} 开通平台</h3><button class="modal-close" data-cancel>&times;</button></div>
+        <div class="modal-body" style="overflow:auto;">${groupHtml}</div>
+        <div class="modal-footer" style="display:flex;align-items:center;gap:8px;">
+          <button class="btn btn-secondary btn-small" data-selauto>全选可开通的</button>
+          <span style="flex:1;"></span>
+          <button class="btn btn-secondary" data-cancel>取消</button>
+          <button class="btn btn-primary" data-ok>开始开通 (0)</button>
+        </div>
+      </div>`;
+
+    const boxes = (): HTMLInputElement[] => Array.from(overlay.querySelectorAll('input[type=checkbox]'));
+    const picked = (): string[] => boxes().filter(b => b.checked && !b.disabled).map(b => b.getAttribute('data-plat') as string);
+    const okBtn = overlay.querySelector('[data-ok]') as HTMLElement;
+    const refresh = () => { okBtn.textContent = `开始开通 (${picked().length})`; };
+
+    let done = false;
+    const finish = (val: string[] | null) => { if (done) return; done = true; overlay.remove(); resolve(val); };
+    overlay.querySelectorAll('[data-cancel]').forEach(el => el.addEventListener('click', () => finish(null)));
+    okBtn.addEventListener('click', () => finish(picked()));
+    overlay.querySelector('[data-selauto]')?.addEventListener('click', () => {
+      catalog.filter(c => c.mode === 'auto' && !c.provisioned).forEach(c => {
+        const b = overlay.querySelector(`input[data-plat="${c.platform}"]`) as HTMLInputElement | null;
+        if (b && !b.disabled) b.checked = true;
+      });
+      refresh();
+    });
+    overlay.addEventListener('change', refresh);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(null); });
+    document.body.appendChild(overlay);
+  });
+}
+(window as any).pickProvisionPlatforms = pickProvisionPlatforms;
+
 // Tabs
 function initTabs() {
   document.querySelectorAll('.tabs').forEach(tabGroup => {
@@ -1482,7 +1615,7 @@ async function pauseCampaign(id: string) {
 (window as any).pauseCampaign = pauseCampaign;
 
 async function deleteCampaign(id: string) {
-  if (!confirm('Are you sure you want to delete this campaign?')) return;
+  if (!(await uiConfirm('Are you sure you want to delete this campaign?'))) return;
 
   try {
     await invoke('delete_campaign', { id });
@@ -1675,7 +1808,7 @@ async function analyzeUrl() {
 }
 
 (window as any).deleteProduct = async function(id: string) {
-  if (!confirm('Delete this product?')) return;
+  if (!(await uiConfirm('Delete this product?'))) return;
   try {
     await invoke('delete_product', { id });
     await loadProducts();
@@ -1880,7 +2013,12 @@ function renderAccounts() {
 
 // 设置/刷新机场订阅（出口 IP 池）
 (window as any).setAirportPrompt = async function() {
-  const url = (prompt('粘贴你的机场订阅链接（Clash 订阅）：') || '').trim();
+  const url = ((await uiPrompt({
+    title: '设置机场订阅',
+    label: '粘贴你的机场订阅链接（必须是 Clash 订阅，不支持单条 ss/vmess）',
+    placeholder: 'https://your-airport.com/api/v1/client/subscribe?token=...',
+    okText: '拉取节点',
+  })) || '').trim();
   if (!url) return;
   showToast('正在拉取节点…', 'info');
   try {
@@ -1892,7 +2030,12 @@ function renderAccounts() {
 
 // 在邮箱账号页直接新建一个 Gmail 身份（自动建 profile+指纹+分配节点）
 (window as any).createPersonaPrompt = async function() {
-  const email = (prompt('输入一个真实 Gmail（这个邮箱会成为一套独立身份：独立浏览器+IP+指纹）：') || '').trim();
+  const email = ((await uiPrompt({
+    title: '新建 Gmail 身份',
+    label: '输入一个真实 Gmail（这个邮箱会成为一套独立身份：独立浏览器+IP+指纹）',
+    placeholder: 'yourname@gmail.com',
+    okText: '创建',
+  })) || '').trim();
   if (!email) return;
   if (!email.includes('@')) { showToast('请输入有效的 Gmail 地址', 'error'); return; }
   showToast('正在创建身份…（建浏览器+随机指纹+分配出口节点，约 5-10 秒）', 'info');
@@ -1906,10 +2049,16 @@ function renderAccounts() {
 
 // 以邮箱为单位：逐平台「有就登录、没有就注册」，账号自动开通到这个邮箱名下
 (window as any).personaProvisionAll = async function(id: string, email: string) {
-  if (!confirm(`用 ${email} 检查并开通各平台账号？\n会逐个平台：有就登录、没有就注册（友好平台全自动；X/Reddit 会打开登录页让你点一下）。\n前提：这个邮箱的 Gmail 已在它的浏览器里登录。`)) return;
-  showToast(`正在用 ${email} 开通各平台账号…（逐个平台跑，可能要几分钟，请耐心等）`, 'info');
+  let catalog: CatalogItem[];
   try {
-    const msg = await invoke<string>('persona_provision_all', { personaId: id });
+    catalog = await invoke<CatalogItem[]>('persona_platform_catalog', { personaId: id });
+  } catch (e) { showToast('加载平台列表失败：' + e, 'error'); return; }
+  const platforms = await pickProvisionPlatforms(email, catalog);
+  if (!platforms) return;                       // 取消
+  if (!platforms.length) { showToast('没有新选择的平台', 'info'); return; }
+  showToast(`正在用 ${email} 开通 ${platforms.length} 个平台…（逐个跑，请耐心等）`, 'info');
+  try {
+    const msg = await invoke<string>('persona_provision_all', { personaId: id, platforms });
     showToast('' + msg, 'success');
     await loadAccounts();
   } catch (e) { showToast('' + e, 'error'); }
@@ -1925,7 +2074,7 @@ function renderAccounts() {
 
 // 删除一个 Gmail 身份（连带其独立浏览器，释放节点）
 (window as any).deletePersonaAcct = async function(id: string, email: string) {
-  if (!confirm(`删除身份 ${email}？\n会删掉它的独立浏览器并释放出口节点；名下账号会变成「未归属」。`)) return;
+  if (!(await uiConfirm(`删除身份 ${email}？\n会删掉它的独立浏览器并释放出口节点；名下账号会变成「未归属」。`))) return;
   try {
     await invoke('persona_delete', { id });
     showToast('身份已删除', 'success');
@@ -2056,7 +2205,7 @@ function renderAccountCard(account: any): string {
 
 // 一键登录某身份下的所有账号
 (window as any).personaLoginAll = async function(personaId: string) {
-  if (!confirm('自动登录这个身份下的所有账号？\n会逐个尝试：查登录→Google登录→否则注册。遇到需手机/验证码的会停下提示你。')) return;
+  if (!(await uiConfirm('自动登录这个身份下的所有账号？\n会逐个尝试：查登录→Google登录→否则注册。遇到需手机/验证码的会停下提示你。'))) return;
   showToast('开始批量自动登录…（每个账号几十秒，请耐心等）', 'info');
   try {
     const msg = await invoke<string>('persona_login_all', { personaId });
@@ -2289,7 +2438,7 @@ async function saveAccount() {
 }
 
 (window as any).deleteAccount = async function(id: string) {
-  if (!confirm('Delete this account?')) return;
+  if (!(await uiConfirm('Delete this account?'))) return;
   try {
     await invoke('delete_account', { id });
     await loadAccounts();
@@ -2899,7 +3048,7 @@ function renderScheduledJobs() {
 };
 
 (window as any).deleteScheduledJob = async function(jobId: string) {
-  if (!confirm('Delete this scheduled job?')) return;
+  if (!(await uiConfirm('Delete this scheduled job?'))) return;
   try {
     await invoke('unzoo_delete_scheduled_job', { jobId });
     showToast('Job deleted', 'success');
@@ -3819,7 +3968,7 @@ async function saveKeyword() {
 }
 
 (window as any).deleteKeyword = async function(id: string) {
-  if (!confirm('Delete this keyword?')) return;
+  if (!(await uiConfirm('Delete this keyword?'))) return;
   try {
     await invoke('delete_keyword', { id });
     await loadKeywords();
@@ -4583,7 +4732,7 @@ async function testProxy(id: string) {
 (window as any).testProxy = testProxy;
 
 async function deleteProxy(id: string) {
-  if (!confirm('Delete this proxy?')) return;
+  if (!(await uiConfirm('Delete this proxy?'))) return;
 
   try {
     await invoke('delete_proxy', { id });
@@ -7279,7 +7428,7 @@ async function refreshPersonas() {
   }
 };
 (window as any).personaDelete = async (id: string, email: string) => {
-  if (!confirm(`删除身份 ${email}？\n会同时删掉它的独立浏览器并释放出口节点。`)) return;
+  if (!(await uiConfirm(`删除身份 ${email}？\n会同时删掉它的独立浏览器并释放出口节点。`))) return;
   try {
     await invoke('persona_delete', { id });
     showToast('已删除', 'success');

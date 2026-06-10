@@ -933,6 +933,147 @@
   }
   window.openModal = openModal;
   window.closeModal = closeModal;
+  function uiPrompt(opts) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.className = "modal active";
+      overlay.innerHTML = `
+      <div class="modal-content" style="max-width:480px;">
+        <div class="modal-header"><h3>${escapeHtml(opts.title)}</h3><button class="modal-close" data-cancel>&times;</button></div>
+        <div class="modal-body">
+          ${opts.label ? `<label style="display:block;margin-bottom:6px;">${escapeHtml(opts.label)}</label>` : ""}
+          <input type="text" class="input" id="__uiPromptInput" placeholder="${escapeHtml(opts.placeholder || "")}" value="${escapeHtml(opts.value || "")}" style="width:100%;">
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" data-cancel>\u53D6\u6D88</button>
+          <button class="btn btn-primary" data-ok>${escapeHtml(opts.okText || "\u786E\u5B9A")}</button>
+        </div>
+      </div>`;
+      const input = () => overlay.querySelector("#__uiPromptInput");
+      let done = false;
+      const finish = (val) => {
+        if (done) return;
+        done = true;
+        overlay.remove();
+        resolve(val);
+      };
+      overlay.querySelectorAll("[data-cancel]").forEach((el) => el.addEventListener("click", () => finish(null)));
+      overlay.querySelector("[data-ok]")?.addEventListener("click", () => finish(input().value.trim()));
+      overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) finish(null);
+      });
+      overlay.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") finish(input().value.trim());
+        else if (e.key === "Escape") finish(null);
+      });
+      document.body.appendChild(overlay);
+      setTimeout(() => input()?.focus(), 30);
+    });
+  }
+  window.uiPrompt = uiPrompt;
+  function uiConfirm(message, opts) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.className = "modal active";
+      const bodyHtml = escapeHtml(message).replace(/\n/g, "<br>");
+      overlay.innerHTML = `
+      <div class="modal-content" style="max-width:440px;">
+        <div class="modal-header"><h3>${escapeHtml(opts?.title || "\u786E\u8BA4")}</h3><button class="modal-close" data-cancel>&times;</button></div>
+        <div class="modal-body"><div style="font-size:14px;line-height:1.6;">${bodyHtml}</div></div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" data-cancel>${escapeHtml(opts?.cancelText || "\u53D6\u6D88")}</button>
+          <button class="btn ${opts?.danger ? "btn-danger" : "btn-primary"}" data-ok>${escapeHtml(opts?.okText || "\u786E\u5B9A")}</button>
+        </div>
+      </div>`;
+      let done = false;
+      const finish = (val) => {
+        if (done) return;
+        done = true;
+        overlay.remove();
+        resolve(val);
+      };
+      overlay.querySelectorAll("[data-cancel]").forEach((el) => el.addEventListener("click", () => finish(false)));
+      overlay.querySelector("[data-ok]")?.addEventListener("click", () => finish(true));
+      overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) finish(false);
+      });
+      overlay.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") finish(true);
+        else if (e.key === "Escape") finish(false);
+      });
+      document.body.appendChild(overlay);
+      setTimeout(() => overlay.querySelector("[data-ok]")?.focus(), 30);
+    });
+  }
+  window.uiConfirm = uiConfirm;
+  var SCENE_LABELS = {
+    research: "\u{1F4BB} \u7814\u53D1/\u6280\u672F",
+    product: "\u{1F680} \u4EA7\u54C1/\u521B\u4E1A",
+    social: "\u{1F310} \u901A\u7528/\u5927\u4F17\u793E\u4EA4",
+    content: "\u{1F4DD} \u77E5\u8BC6/\u5185\u5BB9",
+    career: "\u{1F4BC} \u804C\u573A/\u5546\u52A1",
+    lifestyle: "\u{1F6CD}\uFE0F \u751F\u6D3B/\u79CD\u8349"
+  };
+  var SCENE_ORDER = ["research", "product", "social", "content", "career", "lifestyle"];
+  var REGION_FLAGS = { us: "\u{1F1FA}\u{1F1F8}", jp: "\u{1F1EF}\u{1F1F5}", kr: "\u{1F1F0}\u{1F1F7}", ru: "\u{1F1F7}\u{1F1FA}", cn: "\u{1F1E8}\u{1F1F3}", global: "\u{1F310}" };
+  function pickProvisionPlatforms(email, catalog) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.className = "modal active";
+      const groups = SCENE_ORDER.map((s) => ({ s, items: catalog.filter((c) => c.scene === s) })).filter((g) => g.items.length);
+      const groupHtml = groups.map((g) => `
+      <div style="margin:12px 0 6px;font-weight:700;">${SCENE_LABELS[g.s] || g.s}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;">
+        ${g.items.map((c) => {
+        const flag = REGION_FLAGS[c.region] || "\u{1F310}";
+        const badge = c.provisioned ? '<span style="color:#16a34a;">\u5DF2\u5F00\u901A\xB7\u9501\u5B9A</span>' : c.mode === "auto" ? '<span style="color:#16a34a;">\u{1F7E2}\u81EA\u52A8</span>' : '<span style="color:#d97706;">\u{1F7E1}\u9700\u624B\u52A8</span>';
+        return `<label style="display:flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:8px;padding:6px 10px;${c.provisioned ? "opacity:.6;" : "cursor:pointer;"}">
+            <input type="checkbox" data-plat="${escapeHtml(c.platform)}" ${c.provisioned ? "checked disabled" : ""}>
+            <span>${escapeHtml(c.name)} ${flag} ${badge}</span>
+          </label>`;
+      }).join("")}
+      </div>`).join("");
+      overlay.innerHTML = `
+      <div class="modal-content" style="max-width:700px;max-height:82vh;display:flex;flex-direction:column;">
+        <div class="modal-header"><h3>\u7528 ${escapeHtml(email)} \u5F00\u901A\u5E73\u53F0</h3><button class="modal-close" data-cancel>&times;</button></div>
+        <div class="modal-body" style="overflow:auto;">${groupHtml}</div>
+        <div class="modal-footer" style="display:flex;align-items:center;gap:8px;">
+          <button class="btn btn-secondary btn-small" data-selauto>\u5168\u9009\u53EF\u5F00\u901A\u7684</button>
+          <span style="flex:1;"></span>
+          <button class="btn btn-secondary" data-cancel>\u53D6\u6D88</button>
+          <button class="btn btn-primary" data-ok>\u5F00\u59CB\u5F00\u901A (0)</button>
+        </div>
+      </div>`;
+      const boxes = () => Array.from(overlay.querySelectorAll("input[type=checkbox]"));
+      const picked = () => boxes().filter((b) => b.checked && !b.disabled).map((b) => b.getAttribute("data-plat"));
+      const okBtn = overlay.querySelector("[data-ok]");
+      const refresh = () => {
+        okBtn.textContent = `\u5F00\u59CB\u5F00\u901A (${picked().length})`;
+      };
+      let done = false;
+      const finish = (val) => {
+        if (done) return;
+        done = true;
+        overlay.remove();
+        resolve(val);
+      };
+      overlay.querySelectorAll("[data-cancel]").forEach((el) => el.addEventListener("click", () => finish(null)));
+      okBtn.addEventListener("click", () => finish(picked()));
+      overlay.querySelector("[data-selauto]")?.addEventListener("click", () => {
+        catalog.filter((c) => c.mode === "auto" && !c.provisioned).forEach((c) => {
+          const b = overlay.querySelector(`input[data-plat="${c.platform}"]`);
+          if (b && !b.disabled) b.checked = true;
+        });
+        refresh();
+      });
+      overlay.addEventListener("change", refresh);
+      overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) finish(null);
+      });
+      document.body.appendChild(overlay);
+    });
+  }
+  window.pickProvisionPlatforms = pickProvisionPlatforms;
   function initTabs() {
     document.querySelectorAll(".tabs").forEach((tabGroup) => {
       tabGroup.querySelectorAll(".tab").forEach((tab) => {
@@ -1324,7 +1465,7 @@
   }
   window.pauseCampaign = pauseCampaign;
   async function deleteCampaign(id) {
-    if (!confirm("Are you sure you want to delete this campaign?")) return;
+    if (!await uiConfirm("Are you sure you want to delete this campaign?")) return;
     try {
       await invoke2("delete_campaign", { id });
       showToast("Campaign deleted", "success");
@@ -1482,7 +1623,7 @@
     }
   }
   window.deleteProduct = async function(id) {
-    if (!confirm("Delete this product?")) return;
+    if (!await uiConfirm("Delete this product?")) return;
     try {
       await invoke2("delete_product", { id });
       await loadProducts();
@@ -1658,7 +1799,12 @@
     renderAccounts();
   };
   window.setAirportPrompt = async function() {
-    const url = (prompt("\u7C98\u8D34\u4F60\u7684\u673A\u573A\u8BA2\u9605\u94FE\u63A5\uFF08Clash \u8BA2\u9605\uFF09\uFF1A") || "").trim();
+    const url = (await uiPrompt({
+      title: "\u8BBE\u7F6E\u673A\u573A\u8BA2\u9605",
+      label: "\u7C98\u8D34\u4F60\u7684\u673A\u573A\u8BA2\u9605\u94FE\u63A5\uFF08\u5FC5\u987B\u662F Clash \u8BA2\u9605\uFF0C\u4E0D\u652F\u6301\u5355\u6761 ss/vmess\uFF09",
+      placeholder: "https://your-airport.com/api/v1/client/subscribe?token=...",
+      okText: "\u62C9\u53D6\u8282\u70B9"
+    }) || "").trim();
     if (!url) return;
     showToast("\u6B63\u5728\u62C9\u53D6\u8282\u70B9\u2026", "info");
     try {
@@ -1670,7 +1816,12 @@
     }
   };
   window.createPersonaPrompt = async function() {
-    const email = (prompt("\u8F93\u5165\u4E00\u4E2A\u771F\u5B9E Gmail\uFF08\u8FD9\u4E2A\u90AE\u7BB1\u4F1A\u6210\u4E3A\u4E00\u5957\u72EC\u7ACB\u8EAB\u4EFD\uFF1A\u72EC\u7ACB\u6D4F\u89C8\u5668+IP+\u6307\u7EB9\uFF09\uFF1A") || "").trim();
+    const email = (await uiPrompt({
+      title: "\u65B0\u5EFA Gmail \u8EAB\u4EFD",
+      label: "\u8F93\u5165\u4E00\u4E2A\u771F\u5B9E Gmail\uFF08\u8FD9\u4E2A\u90AE\u7BB1\u4F1A\u6210\u4E3A\u4E00\u5957\u72EC\u7ACB\u8EAB\u4EFD\uFF1A\u72EC\u7ACB\u6D4F\u89C8\u5668+IP+\u6307\u7EB9\uFF09",
+      placeholder: "yourname@gmail.com",
+      okText: "\u521B\u5EFA"
+    }) || "").trim();
     if (!email) return;
     if (!email.includes("@")) {
       showToast("\u8BF7\u8F93\u5165\u6709\u6548\u7684 Gmail \u5730\u5740", "error");
@@ -1687,12 +1838,22 @@
     }
   };
   window.personaProvisionAll = async function(id, email) {
-    if (!confirm(`\u7528 ${email} \u68C0\u67E5\u5E76\u5F00\u901A\u5404\u5E73\u53F0\u8D26\u53F7\uFF1F
-\u4F1A\u9010\u4E2A\u5E73\u53F0\uFF1A\u6709\u5C31\u767B\u5F55\u3001\u6CA1\u6709\u5C31\u6CE8\u518C\uFF08\u53CB\u597D\u5E73\u53F0\u5168\u81EA\u52A8\uFF1BX/Reddit \u4F1A\u6253\u5F00\u767B\u5F55\u9875\u8BA9\u4F60\u70B9\u4E00\u4E0B\uFF09\u3002
-\u524D\u63D0\uFF1A\u8FD9\u4E2A\u90AE\u7BB1\u7684 Gmail \u5DF2\u5728\u5B83\u7684\u6D4F\u89C8\u5668\u91CC\u767B\u5F55\u3002`)) return;
-    showToast(`\u6B63\u5728\u7528 ${email} \u5F00\u901A\u5404\u5E73\u53F0\u8D26\u53F7\u2026\uFF08\u9010\u4E2A\u5E73\u53F0\u8DD1\uFF0C\u53EF\u80FD\u8981\u51E0\u5206\u949F\uFF0C\u8BF7\u8010\u5FC3\u7B49\uFF09`, "info");
+    let catalog;
     try {
-      const msg = await invoke2("persona_provision_all", { personaId: id });
+      catalog = await invoke2("persona_platform_catalog", { personaId: id });
+    } catch (e) {
+      showToast("\u52A0\u8F7D\u5E73\u53F0\u5217\u8868\u5931\u8D25\uFF1A" + e, "error");
+      return;
+    }
+    const platforms = await pickProvisionPlatforms(email, catalog);
+    if (!platforms) return;
+    if (!platforms.length) {
+      showToast("\u6CA1\u6709\u65B0\u9009\u62E9\u7684\u5E73\u53F0", "info");
+      return;
+    }
+    showToast(`\u6B63\u5728\u7528 ${email} \u5F00\u901A ${platforms.length} \u4E2A\u5E73\u53F0\u2026\uFF08\u9010\u4E2A\u8DD1\uFF0C\u8BF7\u8010\u5FC3\u7B49\uFF09`, "info");
+    try {
+      const msg = await invoke2("persona_provision_all", { personaId: id, platforms });
       showToast("" + msg, "success");
       await loadAccounts();
     } catch (e) {
@@ -1708,7 +1869,7 @@
     }
   };
   window.deletePersonaAcct = async function(id, email) {
-    if (!confirm(`\u5220\u9664\u8EAB\u4EFD ${email}\uFF1F
+    if (!await uiConfirm(`\u5220\u9664\u8EAB\u4EFD ${email}\uFF1F
 \u4F1A\u5220\u6389\u5B83\u7684\u72EC\u7ACB\u6D4F\u89C8\u5668\u5E76\u91CA\u653E\u51FA\u53E3\u8282\u70B9\uFF1B\u540D\u4E0B\u8D26\u53F7\u4F1A\u53D8\u6210\u300C\u672A\u5F52\u5C5E\u300D\u3002`)) return;
     try {
       await invoke2("persona_delete", { id });
@@ -1816,7 +1977,7 @@
     }
   };
   window.personaLoginAll = async function(personaId) {
-    if (!confirm("\u81EA\u52A8\u767B\u5F55\u8FD9\u4E2A\u8EAB\u4EFD\u4E0B\u7684\u6240\u6709\u8D26\u53F7\uFF1F\n\u4F1A\u9010\u4E2A\u5C1D\u8BD5\uFF1A\u67E5\u767B\u5F55\u2192Google\u767B\u5F55\u2192\u5426\u5219\u6CE8\u518C\u3002\u9047\u5230\u9700\u624B\u673A/\u9A8C\u8BC1\u7801\u7684\u4F1A\u505C\u4E0B\u63D0\u793A\u4F60\u3002")) return;
+    if (!await uiConfirm("\u81EA\u52A8\u767B\u5F55\u8FD9\u4E2A\u8EAB\u4EFD\u4E0B\u7684\u6240\u6709\u8D26\u53F7\uFF1F\n\u4F1A\u9010\u4E2A\u5C1D\u8BD5\uFF1A\u67E5\u767B\u5F55\u2192Google\u767B\u5F55\u2192\u5426\u5219\u6CE8\u518C\u3002\u9047\u5230\u9700\u624B\u673A/\u9A8C\u8BC1\u7801\u7684\u4F1A\u505C\u4E0B\u63D0\u793A\u4F60\u3002")) return;
     showToast("\u5F00\u59CB\u6279\u91CF\u81EA\u52A8\u767B\u5F55\u2026\uFF08\u6BCF\u4E2A\u8D26\u53F7\u51E0\u5341\u79D2\uFF0C\u8BF7\u8010\u5FC3\u7B49\uFF09", "info");
     try {
       const msg = await invoke2("persona_login_all", { personaId });
@@ -2019,7 +2180,7 @@
     }
   }
   window.deleteAccount = async function(id) {
-    if (!confirm("Delete this account?")) return;
+    if (!await uiConfirm("Delete this account?")) return;
     try {
       await invoke2("delete_account", { id });
       await loadAccounts();
@@ -2457,7 +2618,7 @@
     }
   };
   window.deleteScheduledJob = async function(jobId) {
-    if (!confirm("Delete this scheduled job?")) return;
+    if (!await uiConfirm("Delete this scheduled job?")) return;
     try {
       await invoke2("unzoo_delete_scheduled_job", { jobId });
       showToast("Job deleted", "success");
@@ -3158,7 +3319,7 @@
     }
   }
   window.deleteKeyword = async function(id) {
-    if (!confirm("Delete this keyword?")) return;
+    if (!await uiConfirm("Delete this keyword?")) return;
     try {
       await invoke2("delete_keyword", { id });
       await loadKeywords();
@@ -3757,7 +3918,7 @@
   }
   window.testProxy = testProxy;
   async function deleteProxy(id) {
-    if (!confirm("Delete this proxy?")) return;
+    if (!await uiConfirm("Delete this proxy?")) return;
     try {
       await invoke2("delete_proxy", { id });
       showToast("Proxy deleted", "success");
@@ -5737,8 +5898,8 @@ ${a.body}`,
   }
   async function aiGenerateMedia(kind) {
     const hint = document.getElementById("aiMediaHint");
-    const prompt2 = aiMediaPrompt();
-    if (!prompt2) {
+    const prompt = aiMediaPrompt();
+    if (!prompt) {
       showToast("\u5148\u5199\u70B9\u6B63\u6587/\u6807\u9898\uFF0CAI \u636E\u6B64\u914D\u56FE", "error");
       return;
     }
@@ -5751,13 +5912,13 @@ ${a.body}`,
         const ar = document.getElementById("postImageAR")?.value || void 0;
         setHint("\u{1F5BC} \u914D\u56FE\u751F\u6210\u4E2D\u2026\u7EA6 10-20 \u79D2");
         showToast("AI \u914D\u56FE\u751F\u6210\u4E2D\u2026", "info");
-        path = await invoke2("generate_ai_image", { prompt: prompt2, aspectRatio: ar });
+        path = await invoke2("generate_ai_image", { prompt, aspectRatio: ar });
       } else {
         setHint("\u{1F3AC} \u89C6\u9891\u751F\u6210\u4E2D\u2026\u7EA6 1-3 \u5206\u949F\uFF0C\u8BF7\u52FF\u5173\u95ED");
         showToast("AI \u89C6\u9891\u751F\u6210\u4E2D\uFF081-3 \u5206\u949F\uFF09\u2026", "info");
         const plat = document.getElementById("postPlatform")?.value;
         const ar = plat === "douyin" || plat === "xiaohongshu" ? "9:16" : "16:9";
-        path = await invoke2("generate_ai_video", { prompt: prompt2, model: null, aspectRatio: ar });
+        path = await invoke2("generate_ai_video", { prompt, model: null, aspectRatio: ar });
       }
       const cur = postFieldVal("postMedia");
       postSetVal("postMedia", cur ? `${cur}, ${path}` : path);
@@ -6351,7 +6512,7 @@ ${a.body}`,
     }
   };
   window.personaDelete = async (id, email) => {
-    if (!confirm(`\u5220\u9664\u8EAB\u4EFD ${email}\uFF1F
+    if (!await uiConfirm(`\u5220\u9664\u8EAB\u4EFD ${email}\uFF1F
 \u4F1A\u540C\u65F6\u5220\u6389\u5B83\u7684\u72EC\u7ACB\u6D4F\u89C8\u5668\u5E76\u91CA\u653E\u51FA\u53E3\u8282\u70B9\u3002`)) return;
     try {
       await invoke2("persona_delete", { id });
