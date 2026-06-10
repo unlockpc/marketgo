@@ -885,6 +885,147 @@ function openModal(id) { document.getElementById(id)?.classList.add('active'); }
 function closeModal(id) { document.getElementById(id)?.classList.remove('active'); }
 window.openModal = openModal;
 window.closeModal = closeModal;
+// 自建输入弹窗：替代 Tauri webview 里被禁用的原生 prompt()（原生 prompt 直接返回 null，点了像没反应）
+function uiPrompt(opts) {
+    return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.className = 'modal active';
+        overlay.innerHTML = `
+      <div class="modal-content" style="max-width:480px;">
+        <div class="modal-header"><h3>${escapeHtml(opts.title)}</h3><button class="modal-close" data-cancel>&times;</button></div>
+        <div class="modal-body">
+          ${opts.label ? `<label style="display:block;margin-bottom:6px;">${escapeHtml(opts.label)}</label>` : ''}
+          <input type="text" class="input" id="__uiPromptInput" placeholder="${escapeHtml(opts.placeholder || '')}" value="${escapeHtml(opts.value || '')}" style="width:100%;">
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" data-cancel>取消</button>
+          <button class="btn btn-primary" data-ok>${escapeHtml(opts.okText || '确定')}</button>
+        </div>
+      </div>`;
+        const input = () => overlay.querySelector('#__uiPromptInput');
+        let done = false;
+        const finish = (val) => {
+            if (done)
+                return;
+            done = true;
+            overlay.remove();
+            resolve(val);
+        };
+        overlay.querySelectorAll('[data-cancel]').forEach(el => el.addEventListener('click', () => finish(null)));
+        overlay.querySelector('[data-ok]')?.addEventListener('click', () => finish(input().value.trim()));
+        overlay.addEventListener('click', (e) => { if (e.target === overlay)
+            finish(null); });
+        overlay.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter')
+                finish(input().value.trim());
+            else if (e.key === 'Escape')
+                finish(null);
+        });
+        document.body.appendChild(overlay);
+        setTimeout(() => input()?.focus(), 30);
+    });
+}
+window.uiPrompt = uiPrompt;
+// 自建确认弹窗：替代 Tauri webview 里被禁用的原生 confirm()（原生 confirm 直接返回 false，点了像没反应）
+function uiConfirm(message, opts) {
+    return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.className = 'modal active';
+        const bodyHtml = escapeHtml(message).replace(/\n/g, '<br>');
+        overlay.innerHTML = `
+      <div class="modal-content" style="max-width:440px;">
+        <div class="modal-header"><h3>${escapeHtml(opts?.title || '确认')}</h3><button class="modal-close" data-cancel>&times;</button></div>
+        <div class="modal-body"><div style="font-size:14px;line-height:1.6;">${bodyHtml}</div></div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" data-cancel>${escapeHtml(opts?.cancelText || '取消')}</button>
+          <button class="btn ${opts?.danger ? 'btn-danger' : 'btn-primary'}" data-ok>${escapeHtml(opts?.okText || '确定')}</button>
+        </div>
+      </div>`;
+        let done = false;
+        const finish = (val) => { if (done)
+            return; done = true; overlay.remove(); resolve(val); };
+        overlay.querySelectorAll('[data-cancel]').forEach(el => el.addEventListener('click', () => finish(false)));
+        overlay.querySelector('[data-ok]')?.addEventListener('click', () => finish(true));
+        overlay.addEventListener('click', (e) => { if (e.target === overlay)
+            finish(false); });
+        overlay.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter')
+                finish(true);
+            else if (e.key === 'Escape')
+                finish(false);
+        });
+        document.body.appendChild(overlay);
+        setTimeout(() => overlay.querySelector('[data-ok]')?.focus(), 30);
+    });
+}
+window.uiConfirm = uiConfirm;
+// ===== 开通账号：平台选择器（场景分组 + 地区标签 + 模式徽章） =====
+const SCENE_LABELS = {
+    research: '💻 研发/技术', product: '🚀 产品/创业', social: '🌐 通用/大众社交',
+    content: '📝 知识/内容', career: '💼 职场/商务', lifestyle: '🛍️ 生活/种草',
+};
+const SCENE_ORDER = ['research', 'product', 'social', 'content', 'career', 'lifestyle'];
+const REGION_FLAGS = { us: '🇺🇸', jp: '🇯🇵', kr: '🇰🇷', ru: '🇷🇺', cn: '🇨🇳', global: '🌐' };
+// 弹出分组复选框（已开通项预勾、可取消）。返回用户【最终勾选】的全部平台 key；取消返回 null。
+// 由调用方对比 catalog.provisioned 算出 新增/移除。
+function pickProvisionPlatforms(email, catalog) {
+    return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.className = 'modal active';
+        const groups = SCENE_ORDER.map(s => ({ s, items: catalog.filter(c => c.scene === s) })).filter(g => g.items.length);
+        const groupHtml = groups.map(g => `
+      <div style="margin:14px 0 8px;font-weight:700;font-size:13px;color:var(--text-muted);">${SCENE_LABELS[g.s] || g.s}</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px;">
+        ${g.items.map(c => {
+            const flag = REGION_FLAGS[c.region] || '🌐';
+            const badge = c.provisioned
+                ? '<span style="color:#16a34a;font-size:12px;">已开通</span>'
+                : (c.mode === 'auto' ? '<span style="color:#16a34a;font-size:12px;">🟢自动</span>' : '<span style="color:#d97706;font-size:12px;">🟡需手动</span>');
+            return `<label style="display:flex;align-items:center;gap:8px;border:1px solid var(--border);border-radius:8px;padding:8px 10px;cursor:pointer;">
+            <input type="checkbox" data-plat="${escapeHtml(c.platform)}" data-prov="${c.provisioned ? 1 : 0}" ${c.provisioned ? 'checked' : ''}>
+            <span style="display:flex;align-items:center;gap:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(c.name)} ${flag} ${badge}</span>
+          </label>`;
+        }).join('')}
+      </div>`).join('');
+        overlay.innerHTML = `
+      <div class="modal-content" style="max-width:760px;max-height:84vh;display:flex;flex-direction:column;">
+        <div class="modal-header"><h3>用 ${escapeHtml(email)} 开通平台</h3><button class="modal-close" data-cancel>&times;</button></div>
+        <div class="modal-body" style="overflow:auto;">
+          <div class="text-muted" style="font-size:12px;margin-bottom:4px;">勾选要开通的平台；取消勾选「已开通」的会删除该账号。</div>
+          ${groupHtml}
+        </div>
+        <div class="modal-footer" style="display:flex;align-items:center;gap:8px;">
+          <button class="btn btn-secondary btn-small" data-selauto>全选可开通的</button>
+          <span style="flex:1;"></span>
+          <button class="btn btn-secondary" data-cancel>取消</button>
+          <button class="btn btn-primary" data-ok>应用更改 (0)</button>
+        </div>
+      </div>`;
+        const boxes = () => Array.from(overlay.querySelectorAll('input[type=checkbox]'));
+        const picked = () => boxes().filter(b => b.checked).map(b => b.getAttribute('data-plat'));
+        const changeCount = () => boxes().filter(b => b.checked !== (b.getAttribute('data-prov') === '1')).length;
+        const okBtn = overlay.querySelector('[data-ok]');
+        const refresh = () => { okBtn.textContent = `应用更改 (${changeCount()})`; };
+        let done = false;
+        const finish = (val) => { if (done)
+            return; done = true; overlay.remove(); resolve(val); };
+        overlay.querySelectorAll('[data-cancel]').forEach(el => el.addEventListener('click', () => finish(null)));
+        okBtn.addEventListener('click', () => finish(picked()));
+        overlay.querySelector('[data-selauto]')?.addEventListener('click', () => {
+            catalog.filter(c => c.mode === 'auto').forEach(c => {
+                const b = overlay.querySelector(`input[data-plat="${c.platform}"]`);
+                if (b)
+                    b.checked = true;
+            });
+            refresh();
+        });
+        overlay.addEventListener('change', refresh);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay)
+            finish(null); });
+        document.body.appendChild(overlay);
+    });
+}
+window.pickProvisionPlatforms = pickProvisionPlatforms;
 // Tabs
 function initTabs() {
     document.querySelectorAll('.tabs').forEach(tabGroup => {
@@ -1384,7 +1525,7 @@ async function pauseCampaign(id) {
 }
 window.pauseCampaign = pauseCampaign;
 async function deleteCampaign(id) {
-    if (!confirm('Are you sure you want to delete this campaign?'))
+    if (!(await uiConfirm('Are you sure you want to delete this campaign?')))
         return;
     try {
         await invoke('delete_campaign', { id });
@@ -1561,7 +1702,7 @@ async function analyzeUrl() {
     }
 }
 window.deleteProduct = async function (id) {
-    if (!confirm('Delete this product?'))
+    if (!(await uiConfirm('Delete this product?')))
         return;
     try {
         await invoke('delete_product', { id });
@@ -1767,7 +1908,12 @@ function renderAccounts() {
 window.selectEmail = function (id) { selectedPersonaId = id; renderAccounts(); };
 // 设置/刷新机场订阅（出口 IP 池）
 window.setAirportPrompt = async function () {
-    const url = (prompt('粘贴你的机场订阅链接（Clash 订阅）：') || '').trim();
+    const url = ((await uiPrompt({
+        title: '设置机场订阅',
+        label: '粘贴你的机场订阅链接（必须是 Clash 订阅，不支持单条 ss/vmess）',
+        placeholder: 'https://your-airport.com/api/v1/client/subscribe?token=...',
+        okText: '拉取节点',
+    })) || '').trim();
     if (!url)
         return;
     showToast('正在拉取节点…', 'info');
@@ -1782,7 +1928,12 @@ window.setAirportPrompt = async function () {
 };
 // 在邮箱账号页直接新建一个 Gmail 身份（自动建 profile+指纹+分配节点）
 window.createPersonaPrompt = async function () {
-    const email = (prompt('输入一个真实 Gmail（这个邮箱会成为一套独立身份：独立浏览器+IP+指纹）：') || '').trim();
+    const email = ((await uiPrompt({
+        title: '新建 Gmail 身份',
+        label: '输入一个真实 Gmail（这个邮箱会成为一套独立身份：独立浏览器+IP+指纹）',
+        placeholder: 'yourname@gmail.com',
+        okText: '创建',
+    })) || '').trim();
     if (!email)
         return;
     if (!email.includes('@')) {
@@ -1803,13 +1954,38 @@ window.createPersonaPrompt = async function () {
 };
 // 以邮箱为单位：逐平台「有就登录、没有就注册」，账号自动开通到这个邮箱名下
 window.personaProvisionAll = async function (id, email) {
-    if (!confirm(`用 ${email} 检查并开通各平台账号？\n会逐个平台：有就登录、没有就注册（友好平台全自动；X/Reddit 会打开登录页让你点一下）。\n前提：这个邮箱的 Gmail 已在它的浏览器里登录。`))
-        return;
-    showToast(`正在用 ${email} 开通各平台账号…（逐个平台跑，可能要几分钟，请耐心等）`, 'info');
+    let catalog;
     try {
-        const msg = await invoke('persona_provision_all', { personaId: id });
-        showToast('' + msg, 'success');
-        await loadAccounts();
+        catalog = await invoke('persona_platform_catalog', { personaId: id });
+    }
+    catch (e) {
+        showToast('加载平台列表失败：' + e, 'error');
+        return;
+    }
+    const checkedArr = await pickProvisionPlatforms(email, catalog);
+    if (!checkedArr)
+        return; // 取消
+    const checked = new Set(checkedArr);
+    const provisioned = new Set(catalog.filter(c => c.provisioned).map(c => c.platform));
+    const toAdd = [...checked].filter(p => !provisioned.has(p)); // 新勾选 = 新增开通
+    const toRemove = [...provisioned].filter(p => !checked.has(p)); // 取消已开通 = 删账号
+    if (!toAdd.length && !toRemove.length) {
+        showToast('没有变更', 'info');
+        return;
+    }
+    try {
+        if (toRemove.length) {
+            await invoke('persona_remove_platforms', { personaId: id, platforms: toRemove });
+        }
+        if (toAdd.length) {
+            showToast(`正在用 ${email} 开通 ${toAdd.length} 个平台…（逐个跑，请耐心等）`, 'info');
+            const msg = await invoke('persona_provision_all', { personaId: id, platforms: toAdd });
+            showToast('' + msg, 'success');
+        }
+        else {
+            showToast(`已移除 ${toRemove.length} 个平台账号`, 'success');
+        }
+        await loadAccounts(); // 开通/移除后列表直接刷新
     }
     catch (e) {
         showToast('' + e, 'error');
@@ -1827,7 +2003,7 @@ window.personaGmailLogin = async function (id) {
 };
 // 删除一个 Gmail 身份（连带其独立浏览器，释放节点）
 window.deletePersonaAcct = async function (id, email) {
-    if (!confirm(`删除身份 ${email}？\n会删掉它的独立浏览器并释放出口节点；名下账号会变成「未归属」。`))
+    if (!(await uiConfirm(`删除身份 ${email}？\n会删掉它的独立浏览器并释放出口节点；名下账号会变成「未归属」。`)))
         return;
     try {
         await invoke('persona_delete', { id });
@@ -1896,27 +2072,30 @@ function renderAccountCard(account) {
         const personaBadge = account.persona_email
             ? `<span class="badge badge-profile" title="身份: ${escapeHtml(account.persona_email)}（共用其浏览器+IP）">🧑‍🤝‍🧑 ${escapeHtml(account.persona_email)}</span>`
             : '<span class="badge badge-no-profile" title="未归属身份">🧩 未归属</span>';
+        const nurtureStats = (account.total_nurture_seconds > 0 || account.last_nurture_at)
+            ? `<span class="text-muted" style="font-size:12px;">${account.total_nurture_seconds > 0 ? `🌱 累计 ${formatNurtureTime(account.total_nurture_seconds)}` : ''}${account.last_nurture_at ? ` · ${t('nurture.lastNurture')} ${formatTimeAgo(account.last_nurture_at)}` : ''}</span>`
+            : '';
         return `
       <div class="account-item ${hasProfile ? 'has-profile' : ''}">
-        <div class="account-info">
-          <span class="account-platform">${escapeHtml(account.platform)}</span>
-          <span class="account-username">${escapeHtml(account.username || account.email || 'N/A')}</span>
-          ${stageBadge}
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <span class="account-platform" style="font-weight:700;">${escapeHtml(account.platform)}</span>
           ${healthBadge}
-          ${personaBadge}
-          <span class="account-badges">${stealthBadge}${fingerprintBadge}${proxyBadge}</span>
+          ${stageBadge}
+          <span style="margin-left:auto;display:flex;align-items:center;gap:6px;">
+            ${stealthBadge}${fingerprintBadge}${proxyBadge}
+            <button class="btn btn-small btn-danger" onclick="deleteAccount('${account.id}')" title="删除账号">🗑</button>
+          </span>
         </div>
-        ${todayProgress}
-        <div class="account-profile-binding" style="margin: 8px 0;">
-          <label class="text-muted" style="font-size:12px;">归属身份：</label>
-          <select class="select select-small" onchange="setAccountPersona('${account.id}', this.value)" style="width: auto; min-width: 220px;">
+        <div class="account-username text-muted" style="font-size:13px;">${escapeHtml(account.username || account.email || 'N/A')}</div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <label class="text-muted" style="font-size:12px;">归属身份</label>
+          <select class="select select-small" onchange="setAccountPersona('${account.id}', this.value)" style="width:auto;min-width:200px;">
             ${personaSelectOptions(account.persona_id)}
           </select>
+          ${personaBadge}
+          ${nurtureStats}
         </div>
-        <div class="account-nurture-stats" style="margin: 5px 0; font-size: 12px; color: var(--text-muted);">
-          ${account.total_nurture_seconds > 0 ? `🌱 累计: ${formatNurtureTime(account.total_nurture_seconds)}` : ''}
-          ${account.last_nurture_at ? ` • ${t('nurture.lastNurture')}: ${formatTimeAgo(account.last_nurture_at)}` : ''}
-        </div>
+        ${todayProgress}
         <div class="account-actions">
           <button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="自动登录：查登录→Google登录→否则注册">🔑 自动登录</button>
           <button class="btn btn-small btn-success" data-nurture-account="${account.id}" onclick="openNurtureModal('${account.id}', '${escapeHtml(account.platform)}', '${escapeHtml(account.username || account.email || 'N/A')}')" title="${t('nurture.quickNurture')}">🌱 ${t('nurture.quickNurture')}</button>
@@ -1925,7 +2104,6 @@ function renderAccountCard(account) {
           ${hasProfile ? `<button class="btn btn-small btn-secondary" onclick="toggleStealth('${profile.id}', ${!profile.stealth_enabled})" title="${profile.stealth_enabled ? 'Disable' : 'Enable'} Stealth">${profile.stealth_enabled ? '🛡️' : '⚡'}</button>` : ''}
           ${hasProfile ? `<button class="btn btn-small btn-secondary" onclick="randomizeFingerprint('${profile.id}')" title="Randomize Fingerprint">🎭</button>` : ''}
           ${hasProfile ? `<button class="btn btn-small btn-secondary" onclick="showProxyModal('${profile.id}')" title="Set Proxy">🌐</button>` : ''}
-          <button class="btn btn-small btn-danger" onclick="deleteAccount('${account.id}')">${t('accounts.delete')}</button>
         </div>
       </div>
     `;
@@ -1950,7 +2128,7 @@ window.autoLoginAccount = async function (accountId, platform) {
 };
 // 一键登录某身份下的所有账号
 window.personaLoginAll = async function (personaId) {
-    if (!confirm('自动登录这个身份下的所有账号？\n会逐个尝试：查登录→Google登录→否则注册。遇到需手机/验证码的会停下提示你。'))
+    if (!(await uiConfirm('自动登录这个身份下的所有账号？\n会逐个尝试：查登录→Google登录→否则注册。遇到需手机/验证码的会停下提示你。')))
         return;
     showToast('开始批量自动登录…（每个账号几十秒，请耐心等）', 'info');
     try {
@@ -2185,7 +2363,7 @@ async function saveAccount() {
     }
 }
 window.deleteAccount = async function (id) {
-    if (!confirm('Delete this account?'))
+    if (!(await uiConfirm('Delete this account?')))
         return;
     try {
         await invoke('delete_account', { id });
@@ -2772,7 +2950,7 @@ window.toggleScheduledJob = async function (jobId, enabled) {
     }
 };
 window.deleteScheduledJob = async function (jobId) {
-    if (!confirm('Delete this scheduled job?'))
+    if (!(await uiConfirm('Delete this scheduled job?')))
         return;
     try {
         await invoke('unzoo_delete_scheduled_job', { jobId });
@@ -3668,7 +3846,7 @@ async function saveKeyword() {
     }
 }
 window.deleteKeyword = async function (id) {
-    if (!confirm('Delete this keyword?'))
+    if (!(await uiConfirm('Delete this keyword?')))
         return;
     try {
         await invoke('delete_keyword', { id });
@@ -4347,7 +4525,7 @@ async function testProxy(id) {
 }
 window.testProxy = testProxy;
 async function deleteProxy(id) {
-    if (!confirm('Delete this proxy?'))
+    if (!(await uiConfirm('Delete this proxy?')))
         return;
     try {
         await invoke('delete_proxy', { id });
@@ -7198,7 +7376,7 @@ window.personaTestIp = async (id) => {
     }
 };
 window.personaDelete = async (id, email) => {
-    if (!confirm(`删除身份 ${email}？\n会同时删掉它的独立浏览器并释放出口节点。`))
+    if (!(await uiConfirm(`删除身份 ${email}？\n会同时删掉它的独立浏览器并释放出口节点。`)))
         return;
     try {
         await invoke('persona_delete', { id });
