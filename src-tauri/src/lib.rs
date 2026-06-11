@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::process::Command;
-use tauri::{State, AppHandle, Manager};
+use tauri::{State, AppHandle, Manager, Emitter};
 use uuid::Uuid;
 use chrono::{Utc, Local, Timelike};
 use reqwest::Client;
@@ -12757,6 +12757,20 @@ async fn persona_test_ip(app: AppHandle, id: String) -> Result<String, String> {
 async fn airport_set_subscription(app: AppHandle, url: String) -> Result<String, String> {
     let url = url.trim().to_string();
     if !url.starts_with("http") { return Err("请输入有效的订阅链接（http/https 开头）".into()); }
+    // 手动设置：force_reload=true（无论是否有改动都重建内核配置并重载）
+    let (count, repaired) = airport_refresh(&app, url, true).await?;
+    let tail = if repaired > 0 { format!("，已为 {} 个身份重新配对节点", repaired) } else { String::new() };
+    Ok(format!("订阅已更新：{} 个有效节点入池，内核已就绪{}", count, tail))
+}
+
+/// 拉取/解析机场订阅 → 节点入池 → 把「节点已失效」的身份改派同地区相似节点 → 按需重建配置并热重载。
+/// 返回 (有效节点数, 改派身份数)。
+/// - force_reload=true：手动设置订阅时用，无论是否有改动都重建配置+重载。
+/// - force_reload=false：定时刷新用，只有「换了订阅 / 有身份的节点失效被改派」时才重载，避免无谓中断连接。
+/// 「相似节点」= 同 region 优先（保持出口地区不变），没有再退而取任意空闲节点。
+async fn airport_refresh(app: &AppHandle, url: String, force_reload: bool) -> Result<(usize, usize), String> {
+    let url = url.trim().to_string();
+    if !url.starts_with("http") { return Err("无效订阅链接".into()); }
     // 拉订阅（Clash YAML）
     let client = get_http_client();
     let resp = client.get(&url).header("User-Agent", "clash-verge/v1.7.7").send().await
@@ -12781,6 +12795,7 @@ async fn airport_set_subscription(app: AppHandle, url: String) -> Result<String,
     let count = names.len();
     let valid: std::collections::HashSet<String> = names.iter().map(|(n,_)| n.clone()).collect();
     let mut repaired = 0usize;
+    let changed;
     {
         let state = app.state::<AppState>();
         let conn = state.db.lock().map_err(|_| "db".to_string())?;
@@ -12801,7 +12816,7 @@ async fn airport_set_subscription(app: AppHandle, url: String) -> Result<String,
 
         // 决定要重配的身份：
         //   换了订阅 → 全部身份重配一遍（旧节点名多半已失效）
-        //   同一家订阅 → 只兜底处理节点恰好消失的身份（正常情况下为空，不动配对）
+        //   同一家订阅 → 只兜底处理节点恰好消失的身份（#11 定时刷新的核心：哪个身份的节点没了就替）
         let personas: Vec<(String, String)> = {
             let mut s = conn.prepare("SELECT id, node_name FROM personas WHERE node_name IS NOT NULL AND node_name<>''").map_err(|e| e.to_string())?;
             let rows: Vec<(String,String)> = s.query_map([], |r| Ok((r.get::<_,String>(0)?, r.get::<_,String>(1)?))).map_err(|e| e.to_string())?
@@ -12841,12 +12856,70 @@ async fn airport_set_subscription(app: AppHandle, url: String) -> Result<String,
             for n in stale { let _ = conn.execute("DELETE FROM nodes WHERE name=?1", params![n]); }
         }
 
-        regenerate_mihomo_config(&conn)?;
+        changed = sub_changed || repaired > 0;
+        // 只有真的改了配对，或强制（手动设置）时才重建配置，避免定时刷新无谓地热重载
+        if force_reload || changed {
+            regenerate_mihomo_config(&conn)?;
+        }
     }
-    mihomo_ensure_running(&app).await?;
-    mihomo_reload().await?;
-    let tail = if repaired > 0 { format!("，已为 {} 个身份重新配对节点", repaired) } else { String::new() };
-    Ok(format!("订阅已更新：{} 个有效节点入池，内核已就绪{}", count, tail))
+    if force_reload || changed {
+        mihomo_ensure_running(app).await?;
+        mihomo_reload().await?;
+    }
+    Ok((count, repaired))
+}
+
+/// #11 后台定时刷新机场订阅（默认 10 分钟一次）：自动替换失效节点，保证各身份出口 IP 不中断。
+async fn airport_refresh_loop(app: AppHandle) {
+    // 启动后稍等，让 mihomo_boot 先就绪，避免和启动重建撞车
+    tokio::time::sleep(std::time::Duration::from_secs(90)).await;
+    loop {
+        let url = {
+            let state = app.state::<AppState>();
+            state.db.lock().ok().and_then(|c| engine_cfg_get(&c, "airport_sub_url"))
+        };
+        if let Some(url) = url {
+            if url.trim().starts_with("http") {
+                match airport_refresh(&app, url, false).await {
+                    Ok((count, repaired)) => {
+                        if repaired > 0 {
+                            log::info!("[AIRPORT] 定时刷新：{} 个有效节点，已为 {} 个身份替换失效节点", count, repaired);
+                            // 通知前端：弹个 toast + 刷新账号页
+                            let _ = app.emit("airport-nodes-replaced", serde_json::json!({"count": count, "repaired": repaired}));
+                        } else {
+                            log::info!("[AIRPORT] 定时刷新：{} 个有效节点，节点无变化", count);
+                        }
+                    }
+                    Err(e) => log::warn!("[AIRPORT] 定时刷新失败: {}", e),
+                }
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(600)).await; // 10 分钟
+    }
+}
+
+/// 返回当前已保存的机场订阅链接（供「设置订阅」弹框预填）。没有则返回空串。
+#[tauri::command]
+fn airport_get_subscription(state: State<AppState>) -> Result<String, String> {
+    let conn = state.db.lock().map_err(|_| "db".to_string())?;
+    Ok(engine_cfg_get(&conn, "airport_sub_url").unwrap_or_default())
+}
+
+/// 「刷新订阅」：用已保存的订阅 URL 重新拉取，逻辑同定时刷新（只替换失效节点，不强制重载）。
+#[tauri::command]
+async fn airport_refresh_subscription(app: AppHandle) -> Result<String, String> {
+    let url = {
+        let state = app.state::<AppState>();
+        let conn = state.db.lock().map_err(|_| "db".to_string())?;
+        engine_cfg_get(&conn, "airport_sub_url").unwrap_or_default()
+    };
+    if !url.trim().starts_with("http") { return Err("还没设置机场订阅，请先点「设置订阅」".into()); }
+    let (count, repaired) = airport_refresh(&app, url, false).await?;
+    if repaired > 0 {
+        Ok(format!("已刷新：{} 个有效节点，替换了 {} 个身份的失效节点", count, repaired))
+    } else {
+        Ok(format!("已刷新：{} 个有效节点，节点无变化", count))
+    }
 }
 
 #[derive(Serialize)]
@@ -15762,6 +15835,8 @@ pub fn run() {
             persona_platform_catalog,
             persona_remove_platforms,
             airport_set_subscription,
+            airport_get_subscription,
+            airport_refresh_subscription,
             airport_status,
             list_pending_replies,
             approve_reply,
@@ -15809,6 +15884,12 @@ pub fn run() {
             {
                 let handle = app.handle().clone();
                 std::thread::spawn(move || { mihomo_boot(&handle); });
+            }
+
+            // #11 后台定时（10 分钟）刷新机场订阅，自动替换失效节点
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(airport_refresh_loop(handle));
             }
 
             // Optional: auto-start the task engine (headless 7x24 / verification).

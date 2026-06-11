@@ -80,6 +80,45 @@
   }
   _Resource_rid = /* @__PURE__ */ new WeakMap();
 
+  // node_modules/@tauri-apps/api/event.js
+  var TauriEvent;
+  (function(TauriEvent2) {
+    TauriEvent2["WINDOW_RESIZED"] = "tauri://resize";
+    TauriEvent2["WINDOW_MOVED"] = "tauri://move";
+    TauriEvent2["WINDOW_CLOSE_REQUESTED"] = "tauri://close-requested";
+    TauriEvent2["WINDOW_DESTROYED"] = "tauri://destroyed";
+    TauriEvent2["WINDOW_FOCUS"] = "tauri://focus";
+    TauriEvent2["WINDOW_BLUR"] = "tauri://blur";
+    TauriEvent2["WINDOW_SCALE_FACTOR_CHANGED"] = "tauri://scale-change";
+    TauriEvent2["WINDOW_THEME_CHANGED"] = "tauri://theme-changed";
+    TauriEvent2["WINDOW_CREATED"] = "tauri://window-created";
+    TauriEvent2["WINDOW_SUSPENDED"] = "tauri://suspended";
+    TauriEvent2["WINDOW_RESUMED"] = "tauri://resumed";
+    TauriEvent2["WEBVIEW_CREATED"] = "tauri://webview-created";
+    TauriEvent2["DRAG_ENTER"] = "tauri://drag-enter";
+    TauriEvent2["DRAG_OVER"] = "tauri://drag-over";
+    TauriEvent2["DRAG_DROP"] = "tauri://drag-drop";
+    TauriEvent2["DRAG_LEAVE"] = "tauri://drag-leave";
+  })(TauriEvent || (TauriEvent = {}));
+  async function _unlisten(event, eventId) {
+    window.__TAURI_EVENT_PLUGIN_INTERNALS__.unregisterListener(event, eventId);
+    await invoke("plugin:event|unlisten", {
+      event,
+      eventId
+    });
+  }
+  async function listen(event, handler, options) {
+    var _a;
+    const target = typeof (options === null || options === void 0 ? void 0 : options.target) === "string" ? { kind: "AnyLabel", label: options.target } : (_a = options === null || options === void 0 ? void 0 : options.target) !== null && _a !== void 0 ? _a : { kind: "Any" };
+    return invoke("plugin:event|listen", {
+      event,
+      target,
+      handler: transformCallback(handler)
+    }).then((eventId) => {
+      return async () => _unlisten(event, eventId);
+    });
+  }
+
   // src/tauri-frontend/app.ts
   var currentLanguage = "zh";
   var translations = {
@@ -225,6 +264,21 @@
       "transfer.current": "\u5F53\u524D",
       "transfer.done": "\u5DF2\u8F6C\u79FB\u5F52\u5C5E",
       "transfer.failed": "\u8F6C\u79FB\u5931\u8D25\uFF1A",
+      // 机场节点定时刷新
+      "airport.nodesReplaced": "\u68C0\u6D4B\u5230\u673A\u573A\u8282\u70B9\u53D8\u5316\uFF0C\u5DF2\u4E3A {n} \u4E2A\u8EAB\u4EFD\u81EA\u52A8\u66FF\u6362\u51FA\u53E3\u8282\u70B9",
+      // 机场订阅（设置 / 刷新）
+      "airport.title": "\u{1F310} \u673A\u573A\u4EE3\u7406",
+      "airport.poolInfo": "\u8282\u70B9\u6C60 {total} \u4E2A\uFF08\u7A7A\u95F2 {free}\uFF09\xB7 \u6BCF\u4E2A\u90AE\u7BB1\u5206\u4E00\u4E2A\u72EC\u7ACB\u51FA\u53E3 IP",
+      "airport.notConfigured": "\u672A\u914D\u7F6E\u2014\u2014\u914D\u4E86\u624D\u80FD\u7ED9\u90AE\u7BB1\u5206\u914D\u72EC\u7ACB IP",
+      "airport.setSub": "\u8BBE\u7F6E\u8BA2\u9605",
+      "airport.refreshSub": "\u5237\u65B0\u8BA2\u9605",
+      "airport.setTitle": "\u8BBE\u7F6E\u673A\u573A\u8BA2\u9605",
+      "airport.setLabel": "\u7C98\u8D34\u4F60\u7684\u673A\u573A\u8BA2\u9605\u94FE\u63A5\uFF08\u5FC5\u987B\u662F Clash \u8BA2\u9605\uFF0C\u4E0D\u652F\u6301\u5355\u6761 ss/vmess\uFF09",
+      "airport.setOk": "\u4FDD\u5B58",
+      "airport.saved": "\u4FDD\u5B58\u6210\u529F\uFF08\u8BA2\u9605\u672A\u53D8\u5316\uFF09",
+      "airport.fetching": "\u6B63\u5728\u62C9\u53D6\u8282\u70B9\u2026",
+      "airport.refreshing": "\u6B63\u5728\u5237\u65B0\u8BA2\u9605\u2026",
+      "airport.subFailed": "\u8BA2\u9605\u5931\u8D25\uFF1A",
       // 登录方式标注
       "login.method": "\u767B\u5F55\u65B9\u5F0F",
       "login.google": "Google \u767B\u5F55",
@@ -615,6 +669,21 @@
       "transfer.current": "Current",
       "transfer.done": "Ownership transferred",
       "transfer.failed": "Transfer failed: ",
+      // Airport node periodic refresh
+      "airport.nodesReplaced": "Airport node change detected \u2014 auto-replaced exit nodes for {n} identities",
+      // Airport subscription (set / refresh)
+      "airport.title": "\u{1F310} Airport proxy",
+      "airport.poolInfo": "{total} nodes ({free} free) \xB7 each email gets a dedicated exit IP",
+      "airport.notConfigured": "Not configured \u2014 set it up to assign dedicated IPs per email",
+      "airport.setSub": "Set subscription",
+      "airport.refreshSub": "Refresh",
+      "airport.setTitle": "Set airport subscription",
+      "airport.setLabel": "Paste your airport subscription link (must be a Clash subscription, not a single ss/vmess)",
+      "airport.setOk": "Save",
+      "airport.saved": "Saved (subscription unchanged)",
+      "airport.fetching": "Fetching nodes\u2026",
+      "airport.refreshing": "Refreshing subscription\u2026",
+      "airport.subFailed": "Subscription failed: ",
       // Login method labels
       "login.method": "Login method",
       "login.google": "Google sign-in",
@@ -968,9 +1037,19 @@
     initTabs();
     initCampaignEvents();
     initProxyEvents();
+    initBackendEvents();
     await loadInitialData();
     checkBrowserStatus();
   });
+  function initBackendEvents() {
+    if (!isTauriEnv) return;
+    listen("airport-nodes-replaced", (e) => {
+      const n = e?.payload?.repaired ?? 0;
+      showToast(tf("airport.nodesReplaced", { n }), "info");
+      if (currentPage === "accounts") loadAccounts();
+    }).catch(() => {
+    });
+  }
   function showBrowserModeWarning() {
     const banner = document.createElement("div");
     banner.style.cssText = "position:fixed;top:0;left:0;right:0;background:#ff5722;color:white;padding:10px;text-align:center;z-index:9999;font-size:14px;";
@@ -1988,10 +2067,15 @@
     const empty = document.getElementById("emptyAccounts");
     if (!list || !empty) return;
     const a = airportStatusCache;
-    const airportBar = `<div class="card" style="margin:0 0 10px;padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-left:4px solid ${a && a.configured ? "#1a9d4a" : "#d97706"};">
-    <span style="font-weight:700;">\u{1F310} \u673A\u573A\u4EE3\u7406</span>
-    <span class="text-muted" style="font-size:12px;">${a && a.configured ? `\u8282\u70B9\u6C60 ${a.total} \u4E2A\uFF08\u7A7A\u95F2 ${a.free}\uFF09\xB7 \u6BCF\u4E2A\u90AE\u7BB1\u5206\u4E00\u4E2A\u72EC\u7ACB\u51FA\u53E3 IP` : "\u672A\u914D\u7F6E\u2014\u2014\u914D\u4E86\u624D\u80FD\u7ED9\u90AE\u7BB1\u5206\u914D\u72EC\u7ACB IP"}</span>
-    <button class="btn btn-small btn-secondary" style="margin-left:auto;" onclick="setAirportPrompt()">${a && a.configured ? "\u6362/\u5237\u65B0\u8BA2\u9605" : "\u8BBE\u7F6E\u673A\u573A\u8BA2\u9605"}</button>
+    const configured = !!(a && a.configured);
+    const airportInfo = configured ? tf("airport.poolInfo", { total: a.total, free: a.free }) : t("airport.notConfigured");
+    const airportBar = `<div class="card" style="margin:0 0 10px;padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-left:4px solid ${configured ? "#1a9d4a" : "#d97706"};">
+    <span style="font-weight:700;">${escapeHtml(t("airport.title"))}</span>
+    <span class="text-muted" style="font-size:12px;">${escapeHtml(airportInfo)}</span>
+    <span style="margin-left:auto;display:flex;gap:6px;">
+      ${configured ? `<button class="btn btn-small btn-secondary" onclick="refreshAirport()" title="\u7528\u5DF2\u4FDD\u5B58\u7684\u8BA2\u9605\u91CD\u65B0\u62C9\u53D6\u3001\u66FF\u6362\u5931\u6548\u8282\u70B9\uFF08\u540C\u5B9A\u65F6\u5237\u65B0\uFF09">\u{1F504} ${escapeHtml(t("airport.refreshSub"))}</button>` : ""}
+      <button class="btn btn-small btn-secondary" onclick="setAirportPrompt()">${escapeHtml(t("airport.setSub"))}</button>
+    </span>
   </div>`;
     const groups = /* @__PURE__ */ new Map();
     for (const acc of accounts) {
@@ -2090,20 +2174,43 @@
     renderAccounts();
   };
   window.setAirportPrompt = async function() {
-    const url = (await uiPrompt({
-      title: "\u8BBE\u7F6E\u673A\u573A\u8BA2\u9605",
-      label: "\u7C98\u8D34\u4F60\u7684\u673A\u573A\u8BA2\u9605\u94FE\u63A5\uFF08\u5FC5\u987B\u662F Clash \u8BA2\u9605\uFF0C\u4E0D\u652F\u6301\u5355\u6761 ss/vmess\uFF09",
+    let current = "";
+    try {
+      current = await invoke2("airport_get_subscription") || "";
+    } catch {
+      current = "";
+    }
+    const input = await uiPrompt({
+      title: t("airport.setTitle"),
+      label: t("airport.setLabel"),
       placeholder: "https://your-airport.com/api/v1/client/subscribe?token=...",
-      okText: "\u62C9\u53D6\u8282\u70B9"
-    }) || "").trim();
+      value: current,
+      okText: t("airport.setOk")
+    });
+    if (input === null) return;
+    const url = input.trim();
     if (!url) return;
-    showToast("\u6B63\u5728\u62C9\u53D6\u8282\u70B9\u2026", "info");
+    if (url === current.trim()) {
+      showToast(t("airport.saved"), "success");
+      return;
+    }
+    showToast(t("airport.fetching"), "info");
     try {
       const msg = await invoke2("airport_set_subscription", { url });
       showToast("" + msg, "success");
       await loadAccounts();
     } catch (e) {
-      showToast("\u8BA2\u9605\u5931\u8D25\uFF1A" + e, "error");
+      showToast(t("airport.subFailed") + e, "error");
+    }
+  };
+  window.refreshAirport = async function() {
+    showToast(t("airport.refreshing"), "info");
+    try {
+      const msg = await invoke2("airport_refresh_subscription");
+      showToast("" + msg, "success");
+      await loadAccounts();
+    } catch (e) {
+      showToast(t("airport.subFailed") + e, "error");
     }
   };
   window.createPersonaPrompt = async function() {

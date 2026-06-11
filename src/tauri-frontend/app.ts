@@ -3,6 +3,7 @@
  */
 
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
+import { listen as tauriListen } from '@tauri-apps/api/event';
 
 // ============================================================================
 // i18n Internationalization System
@@ -157,6 +158,21 @@ const translations: Record<Language, Record<string, string>> = {
     'transfer.current': '当前',
     'transfer.done': '已转移归属',
     'transfer.failed': '转移失败：',
+    // 机场节点定时刷新
+    'airport.nodesReplaced': '检测到机场节点变化，已为 {n} 个身份自动替换出口节点',
+    // 机场订阅（设置 / 刷新）
+    'airport.title': '🌐 机场代理',
+    'airport.poolInfo': '节点池 {total} 个（空闲 {free}）· 每个邮箱分一个独立出口 IP',
+    'airport.notConfigured': '未配置——配了才能给邮箱分配独立 IP',
+    'airport.setSub': '设置订阅',
+    'airport.refreshSub': '刷新订阅',
+    'airport.setTitle': '设置机场订阅',
+    'airport.setLabel': '粘贴你的机场订阅链接（必须是 Clash 订阅，不支持单条 ss/vmess）',
+    'airport.setOk': '保存',
+    'airport.saved': '保存成功（订阅未变化）',
+    'airport.fetching': '正在拉取节点…',
+    'airport.refreshing': '正在刷新订阅…',
+    'airport.subFailed': '订阅失败：',
     // 登录方式标注
     'login.method': '登录方式',
     'login.google': 'Google 登录',
@@ -561,6 +577,21 @@ const translations: Record<Language, Record<string, string>> = {
     'transfer.current': 'Current',
     'transfer.done': 'Ownership transferred',
     'transfer.failed': 'Transfer failed: ',
+    // Airport node periodic refresh
+    'airport.nodesReplaced': 'Airport node change detected — auto-replaced exit nodes for {n} identities',
+    // Airport subscription (set / refresh)
+    'airport.title': '🌐 Airport proxy',
+    'airport.poolInfo': '{total} nodes ({free} free) · each email gets a dedicated exit IP',
+    'airport.notConfigured': 'Not configured — set it up to assign dedicated IPs per email',
+    'airport.setSub': 'Set subscription',
+    'airport.refreshSub': 'Refresh',
+    'airport.setTitle': 'Set airport subscription',
+    'airport.setLabel': 'Paste your airport subscription link (must be a Clash subscription, not a single ss/vmess)',
+    'airport.setOk': 'Save',
+    'airport.saved': 'Saved (subscription unchanged)',
+    'airport.fetching': 'Fetching nodes…',
+    'airport.refreshing': 'Refreshing subscription…',
+    'airport.subFailed': 'Subscription failed: ',
     // Login method labels
     'login.method': 'Login method',
     'login.google': 'Google sign-in',
@@ -1014,9 +1045,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   initTabs();
   initCampaignEvents();
   initProxyEvents();
+  initBackendEvents();
   await loadInitialData();
   checkBrowserStatus();
 });
+
+// #11 监听后台事件：机场节点定时刷新替换了失效节点 → 提示用户 + 刷新账号页
+function initBackendEvents() {
+  if (!isTauriEnv) return;
+  tauriListen('airport-nodes-replaced', (e: any) => {
+    const n = e?.payload?.repaired ?? 0;
+    showToast(tf('airport.nodesReplaced', { n }), 'info');
+    if (currentPage === 'accounts') loadAccounts();
+  }).catch(() => { /* 监听注册失败忽略 */ });
+}
 
 // Show warning banner when running in browser instead of Tauri
 function showBrowserModeWarning() {
@@ -2211,10 +2253,15 @@ function renderAccounts() {
 
   // 机场代理（出口 IP 池）
   const a = airportStatusCache;
-  const airportBar = `<div class="card" style="margin:0 0 10px;padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-left:4px solid ${a && a.configured ? '#1a9d4a' : '#d97706'};">
-    <span style="font-weight:700;">🌐 机场代理</span>
-    <span class="text-muted" style="font-size:12px;">${a && a.configured ? `节点池 ${a.total} 个（空闲 ${a.free}）· 每个邮箱分一个独立出口 IP` : '未配置——配了才能给邮箱分配独立 IP'}</span>
-    <button class="btn btn-small btn-secondary" style="margin-left:auto;" onclick="setAirportPrompt()">${a && a.configured ? '换/刷新订阅' : '设置机场订阅'}</button>
+  const configured = !!(a && a.configured);
+  const airportInfo = configured ? tf('airport.poolInfo', { total: a.total, free: a.free }) : t('airport.notConfigured');
+  const airportBar = `<div class="card" style="margin:0 0 10px;padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-left:4px solid ${configured ? '#1a9d4a' : '#d97706'};">
+    <span style="font-weight:700;">${escapeHtml(t('airport.title'))}</span>
+    <span class="text-muted" style="font-size:12px;">${escapeHtml(airportInfo)}</span>
+    <span style="margin-left:auto;display:flex;gap:6px;">
+      ${configured ? `<button class="btn btn-small btn-secondary" onclick="refreshAirport()" title="用已保存的订阅重新拉取、替换失效节点（同定时刷新）">🔄 ${escapeHtml(t('airport.refreshSub'))}</button>` : ''}
+      <button class="btn btn-small btn-secondary" onclick="setAirportPrompt()">${escapeHtml(t('airport.setSub'))}</button>
+    </span>
   </div>`;
 
   const groups = new Map<string, any[]>();
@@ -2331,21 +2378,40 @@ let collapsedPersonas: Set<string> = new Set();
 // 切换当前邮箱视角
 (window as any).selectEmail = function(id: string) { selectedPersonaId = id; renderAccounts(); };
 
-// 设置/刷新机场订阅（出口 IP 池）
+// #12 设置机场订阅：预填当前订阅；提交时判断是否变化——无变化只提示保存成功，有变化才换节点
 (window as any).setAirportPrompt = async function() {
-  const url = ((await uiPrompt({
-    title: '设置机场订阅',
-    label: '粘贴你的机场订阅链接（必须是 Clash 订阅，不支持单条 ss/vmess）',
+  let current = '';
+  try { current = (await invoke<string>('airport_get_subscription')) || ''; } catch { current = ''; }
+  const input = await uiPrompt({
+    title: t('airport.setTitle'),
+    label: t('airport.setLabel'),
     placeholder: 'https://your-airport.com/api/v1/client/subscribe?token=...',
-    okText: '拉取节点',
-  })) || '').trim();
+    value: current,
+    okText: t('airport.setOk'),
+  });
+  if (input === null) return;                 // 取消
+  const url = input.trim();
   if (!url) return;
-  showToast('正在拉取节点…', 'info');
+  if (url === current.trim()) {               // 订阅没变 → 不动节点，只提示
+    showToast(t('airport.saved'), 'success');
+    return;
+  }
+  showToast(t('airport.fetching'), 'info');
   try {
-    const msg = await invoke<string>('airport_set_subscription', { url });
+    const msg = await invoke<string>('airport_set_subscription', { url });   // 内部 force 重载 + 替换失效节点
     showToast('' + msg, 'success');
     await loadAccounts();
-  } catch (e) { showToast('订阅失败：' + e, 'error'); }
+  } catch (e) { showToast(t('airport.subFailed') + e, 'error'); }
+};
+
+// #12 刷新订阅：用已保存的订阅重新拉取、替换失效节点（逻辑同后台定时刷新）
+(window as any).refreshAirport = async function() {
+  showToast(t('airport.refreshing'), 'info');
+  try {
+    const msg = await invoke<string>('airport_refresh_subscription');
+    showToast('' + msg, 'success');
+    await loadAccounts();
+  } catch (e) { showToast(t('airport.subFailed') + e, 'error'); }
 };
 
 // 在邮箱账号页直接新建一个 Gmail 身份（自动建 profile+指纹+分配节点）
