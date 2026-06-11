@@ -3569,3 +3569,40 @@ textarea.input {
   border-color: var(--accent);
   background: var(--accent-light);
 }
+
+/* ===== 使用指南 侧边栏分组 + 场景平台推荐页 ===== */
+.nav-group { margin: 1px 0; }
+.nav-group-header { display: flex; align-items: center; }
+.nav-group-chev {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-muted);
+  transition: transform .18s ease;
+}
+.nav-group.collapsed .nav-group-chev { transform: rotate(-90deg); }
+.nav-group.collapsed .nav-submenu { display: none; }
+.nav-subitem {
+  padding-left: 26px;
+  font-size: 12.5px;
+}
+.nav-subitem .nav-icon { font-size: 14px; }
+
+.guide-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+.guide-card { padding: 14px; }
+.guide-card-title { font-weight: 700; font-size: 14px; margin-bottom: 2px; }
+.guide-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.guide-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  font-size: 12px;
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}

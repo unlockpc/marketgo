@@ -3521,6 +3521,10 @@ fn run_migrations(conn: &Connection) -> rusqlite::Result<()> {
             let _ = conn.execute(ddl, []);
         }
     }
+    // #19 accounts 增加「跳过养号」标记：成熟正常账号一键结束养号 → 标正常、不再自动养
+    if conn.prepare("SELECT nurture_skip FROM accounts LIMIT 1").is_err() {
+        let _ = conn.execute("ALTER TABLE accounts ADD COLUMN nurture_skip INTEGER DEFAULT 0", []);
+    }
     // 一次性清理历史误报：没绑 profile/persona 却被标 logged_out 的账号，复位为 unknown（"待配置"而非"被封"）
     let _ = conn.execute(
         "UPDATE accounts SET health_status='unknown' \
@@ -10697,6 +10701,22 @@ fn get_account_nurture_logs(
     logs.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
 }
 
+/// #19 一键结束养号：把账号标记为「跳过养号」→ 阶段直接显示「正常」，且不再被自动养号。
+/// 适用于本来就成熟的老账号（非新注册），无需走预热期。
+#[tauri::command]
+fn finish_account_nurture(state: State<AppState>, account_id: String) -> Result<String, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    if conn.prepare("SELECT nurture_skip FROM accounts LIMIT 1").is_err() {
+        let _ = conn.execute("ALTER TABLE accounts ADD COLUMN nurture_skip INTEGER DEFAULT 0", []);
+    }
+    let now = Utc::now().to_rfc3339();
+    let n = conn.execute(
+        "UPDATE accounts SET nurture_skip=1, nurture_started_at=COALESCE(nurture_started_at, ?1) WHERE id=?2",
+        params![now, account_id]).map_err(|e| e.to_string())?;
+    if n == 0 { return Err("账号不存在".into()); }
+    Ok("已结束养号，账号标记为正常".into())
+}
+
 /// Get account lifecycle status
 #[tauri::command]
 fn get_account_lifecycle(
@@ -10744,12 +10764,20 @@ fn get_account_lifecycle(
         .map(|d| d.with_timezone(&Utc))
         .unwrap_or(now);
 
-    let days_since_start = (now - start_date).num_days() as i32;
+    // #19 跳过养号标记：成熟账号一键结束养号 → 直接当作「正常 / 养满」
+    let skip: i64 = conn.query_row(
+        "SELECT COALESCE(nurture_skip,0) FROM accounts WHERE id = ?1",
+        params![account_id], |row| row.get(0)).unwrap_or(0);
+
+    let raw_days_since = (now - start_date).num_days() as i32;
+    let days_since_start = if skip == 1 { warmup_days } else { raw_days_since };
     let days_remaining = (warmup_days - days_since_start).max(0);
     let progress_percent = ((days_since_start as f64 / warmup_days as f64) * 100.0).min(100.0);
 
     // Determine lifecycle stage
-    let stage = if nurture_started_at.is_none() {
+    let stage = if skip == 1 {
+        "active"
+    } else if nurture_started_at.is_none() {
         "new"
     } else if days_since_start < warmup_days {
         "warming"
@@ -13296,7 +13324,8 @@ fn nurture_schedule_tick(conn: &Connection) {
 
     // 有全局默认 profile 时，未单独绑定的账号也参与（继承全局）；否则只取已绑定的。
     let has_global = engine_cfg_get(conn, "selected_browser_profile").map(|s| !s.is_empty()).unwrap_or(false);
-    let where_bound = if has_global { "status='active'" } else { "status='active' AND profile_id IS NOT NULL AND profile_id<>''" };
+    // #19 跳过养号(nurture_skip=1)的账号不参与自动养号
+    let where_bound = if has_global { "status='active' AND COALESCE(nurture_skip,0)=0" } else { "status='active' AND COALESCE(nurture_skip,0)=0 AND profile_id IS NOT NULL AND profile_id<>''" };
     let accounts: Vec<(String, String, Option<String>, String, Option<String>)> = {
         let sql = format!(
             "SELECT id, platform, created_at, COALESCE(health_status,'unknown'), last_nurture_at FROM accounts WHERE {}",
@@ -15951,6 +15980,7 @@ pub fn run() {
             update_nurture_strategy,
             get_account_nurture_logs,
             get_account_lifecycle,
+            finish_account_nurture,
             get_accounts_needing_nurture,
             // Task Execution Engine (执行引擎)
             start_engine,

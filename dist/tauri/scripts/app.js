@@ -133,6 +133,9 @@
       "nav.accounts": "\u8D26\u53F7\u7BA1\u7406",
       "nav.tasks": "\u4EFB\u52A1\u961F\u5217",
       "nav.statistics": "\u7EDF\u8BA1\u5206\u6790",
+      "nav.guide": "\u4F7F\u7528\u6307\u5357",
+      "nav.guideScenarios": "\u573A\u666F\u5E73\u53F0\u63A8\u8350",
+      "guide.scenariosTitle": "\u{1F3AF} \u573A\u666F\u5E73\u53F0\u63A8\u8350",
       "nav.settings": "\u8BBE\u7F6E",
       // Dashboard
       "dashboard.title": "\u4EEA\u8868\u76D8",
@@ -254,6 +257,10 @@
       "nurture.stopped": "\u517B\u53F7\u5DF2\u505C\u6B62",
       "nurture.noAccounts": "\u6682\u65E0\u8D26\u53F7\uFF0C\u8BF7\u5148\u6DFB\u52A0\u8D26\u53F7",
       "nurture.daysProgressTitle": "\u517B\u53F7\u8FDB\u5EA6\uFF08\u5DF2\u517B\u5929\u6570 / \u9700\u8981\u603B\u5929\u6570\uFF09",
+      "nurture.finishBtn": "\u7ED3\u675F\u517B\u53F7",
+      "nurture.finishConfirm": "\u8FD9\u4E2A\u8D26\u53F7\u672C\u6765\u5C31\u662F\u6B63\u5E38\u8001\u8D26\u53F7\u3001\u65E0\u9700\u517B\u53F7\uFF1F\n\u7ED3\u675F\u517B\u53F7\u540E\u4F1A\u76F4\u63A5\u6807\u4E3A\u300C\u6B63\u5E38\u300D\uFF0C\u5E76\u505C\u6B62\u81EA\u52A8\u517B\u53F7\u3002",
+      "nurture.finished": "\u5DF2\u7ED3\u675F\u517B\u53F7\uFF0C\u8D26\u53F7\u6807\u8BB0\u4E3A\u6B63\u5E38",
+      "nurture.finishFailed": "\u7ED3\u675F\u517B\u53F7\u5931\u8D25\uFF1A",
       // Provision (开通账号选择器 / 加账号流程)
       "provision.title": "\u7528 {email} \u5F00\u901A\u5E73\u53F0",
       "provision.hint": "\u52FE\u9009\u8981\u5F00\u901A\u7684\u5E73\u53F0\uFF08\u4EC5\u5217\u51FA\u53EF\u81EA\u52A8\u5F00\u901A\u3001\u4E14\u5C1A\u672A\u5F00\u901A\u7684 Google \u767B\u5F55\u5E73\u53F0\uFF09\u3002",
@@ -581,6 +588,9 @@
       "nav.accounts": "Accounts",
       "nav.tasks": "Tasks",
       "nav.statistics": "Statistics",
+      "nav.guide": "Guide",
+      "nav.guideScenarios": "Platform Recommendations",
+      "guide.scenariosTitle": "\u{1F3AF} Platform Recommendations",
       "nav.settings": "Settings",
       // Dashboard
       "dashboard.title": "Dashboard",
@@ -701,6 +711,10 @@
       "nurture.stopped": "Nurturing stopped",
       "nurture.noAccounts": "No accounts yet, please add accounts first",
       "nurture.daysProgressTitle": "Warmup progress (days done / days required)",
+      "nurture.finishBtn": "Finish warmup",
+      "nurture.finishConfirm": 'This account is already a mature/normal account and needs no warmup?\nFinishing will mark it "Active" and stop auto-nurturing.',
+      "nurture.finished": "Warmup finished, account marked Active",
+      "nurture.finishFailed": "Failed to finish warmup: ",
       // Provision (platform provisioning selector / add-account flow)
       "provision.title": "Provision platforms for {email}",
       "provision.hint": "Check platforms to provision (only auto-provisionable, not-yet-added Google-login platforms are listed).",
@@ -1148,6 +1162,12 @@
         if (page) navigateTo(page);
       });
     });
+    document.querySelectorAll(".nav-group-header").forEach((h) => {
+      h.addEventListener("click", (e) => {
+        e.preventDefault();
+        h.closest(".nav-group")?.classList.toggle("collapsed");
+      });
+    });
   }
   function navigateTo(page) {
     document.querySelectorAll(".nav-item").forEach((item) => {
@@ -1197,12 +1217,91 @@
       case "stats":
         loadStats();
         break;
+      case "guide-scenarios":
+        loadGuideScenarios();
+        break;
       case "settings":
         loadSettings();
         break;
     }
   }
   window.navigateTo = navigateTo;
+  var GUIDE_SCENARIOS = [
+    {
+      icon: "\u{1F680}",
+      zh: "\u4EA7\u54C1\u51B7\u542F\u52A8 / \u51FA\u6D77\u53D1\u5E03",
+      en: "Product launch / cold start",
+      descZh: "\u65B0\u4EA7\u54C1\u53D1\u5E03\u3001\u627E\u79CD\u5B50\u7528\u6237\u3001\u5237\u9996\u6279\u66DD\u5149",
+      descEn: "Launch a new product, get seed users & first exposure",
+      platforms: ["Product Hunt", "BetaList", "Indie Hackers", "Hacker News", "Reddit", "AlternativeTo"]
+    },
+    {
+      icon: "\u{1F4BB}",
+      zh: "\u5F00\u53D1\u8005 / \u6280\u672F\u83B7\u5BA2",
+      en: "Developer / technical audience",
+      descZh: "\u9762\u5411\u7A0B\u5E8F\u5458\uFF0C\u9760\u5F00\u6E90\u4E0E\u6280\u672F\u5185\u5BB9\u79CD\u8349",
+      descEn: "Reach developers via OSS & technical content",
+      platforms: ["GitHub", "DEV.to", "Hashnode", "Medium", "Hacker News", "V2EX", "SegmentFault"]
+    },
+    {
+      icon: "\u{1F310}",
+      zh: "\u6D77\u5916\u793E\u5A92\u58F0\u91CF",
+      en: "Overseas social reach",
+      descZh: "\u6D77\u5916\u793E\u4EA4\u505A\u58F0\u91CF\u3001\u4E92\u52A8\u83B7\u5BA2",
+      descEn: "Build reach & engagement on overseas social",
+      platforms: ["Twitter / X", "Reddit", "LinkedIn", "Facebook"]
+    },
+    {
+      icon: "\u{1F4DD}",
+      zh: "\u5185\u5BB9 / SEO \u957F\u5C3E",
+      en: "Content / SEO long-tail",
+      descZh: "\u957F\u6587\u3001\u535A\u5BA2\uFF0C\u505A\u641C\u7D22\u957F\u5C3E\u5F15\u6D41",
+      descEn: "Long-form & blogs for search long-tail traffic",
+      platforms: ["Medium", "Hashnode", "note", "Zenn", "Qiita", "\u77E5\u4E4E"]
+    },
+    {
+      icon: "\u{1F4BC}",
+      zh: "B2B / \u804C\u573A",
+      en: "B2B / professional",
+      descZh: "\u9762\u5411\u4F01\u4E1A\u4E0E\u804C\u573A\u51B3\u7B56\u4EBA",
+      descEn: "Reach businesses & professional decision-makers",
+      platforms: ["LinkedIn", "Twitter / X", "Medium"]
+    },
+    {
+      icon: "\u{1F6CD}\uFE0F",
+      zh: "\u56FD\u5185\u79CD\u8349 / \u751F\u6D3B",
+      en: "China lifestyle / recommendation",
+      descZh: "\u56FD\u5185\u751F\u6D3B\u3001\u79CD\u8349\u3001\u793E\u4EA4\uFF08\u9700\u56FD\u5185\u56FA\u5B9A IP\uFF09",
+      descEn: "China lifestyle & recommendation (needs CN fixed IP)",
+      platforms: ["\u5C0F\u7EA2\u4E66", "\u5FAE\u535A", "\u77E5\u4E4E", "\u5373\u523B"]
+    },
+    {
+      icon: "\u{1F5FE}",
+      zh: "\u533A\u57DF\u5E02\u573A\uFF08\u65E5 / \u97E9 / \u4FC4\uFF09",
+      en: "Regional (JP / KR / RU)",
+      descZh: "\u533A\u57DF\u5E73\u53F0\uFF0C\u5EFA\u8BAE\u7528\u5BF9\u5E94\u5730\u533A\u7684\u8EAB\u4EFD/IP",
+      descEn: "Regional platforms \u2014 use a matching region identity/IP",
+      platforms: ["Qiita", "Zenn", "note\uFF08\u65E5\uFF09", "Naver Blog\uFF08\u97E9\uFF09", "Habr", "VK\uFF08\u4FC4\uFF09"]
+    }
+  ];
+  function loadGuideScenarios() {
+    const el = document.getElementById("guideScenariosBody");
+    if (!el) return;
+    const isZh = currentLanguage === "zh";
+    const intro = isZh ? "\u6309\u4F60\u7684\u8425\u9500\u76EE\u6807 / \u573A\u666F\u6311\u5E73\u53F0\u3002\u51FA\u53E3 IP \u5EFA\u8BAE\uFF1A\u6D77\u5916\u5E73\u53F0\u7528\u300C\u{1F4E7} Gmail \u8EAB\u4EFD\u300D\uFF08\u673A\u573A IP\uFF09\uFF1B\u5C0F\u7EA2\u4E66 / \u5FAE\u535A\u7B49\u7528\u300C\u{1F1E8}\u{1F1F3} \u56FD\u5185\u56FA\u5B9A IP \u8EAB\u4EFD\u300D\uFF1BTwitter / Reddit / LinkedIn / Facebook \u7528\u300C\u{1F30D} \u56FD\u5916\u56FA\u5B9A IP \u8EAB\u4EFD\u300D\u3002" : 'Pick platforms by your marketing scenario. Exit-IP tip: overseas \u2192 "\u{1F4E7} Gmail identity" (airport IP); Xiaohongshu/Weibo \u2192 "\u{1F1E8}\u{1F1F3} CN fixed-IP identity"; Twitter/Reddit/LinkedIn/Facebook \u2192 "\u{1F30D} Overseas fixed-IP identity".';
+    const cards = GUIDE_SCENARIOS.map((s) => {
+      const chips = s.platforms.map((p) => `<span class="guide-chip">${escapeHtml(p)}</span>`).join("");
+      return `<div class="card guide-card">
+      <div class="guide-card-title">${s.icon} ${escapeHtml(isZh ? s.zh : s.en)}</div>
+      <div class="text-muted" style="font-size:12px;margin:2px 0 8px;">${escapeHtml(isZh ? s.descZh : s.descEn)}</div>
+      <div class="guide-chips">${chips}</div>
+    </div>`;
+    }).join("");
+    el.innerHTML = `<div class="card" style="padding:12px 14px;margin-bottom:12px;border-left:4px solid #4a8cff;">
+      <span class="text-muted" style="font-size:13px;line-height:1.6;">${escapeHtml(intro)}</span>
+    </div>
+    <div class="guide-grid">${cards}</div>`;
+  }
   function renderCurrentPage() {
     navigateTo(currentPage);
   }
@@ -2619,6 +2718,7 @@
           <button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="\u81EA\u52A8\u767B\u5F55\uFF1A\u67E5\u767B\u5F55\u2192Google\u767B\u5F55\u2192\u5426\u5219\u6CE8\u518C">\u{1F511} \u81EA\u52A8\u767B\u5F55</button>
           <button class="btn btn-small btn-success" data-nurture-account="${account.id}" onclick="openNurtureModal('${account.id}', '${escapeHtml(account.platform)}', '${escapeHtml(account.username || account.email || "N/A")}')" title="${t("nurture.quickNurture")}">\u{1F331} ${t("nurture.quickNurture")}</button>
           ${stage === "new" ? `<button class="btn btn-small btn-warning" onclick="startWarmup('${account.id}')" title="\u5F00\u59CB\u517B\u53F7">\u{1F525} \u5F00\u59CB\u517B\u53F7</button>` : ""}
+          ${stage !== "active" ? `<button class="btn btn-small btn-secondary" onclick="finishAccountNurture('${account.id}')" title="\u8001\u8D26\u53F7\u65E0\u9700\u517B\u53F7\uFF0C\u76F4\u63A5\u6807\u4E3A\u6B63\u5E38">\u2705 ${t("nurture.finishBtn")}</button>` : ""}
         </div>
       </div>
     `;
@@ -2716,6 +2816,16 @@
       await loadAccounts();
     } catch (error) {
       showToast(`Error: ${error}`, "error");
+    }
+  };
+  window.finishAccountNurture = async function(accountId) {
+    if (!await uiConfirm(t("nurture.finishConfirm"))) return;
+    try {
+      await invoke2("finish_account_nurture", { accountId });
+      showToast(t("nurture.finished"), "success");
+      await loadAccounts();
+    } catch (error) {
+      showToast(t("nurture.finishFailed") + error, "error");
     }
   };
   async function loadRegisterPlatforms() {

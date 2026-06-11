@@ -23,6 +23,9 @@ const translations: Record<Language, Record<string, string>> = {
     'nav.accounts': '账号管理',
     'nav.tasks': '任务队列',
     'nav.statistics': '统计分析',
+    'nav.guide': '使用指南',
+    'nav.guideScenarios': '场景平台推荐',
+    'guide.scenariosTitle': '🎯 场景平台推荐',
     'nav.settings': '设置',
 
     // Dashboard
@@ -147,6 +150,10 @@ const translations: Record<Language, Record<string, string>> = {
     'nurture.stopped': '养号已停止',
     'nurture.noAccounts': '暂无账号，请先添加账号',
     'nurture.daysProgressTitle': '养号进度（已养天数 / 需要总天数）',
+    'nurture.finishBtn': '结束养号',
+    'nurture.finishConfirm': '这个账号本来就是正常老账号、无需养号？\n结束养号后会直接标为「正常」，并停止自动养号。',
+    'nurture.finished': '已结束养号，账号标记为正常',
+    'nurture.finishFailed': '结束养号失败：',
 
     // Provision (开通账号选择器 / 加账号流程)
     'provision.title': '用 {email} 开通平台',
@@ -485,6 +492,9 @@ const translations: Record<Language, Record<string, string>> = {
     'nav.accounts': 'Accounts',
     'nav.tasks': 'Tasks',
     'nav.statistics': 'Statistics',
+    'nav.guide': 'Guide',
+    'nav.guideScenarios': 'Platform Recommendations',
+    'guide.scenariosTitle': '🎯 Platform Recommendations',
     'nav.settings': 'Settings',
 
     // Dashboard
@@ -608,6 +618,10 @@ const translations: Record<Language, Record<string, string>> = {
     'nurture.stopped': 'Nurturing stopped',
     'nurture.noAccounts': 'No accounts yet, please add accounts first',
     'nurture.daysProgressTitle': 'Warmup progress (days done / days required)',
+    'nurture.finishBtn': 'Finish warmup',
+    'nurture.finishConfirm': 'This account is already a mature/normal account and needs no warmup?\nFinishing will mark it "Active" and stop auto-nurturing.',
+    'nurture.finished': 'Warmup finished, account marked Active',
+    'nurture.finishFailed': 'Failed to finish warmup: ',
 
     // Provision (platform provisioning selector / add-account flow)
     'provision.title': 'Provision platforms for {email}',
@@ -1161,6 +1175,13 @@ function initNavigation() {
       if (page) navigateTo(page);
     });
   });
+  // 「使用指南」等分组头：点击展开/收起子菜单（无 data-page，不导航）
+  document.querySelectorAll('.nav-group-header').forEach(h => {
+    h.addEventListener('click', (e) => {
+      e.preventDefault();
+      h.closest('.nav-group')?.classList.toggle('collapsed');
+    });
+  });
 }
 
 function navigateTo(page: string) {
@@ -1188,12 +1209,60 @@ function navigateTo(page: string) {
     case 'personas': loadPersonasPage(); break;
     case 'marketplaces': loadMarketplacesPage(); break;
     case 'stats': loadStats(); break;
+    case 'guide-scenarios': loadGuideScenarios(); break;
     case 'settings': loadSettings(); break;
   }
 }
 
 // Make navigateTo globally accessible
 (window as any).navigateTo = navigateTo;
+
+// ===== 使用指南 · 场景平台推荐 =====
+interface GuideScenario { icon: string; zh: string; en: string; descZh: string; descEn: string; platforms: string[]; }
+const GUIDE_SCENARIOS: GuideScenario[] = [
+  { icon: '🚀', zh: '产品冷启动 / 出海发布', en: 'Product launch / cold start',
+    descZh: '新产品发布、找种子用户、刷首批曝光', descEn: 'Launch a new product, get seed users & first exposure',
+    platforms: ['Product Hunt', 'BetaList', 'Indie Hackers', 'Hacker News', 'Reddit', 'AlternativeTo'] },
+  { icon: '💻', zh: '开发者 / 技术获客', en: 'Developer / technical audience',
+    descZh: '面向程序员，靠开源与技术内容种草', descEn: 'Reach developers via OSS & technical content',
+    platforms: ['GitHub', 'DEV.to', 'Hashnode', 'Medium', 'Hacker News', 'V2EX', 'SegmentFault'] },
+  { icon: '🌐', zh: '海外社媒声量', en: 'Overseas social reach',
+    descZh: '海外社交做声量、互动获客', descEn: 'Build reach & engagement on overseas social',
+    platforms: ['Twitter / X', 'Reddit', 'LinkedIn', 'Facebook'] },
+  { icon: '📝', zh: '内容 / SEO 长尾', en: 'Content / SEO long-tail',
+    descZh: '长文、博客，做搜索长尾引流', descEn: 'Long-form & blogs for search long-tail traffic',
+    platforms: ['Medium', 'Hashnode', 'note', 'Zenn', 'Qiita', '知乎'] },
+  { icon: '💼', zh: 'B2B / 职场', en: 'B2B / professional',
+    descZh: '面向企业与职场决策人', descEn: 'Reach businesses & professional decision-makers',
+    platforms: ['LinkedIn', 'Twitter / X', 'Medium'] },
+  { icon: '🛍️', zh: '国内种草 / 生活', en: 'China lifestyle / recommendation',
+    descZh: '国内生活、种草、社交（需国内固定 IP）', descEn: 'China lifestyle & recommendation (needs CN fixed IP)',
+    platforms: ['小红书', '微博', '知乎', '即刻'] },
+  { icon: '🗾', zh: '区域市场（日 / 韩 / 俄）', en: 'Regional (JP / KR / RU)',
+    descZh: '区域平台，建议用对应地区的身份/IP', descEn: 'Regional platforms — use a matching region identity/IP',
+    platforms: ['Qiita', 'Zenn', 'note（日）', 'Naver Blog（韩）', 'Habr', 'VK（俄）'] },
+];
+
+function loadGuideScenarios() {
+  const el = document.getElementById('guideScenariosBody');
+  if (!el) return;
+  const isZh = currentLanguage === 'zh';
+  const intro = isZh
+    ? '按你的营销目标 / 场景挑平台。出口 IP 建议：海外平台用「📧 Gmail 身份」（机场 IP）；小红书 / 微博等用「🇨🇳 国内固定 IP 身份」；Twitter / Reddit / LinkedIn / Facebook 用「🌍 国外固定 IP 身份」。'
+    : 'Pick platforms by your marketing scenario. Exit-IP tip: overseas → "📧 Gmail identity" (airport IP); Xiaohongshu/Weibo → "🇨🇳 CN fixed-IP identity"; Twitter/Reddit/LinkedIn/Facebook → "🌍 Overseas fixed-IP identity".';
+  const cards = GUIDE_SCENARIOS.map(s => {
+    const chips = s.platforms.map(p => `<span class="guide-chip">${escapeHtml(p)}</span>`).join('');
+    return `<div class="card guide-card">
+      <div class="guide-card-title">${s.icon} ${escapeHtml(isZh ? s.zh : s.en)}</div>
+      <div class="text-muted" style="font-size:12px;margin:2px 0 8px;">${escapeHtml(isZh ? s.descZh : s.descEn)}</div>
+      <div class="guide-chips">${chips}</div>
+    </div>`;
+  }).join('');
+  el.innerHTML = `<div class="card" style="padding:12px 14px;margin-bottom:12px;border-left:4px solid #4a8cff;">
+      <span class="text-muted" style="font-size:13px;line-height:1.6;">${escapeHtml(intro)}</span>
+    </div>
+    <div class="guide-grid">${cards}</div>`;
+}
 
 // Re-render current page (used when language changes)
 function renderCurrentPage() {
@@ -2841,6 +2910,7 @@ function renderAccountCard(account: any): string {
           <button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="自动登录：查登录→Google登录→否则注册">🔑 自动登录</button>
           <button class="btn btn-small btn-success" data-nurture-account="${account.id}" onclick="openNurtureModal('${account.id}', '${escapeHtml(account.platform)}', '${escapeHtml(account.username || account.email || 'N/A')}')" title="${t('nurture.quickNurture')}">🌱 ${t('nurture.quickNurture')}</button>
           ${stage === 'new' ? `<button class="btn btn-small btn-warning" onclick="startWarmup('${account.id}')" title="开始养号">🔥 开始养号</button>` : ''}
+          ${stage !== 'active' ? `<button class="btn btn-small btn-secondary" onclick="finishAccountNurture('${account.id}')" title="老账号无需养号，直接标为正常">✅ ${t('nurture.finishBtn')}</button>` : ''}
         </div>
       </div>
     `;
@@ -2936,6 +3006,16 @@ function renderAccountCard(account: any): string {
   } catch (error) {
     showToast(`Error: ${error}`, 'error');
   }
+};
+
+// #19 一键结束养号：老账号无需养号，直接标为正常并停止自动养号
+(window as any).finishAccountNurture = async function(accountId: string) {
+  if (!(await uiConfirm(t('nurture.finishConfirm')))) return;
+  try {
+    await invoke('finish_account_nurture', { accountId });
+    showToast(t('nurture.finished'), 'success');
+    await loadAccounts();
+  } catch (error) { showToast(t('nurture.finishFailed') + error, 'error'); }
 };
 
 async function loadRegisterPlatforms() {

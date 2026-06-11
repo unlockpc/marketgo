@@ -82,6 +82,19 @@
           <span class="nav-icon">📊</span>
           <span class="nav-text">Statistics</span>
         </a>
+        <div class="nav-group" id="navGroupGuide">
+          <a href="#" class="nav-item nav-group-header" data-group="guide">
+            <span class="nav-icon">📖</span>
+            <span class="nav-text" data-i18n="nav.guide">使用指南</span>
+            <span class="nav-group-chev">▾</span>
+          </a>
+          <div class="nav-submenu">
+            <a href="#" class="nav-item nav-subitem" data-page="guide-scenarios">
+              <span class="nav-icon">🎯</span>
+              <span class="nav-text" data-i18n="nav.guideScenarios">场景平台推荐</span>
+            </a>
+          </div>
+        </div>
         <a href="#" class="nav-item" data-page="settings">
           <span class="nav-icon">⚙️</span>
           <span class="nav-text">Settings</span>
@@ -1397,6 +1410,13 @@
       </div>
 
       <!-- Settings Page -->
+      <div class="page" id="page-guide-scenarios">
+        <header class="page-header">
+          <h2 data-i18n="guide.scenariosTitle">🎯 场景平台推荐</h2>
+        </header>
+        <div id="guideScenariosBody"><!-- 动态渲染 --></div>
+      </div>
+
       <div class="page" id="page-settings">
         <header class="page-header">
           <h2 data-i18n="settings.title">Settings</h2>
