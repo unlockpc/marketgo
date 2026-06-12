@@ -83,6 +83,10 @@ pub struct PlatformSafetyLimits {
     pub hashtag_limit: i32,           // 每条内容hashtag限制
 }
 
+/// 平台安全限制。注意：当前仅 `link_allowed` 字段被消费（用于生成内容时决定是否带链接，
+/// 见 get_link_safety / 内容生成处）。此处的 `warmup_days` 等字段**并非生效的预热闸门值**——
+/// 真正的预热判定：养号走 `nurture_strategies.warmup_days`（由 NURTURE_WARMUP_DAYS 播种），
+/// 发帖走 `get_publish_config().warmup_days`。改预热天数请改那两处，别动这里的默认值。
 fn get_platform_safety_limits(platform: &str) -> PlatformSafetyLimits {
     match platform.to_lowercase().as_str() {
         "twitter" | "x" => PlatformSafetyLimits {
@@ -215,17 +219,6 @@ fn get_random_delay(min_seconds: i32, max_seconds: i32) -> u64 {
     let range = (max_seconds - min_seconds) as u64;
     let delay_seconds = min_seconds as u64 + (seed % (range + 1));
     delay_seconds * 1000
-}
-
-/// 检查是否在预热期
-fn is_in_warmup_period(account_created_at: &str, warmup_days: i32) -> bool {
-    if let Ok(created) = chrono::DateTime::parse_from_rfc3339(account_created_at) {
-        let now = Utc::now();
-        let days_since_creation = (now - created.with_timezone(&Utc)).num_days();
-        days_since_creation < warmup_days as i64
-    } else {
-        true // 无法解析日期时，假设在预热期
-    }
 }
 
 /// 对内容进行变体处理，避免重复检测
@@ -10062,8 +10055,13 @@ async fn start_account_nurture(
     set_active_tab(Some(tab_id.clone()));
     log::info!("[NURTURE] Created browser tab: {}", tab_id);
 
-    // Step 3: Navigate and simulate browsing
-    let nurture_duration = simulate_platform_browsing(&platform, 60).await?;
+    // Step 3: Navigate and simulate browsing.
+    // 阻塞版 + spawn_blocking：内部走阻塞 reqwest，绝不能在 async 上下文直接调，
+    // 否则导航会 panic（tab 开出来但地址空白、不会真正操作）。见引擎里同样的处理。
+    let pf = platform.clone();
+    let nurture_duration = tauri::async_runtime::spawn_blocking(move || simulate_browsing_blocking(&pf, 60))
+        .await
+        .map_err(|e| format!("养号任务异常: {}", e))??;
 
     // Update database
     {
@@ -10248,7 +10246,7 @@ fn check_platform_login_status(platform: &str) -> Result<bool, String> {
 
 /// 导航到平台首页并轮询登录态（SPA 首屏渲染慢，单次检测易误判）。同步，需在 spawn_blocking 中调用。
 fn verify_login_blocking(platform: &str) -> bool {
-    let _ = unzoo_navigate(platform_home(platform));
+    let _ = unzoo_navigate(get_platform_home_url(platform));
     std::thread::sleep(std::time::Duration::from_secs(3));
     let mut logged = check_platform_login_status(platform).unwrap_or(false);
     let mut waited = 0;
@@ -10287,78 +10285,6 @@ fn simulate_browsing_blocking(platform: &str, duration_seconds: i64) -> Result<i
     }
     let elapsed = start.elapsed().as_secs() as i64;
     log::info!("[NURTURE] (blocking) completed: {}s", elapsed);
-    Ok(elapsed)
-}
-
-/// Simulate browsing on a platform without any posting actions
-async fn simulate_platform_browsing(platform: &str, duration_seconds: i64) -> Result<i64, String> {
-    log::info!("[NURTURE] Simulating browsing on {} for ~{}s", platform, duration_seconds);
-
-    let start = std::time::Instant::now();
-    let target_duration = std::time::Duration::from_secs(duration_seconds as u64);
-
-    // Get platform homepage
-    let homepage = match platform.to_lowercase().as_str() {
-        "twitter" | "x" => "https://x.com/home",
-        "reddit" => "https://www.reddit.com",
-        "linkedin" => "https://www.linkedin.com/feed/",
-        "zhihu" => "https://www.zhihu.com",
-        "xiaohongshu" | "redbook" => "https://www.xiaohongshu.com/explore",
-        "weibo" => "https://weibo.com",
-        "v2ex" => "https://www.v2ex.com",
-        "producthunt" => "https://www.producthunt.com",
-        "hackernews" => "https://news.ycombinator.com",
-        "indiehackers" => "https://www.indiehackers.com",
-        _ => "https://www.google.com",
-    };
-
-    // Navigate to homepage
-    unzoo_navigate(homepage)?;
-
-    // Wait for page to load and check login status
-    let read_time = get_human_delay(3000, 5000);
-    tokio::time::sleep(tokio::time::Duration::from_millis(read_time)).await;
-
-    // Check if user is logged in
-    let is_logged_in = check_platform_login_status(platform)?;
-    if !is_logged_in {
-        log::warn!("[NURTURE] User not logged in to {}", platform);
-        return Err(format!(
-            "未登录 {} 平台！请先在浏览器中登录该平台的账号，然后再开始养号。",
-            platform
-        ));
-    }
-
-    log::info!("[NURTURE] User is logged in to {}, starting nurture session", platform);
-
-    // Simulate browsing behavior loop
-    while start.elapsed() < target_duration {
-        // Random scroll
-        let scroll_amount = get_human_delay(200, 500) as i32;
-        let direction = if pseudo_random_bool(0.8) { "down" } else { "up" };
-        let _ = unzoo_scroll(direction, scroll_amount);
-
-        // Pause like reading
-        let pause = get_human_delay(2000, 5000);
-        tokio::time::sleep(tokio::time::Duration::from_millis(pause)).await;
-
-        // Random mouse movement
-        random_mouse_movement();
-
-        // Sometimes hover on content
-        if pseudo_random_bool(0.3) {
-            let hover_targets = ["article", "div.post", "div.feed-item", "main", "section"];
-            let idx = (get_human_delay(0, (hover_targets.len() - 1) as u64)) as usize;
-            let _ = unzoo_hover(hover_targets[idx]);
-        }
-
-        // Random delay
-        let delay = get_human_delay(1000, 3000);
-        tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
-    }
-
-    let elapsed = start.elapsed().as_secs() as i64;
-    log::info!("[NURTURE] Completed browsing simulation: {}s", elapsed);
     Ok(elapsed)
 }
 
@@ -10579,8 +10505,12 @@ async fn quick_nurture(
 
     set_active_tab(Some(tab_id));
 
-    // Simulate browsing for specified duration
-    let duration = simulate_platform_browsing(&platform, seconds).await?;
+    // Simulate browsing for specified duration.
+    // 走阻塞版 + spawn_blocking（阻塞 reqwest 不能在 async 里直接调，否则导航 panic、tab 空白不操作）。
+    let pf = platform.clone();
+    let duration = tauri::async_runtime::spawn_blocking(move || simulate_browsing_blocking(&pf, seconds))
+        .await
+        .map_err(|e| format!("养号任务异常: {}", e))??;
 
     // Update total nurture seconds and record session
     {
@@ -11518,25 +11448,6 @@ fn parse_dt(s: &str) -> Option<chrono::DateTime<Utc>> {
 }
 
 /// 平台首页（养号/体检导航用）。
-fn platform_home(platform: &str) -> &'static str {
-    match platform.to_lowercase().as_str() {
-        "twitter" | "x" => "https://x.com/home",
-        "reddit" => "https://www.reddit.com",
-        "linkedin" => "https://www.linkedin.com/feed/",
-        "zhihu" => "https://www.zhihu.com",
-        "xiaohongshu" | "redbook" => "https://www.xiaohongshu.com/explore",
-        "weibo" => "https://weibo.com",
-        "v2ex" => "https://www.v2ex.com",
-        "producthunt" => "https://www.producthunt.com",
-        "hackernews" => "https://news.ycombinator.com",
-        "indiehackers" => "https://www.indiehackers.com",
-        "devto" => "https://dev.to",
-        "medium" => "https://medium.com",
-        "github" => "https://github.com",
-        _ => "https://www.google.com",
-    }
-}
-
 /// 按号龄分期定当日养号目标场次：新号轻、成长期重、成熟期维持。
 fn nurture_phase_and_target(age_days: i64, warmup: i64, s_min: i64, s_max: i64) -> (&'static str, i64) {
     if age_days < warmup { ("warmup", s_min.max(1)) }
@@ -16155,6 +16066,21 @@ mod platform_meta_tests {
             let name = get_platform_config(k).map(|c| c.name.to_string());
             assert!(name.is_some(), "platform {} 在 get_platform_config 里没有配置", k);
             assert!(!m.scene.is_empty() && !m.region.is_empty() && !m.mode.is_empty());
+        }
+    }
+
+    #[test]
+    fn nurture_homepage_resolves_to_platform_not_google() {
+        // 回归：养号导航曾用残缺的 platform_home()，csdn 落到 google.com 兜底 →
+        // 在 google 页上检测 csdn 登录必然失败、养号空转。现已统一走 get_platform_home_url()。
+        assert_eq!(get_platform_home_url("csdn"), "https://www.csdn.net");
+        for p in ["csdn", "zhihu", "weibo", "twitter", "reddit", "linkedin", "github", "v2ex", "devto", "medium"] {
+            assert_ne!(
+                get_platform_home_url(p),
+                "https://www.google.com",
+                "{} 养号导航落到 google 兜底，会导致登录检测失败、不真正操作",
+                p
+            );
         }
     }
 }
