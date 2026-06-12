@@ -3304,7 +3304,7 @@ async function loadBrowserProfiles() {
   if (modal) {
     (document.getElementById('proxyProfileId') as HTMLInputElement).value = profileId;
     (document.getElementById('proxyUrl') as HTMLInputElement).value = profile?.proxy || '';
-    modal.classList.add('show');
+    modal.classList.add('active');
   }
 };
 
@@ -3345,7 +3345,7 @@ let nurtureInProgress: string | null = null;
     (document.getElementById('nurtureAccountId') as HTMLInputElement).value = accountId;
     (document.getElementById('nurturePlatform') as HTMLInputElement).value = platform;
     document.getElementById('nurtureAccountInfo')!.textContent = `${platform} - ${username || t('msg.account')}`;
-    modal.classList.add('show');
+    modal.classList.add('active');
   }
 };
 

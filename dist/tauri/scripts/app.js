@@ -3079,7 +3079,7 @@
     if (modal) {
       document.getElementById("proxyProfileId").value = profileId;
       document.getElementById("proxyUrl").value = profile?.proxy || "";
-      modal.classList.add("show");
+      modal.classList.add("active");
     }
   };
   async function saveProxy() {
@@ -3107,7 +3107,7 @@
       document.getElementById("nurtureAccountId").value = accountId;
       document.getElementById("nurturePlatform").value = platform;
       document.getElementById("nurtureAccountInfo").textContent = `${platform} - ${username || t("msg.account")}`;
-      modal.classList.add("show");
+      modal.classList.add("active");
     }
   };
   window.quickNurtureAccount = async function(accountId, platform, seconds = 60) {
