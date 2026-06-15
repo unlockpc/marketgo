@@ -2679,7 +2679,58 @@ fn human_type_delay_ms() -> i64 {
     45 + (n % 65)
 }
 
+/// 全局输入模式开关：true=Unzoo 原生 human 模式（默认），false=旧 browser_*。
+/// 由底层 sync 助手读取（无 DB 上下文），启动时从 config.unzoo_input_mode 载入。
+static UNZOO_HUMAN_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+fn unzoo_human_mode_enabled() -> bool {
+    UNZOO_HUMAN_MODE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// 设置输入模式（运行时切换；持久化由调用方写 config）。
+fn unzoo_set_human_mode(on: bool) {
+    UNZOO_HUMAN_MODE.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 运行时切换输入模式并持久化到 config（安全开关：human 翻车可一键切回 browser）。
+#[tauri::command]
+fn set_unzoo_input_mode(state: State<AppState>, mode: String) -> Result<(), String> {
+    let m = if mode == "browser" { "browser" } else { "human" };
+    unzoo_set_human_mode(m != "browser");
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    engine_cfg_set(&conn, "unzoo_input_mode", m);
+    log::info!("[UNZOO] 输入模式切换为 {}", m);
+    Ok(())
+}
+
+/// 首次真实使用 human 模式时懒设全局行为档位（启动时浏览器可能未就绪，故懒设）。
+fn ensure_human_profile() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        match unzoo_mcp("human_profile_set", serde_json::json!({ "profile": "normal" })) {
+            Ok(_) => log::info!("[HUMAN] 全局行为档位已设为 normal"),
+            Err(e) => log::warn!("[HUMAN] human_profile_set 失败（首次将用 Unzoo 默认档）: {}", e),
+        }
+    });
+}
+
+/// human 模式点击：bezier 轨迹 + 遮挡检测 + 反馈校验（v1.9.0）。selector 走 CSS（最高优先级）。
+fn unzoo_human_click(selector: &str) -> Result<(), String> {
+    log::info!("[HUMAN] Clicking: {}", selector);
+    let tab_id = get_active_tab().unwrap_or_default();
+    if tab_id.is_empty() {
+        return Err("No active tab".to_string());
+    }
+    ensure_human_profile();
+    unzoo_mcp("human_click", serde_json::json!({
+        "tab_id": tab_id, "selector": selector
+    })).map(|_| ())
+}
+
 fn unzoo_click(selector: &str) -> Result<(), String> {
+    if unzoo_human_mode_enabled() {
+        return unzoo_human_click(selector);
+    }
     log::info!("[UNZOO] Clicking (trusted) selector: {}", selector);
     let tab_id = get_active_tab().unwrap_or_default();
     if tab_id.is_empty() {
@@ -5900,7 +5951,25 @@ async fn publish_content(state: State<'_, AppState>, content: Content) -> Result
 }
 
 // Type text into element - uses HTTP API
+/// human 模式输入：真人节奏 + typo+backspace 自我纠正 + 读回校验（v1.9.0）。
+fn unzoo_human_type(selector: &str, text: &str) -> Result<(), String> {
+    log::info!("[HUMAN] Typing {} chars into: {}", text.len(), selector);
+    let tab_id = get_active_tab().unwrap_or_default();
+    if tab_id.is_empty() {
+        return Err("No active tab".to_string());
+    }
+    ensure_human_profile();
+    unzoo_mcp("human_type", serde_json::json!({
+        "tab_id": tab_id,
+        "selector": selector,
+        "text": text
+    })).map(|_| ())
+}
+
 fn unzoo_type(selector: &str, text: &str) -> Result<(), String> {
+    if unzoo_human_mode_enabled() {
+        return unzoo_human_type(selector, text);
+    }
     log::info!("[UNZOO] Typing (real keyboard) into: {}", selector);
     let tab_id = get_active_tab().unwrap_or_default();
     if tab_id.is_empty() {
@@ -16217,6 +16286,11 @@ pub fn run() {
     init_db(&conn).expect("Failed to initialize database");
     run_migrations(&conn).expect("Failed to run database migrations");
 
+    // 输入模式开关：config.unzoo_input_mode（默认 human）。控制 unzoo_click/type 走 human_* 还是 browser_*。
+    let input_mode = engine_cfg_get(&conn, "unzoo_input_mode").unwrap_or_else(|| "human".to_string());
+    unzoo_set_human_mode(input_mode != "browser");
+    log::info!("[UNZOO] 输入模式 = {}", if input_mode != "browser" { "human" } else { "browser" });
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_process::init())
@@ -16385,6 +16459,7 @@ pub fn run() {
             gh_domains_catalog,
             get_account_gh_domains,
             set_account_gh_domains,
+            set_unzoo_input_mode,
             list_leads,
             update_lead_status,
             get_marketing_stats,
