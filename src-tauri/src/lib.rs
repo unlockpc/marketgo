@@ -10426,6 +10426,121 @@ fn simulate_browsing_blocking(platform: &str, duration_seconds: i64) -> Result<i
     Ok(elapsed)
 }
 
+/// GitHub L1 养号：按账号领域，从 topic 页采候选 → 去重选取 → star。
+/// 浏览器调用走 spawn_blocking（阻塞 reqwest 不能在 async 直接调，见项目约定）。
+/// follow/watch 见同文件 follow/watch 助手（Task 7b 接入）；L2 评论见末尾（Task 9）。
+async fn github_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Result<String, String> {
+    // 1) 读领域 + 分期
+    let (domains, phase) = {
+        let st = app.state::<AppState>();
+        let conn = st.db.lock().map_err(|e| e.to_string())?;
+        let domains = account_gh_domains(&conn, account_id);
+        let created: Option<String> = conn.query_row("SELECT created_at FROM accounts WHERE id=?1", params![account_id], |r| r.get(0)).ok().flatten();
+        let age = created.as_deref().and_then(parse_dt).map(|c| (Utc::now() - c).num_days()).unwrap_or(0);
+        let strat = conn.query_row("SELECT warmup_days, daily_sessions_min, daily_sessions_max FROM nurture_strategies WHERE platform='github'",
+            [], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,i64>(1)?, r.get::<_,i64>(2)?))).ok();
+        let (warmup, smin, smax) = strat.unwrap_or((3, 2, 5));
+        let (phase, _t) = nurture_phase_and_target(age, warmup, smin, smax);
+        (domains, phase.to_string())
+    };
+    if domains.is_empty() {
+        return Ok("账号未选领域，跳过 GitHub 养号".to_string());
+    }
+    let (n_star, n_follow, n_watch) = gh_daily_quota(&phase);
+
+    // 2) 选领域 → topics → 选一个 topic（时间派生种子）
+    let dom_keys: Vec<&str> = domains.iter().map(|s| s.as_str()).collect();
+    let topics = gh_domain_topics(&dom_keys);
+    if topics.is_empty() { return Ok("领域无可用 topic".to_string()); }
+    let seed = get_random_delay(1, 100_000);
+    let topic = topics[(seed as usize) % topics.len()];
+
+    // 3) 浏览器：导航 topic 页（按 star 排序）采 repo 链接
+    let topic_owned = topic.to_string();
+    let repo_links: Vec<String> = tauri::async_runtime::spawn_blocking(move || {
+        let url = format!("https://github.com/topics/{}?o=desc&s=stars", topic_owned);
+        unzoo_navigate(&url)?;
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        if !check_platform_login_status("github").unwrap_or(false) {
+            return Err("未登录 github".to_string());
+        }
+        unzoo_get_links("article h3 a[href^='/'], h3 a[href*='/']")
+    }).await.map_err(|e| format!("采集异常: {}", e))??;
+
+    // 规范化为 owner/repo 两段的绝对 URL
+    let mut repos: Vec<String> = repo_links.into_iter()
+        .filter_map(|h| {
+            let path = h.trim_start_matches("https://github.com").trim_start_matches('/');
+            let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+            if segs.len() == 2 { Some(format!("https://github.com/{}/{}", segs[0], segs[1])) } else { None }
+        }).collect();
+    repos.dedup();
+
+    // 4) DB 过滤：本账号已操作 + 跨账号触碰过多（≥3 个 persona）→ 排除
+    let chosen: Vec<String> = {
+        let st = app.state::<AppState>();
+        let conn = st.db.lock().map_err(|e| e.to_string())?;
+        let mut already = std::collections::HashSet::new();
+        for r in &repos {
+            if gh_already_acted(&conn, account_id, r) || gh_target_persona_count(&conn, r) >= 3 {
+                already.insert(r.clone());
+            }
+        }
+        gh_pick_targets(&repos, &already, n_star.max(1) as usize, seed)
+    };
+
+    // 5) 浏览器：逐个 star（含拟人间隔）
+    let mut done = 0i64;
+    for repo in &chosen {
+        let repo_c = repo.clone();
+        let res = tauri::async_runtime::spawn_blocking(move || gh_star_repo_blocking(&repo_c)).await
+            .map_err(|e| format!("star 异常: {}", e))?;
+        if res.is_ok() {
+            let st = app.state::<AppState>();
+            if let Ok(conn) = st.db.lock() { let _ = gh_record_action(&conn, account_id, "star", repo); }
+            done += 1;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(get_random_delay(60, 180))).await;
+    }
+    let _ = (n_follow, n_watch); // Task 7b 接入 follow/watch
+
+    // 6) 写养号统计（与通用养号一致）
+    {
+        let st = app.state::<AppState>();
+        let locked = st.db.lock(); // 绑定到 locked，确保其借用在 st 之前释放
+        if let Ok(conn) = locked {
+            let now = Utc::now().to_rfc3339();
+            let today = Local::now().format("%Y-%m-%d").to_string();
+            let _ = conn.execute("UPDATE accounts SET last_nurture_at=?1, health_status='healthy', last_health_check=?1 WHERE id=?2", params![now, account_id]);
+            let _ = conn.execute(
+                "INSERT INTO nurture_daily_logs (id, account_id, date, sessions_completed, total_seconds) VALUES (?1,?2,?3,1,0) \
+                 ON CONFLICT(account_id,date) DO UPDATE SET sessions_completed=sessions_completed+1",
+                params![Uuid::new_v4().to_string(), account_id, today]);
+        }
+    }
+    Ok(format!("GitHub 养号完成：topic={} star={}", topic, done))
+}
+
+/// 在 repo 页点 Star（best-effort 选择器，需对照实时 GitHub 校准）。
+/// 已 star 时按钮文案为 Unstar/Starred，选择器只匹配 "Star ..." 以免误取消。
+fn gh_star_repo_blocking(repo_url: &str) -> Result<(), String> {
+    unzoo_navigate(repo_url)?;
+    std::thread::sleep(std::time::Duration::from_millis(get_random_delay(2, 5)));
+    let star_selectors = [
+        "button[aria-label^='Star this']",
+        "button[aria-label^='Star ']",
+        "form[action$='/star'] button",
+    ];
+    for sel in star_selectors {
+        if unzoo_element_exists(sel) {
+            unzoo_click(sel).map_err(|e| format!("点击 star 失败: {}", e))?;
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            return Ok(());
+        }
+    }
+    Err("未找到 star 按钮（可能已 star / 改版 / 未登录）".to_string())
+}
+
 /// Get nurturing status for an account
 #[tauri::command]
 fn get_account_nurture_status(state: State<AppState>, account_id: String) -> Result<serde_json::Value, String> {
@@ -14208,6 +14323,21 @@ async fn engine_execute(app: &AppHandle, task: &ClaimedTask) -> TaskOutcome {
             if engine_is_dry_run(app) {
                 log::info!("[ENGINE][DRY] 养号演练 {} {} {}s（不真实浏览）", account_id, platform, duration);
                 return TaskOutcome::Success(None);
+            }
+
+            // GitHub 走专属领域社交养号（star/follow/watch + L2 评论），不走通用滚动。
+            if platform.eq_ignore_ascii_case("github") {
+                return match github_nurture_run(app, &account_id, duration).await {
+                    Ok(msg) => { log::info!("[GH-NURTURE] {}", msg); TaskOutcome::Success(None) }
+                    Err(e) if e.contains("未登录") => {
+                        let st = app.state::<AppState>();
+                        if let Ok(c) = st.db.lock() {
+                            let _ = c.execute("UPDATE accounts SET health_status='logged_out', last_health_check=datetime('now') WHERE id=?1", params![account_id]);
+                        }
+                        TaskOutcome::Blocked(e)
+                    }
+                    Err(e) => TaskOutcome::Retry(format!("GitHub 养号失败: {}", e)),
+                };
             }
 
             let started = Utc::now().to_rfc3339();
