@@ -1528,8 +1528,10 @@
   window.pickProvisionPlatforms = pickProvisionPlatforms;
   window.pickGithubDomains = async function(accountId) {
     let cat = [];
+    let current = [];
     try {
       cat = await invoke2("gh_domains_catalog");
+      current = await invoke2("get_account_gh_domains", { accountId });
     } catch (e) {
       showToast("\u52A0\u8F7D\u9886\u57DF\u5931\u8D25: " + e, "error");
       return;
@@ -1541,7 +1543,7 @@
       <div class="modal-header"><h3>\u9009\u62E9 GitHub \u517B\u53F7\u9886\u57DF\uFF08\u53EF\u591A\u9009\uFF09</h3></div>
       <div class="modal-body">
         ${cat.map((d) => `<label style="display:block;margin:6px 0;">
-          <input type="checkbox" value="${d.key}"> ${d.label}
+          <input type="checkbox" value="${d.key}"${current.includes(d.key) ? " checked" : ""}> ${d.label}
           <span style="color:var(--text-muted);font-size:12px;">(${d.topics.slice(0, 4).join(", ")}\u2026)</span>
         </label>`).join("")}
       </div>

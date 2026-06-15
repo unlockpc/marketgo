@@ -1504,7 +1504,11 @@ interface GhDomainItem { key: string; label: string; topics: string[] }
 // GitHub 养号领域多选（按账号）。复用 .modal.active 显示约定。
 (window as any).pickGithubDomains = async function(accountId: string): Promise<void> {
   let cat: GhDomainItem[] = [];
-  try { cat = await invoke<GhDomainItem[]>('gh_domains_catalog'); }
+  let current: string[] = [];
+  try {
+    cat = await invoke<GhDomainItem[]>('gh_domains_catalog');
+    current = await invoke<string[]>('get_account_gh_domains', { accountId });
+  }
   catch (e) { showToast('加载领域失败: ' + e, 'error'); return; }
   const overlay = document.createElement('div');
   overlay.className = 'modal active';
@@ -1513,7 +1517,7 @@ interface GhDomainItem { key: string; label: string; topics: string[] }
       <div class="modal-header"><h3>选择 GitHub 养号领域（可多选）</h3></div>
       <div class="modal-body">
         ${cat.map(d => `<label style="display:block;margin:6px 0;">
-          <input type="checkbox" value="${d.key}"> ${d.label}
+          <input type="checkbox" value="${d.key}"${current.includes(d.key) ? ' checked' : ''}> ${d.label}
           <span style="color:var(--text-muted);font-size:12px;">(${d.topics.slice(0,4).join(', ')}…)</span>
         </label>`).join('')}
       </div>
