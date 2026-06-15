@@ -903,6 +903,72 @@ struct PlatformConfig {
 
 /// 平台分类元数据：场景(scene) / 地区(region) / 开通模式(mode)。
 /// 单一事实来源；前端「开通账号」选择器据此分组与渲染。
+/// GitHub 养号领域分类：key 唯一，topics 为真实高 population 的 GitHub topic。
+/// 单一来源，前端经 gh_domains_catalog 命令拉取渲染多选框。
+pub struct GhDomain {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub topics: &'static [&'static str],
+}
+
+const GH_DOMAINS: &[GhDomain] = &[
+    GhDomain { key: "frontend",  label: "前端",            topics: &["frontend","react","vue","angular","typescript","nextjs","tailwindcss"] },
+    GhDomain { key: "backend",   label: "后端",            topics: &["backend","api","nodejs","golang","spring-boot","microservices","graphql"] },
+    GhDomain { key: "ml",        label: "AI/机器学习",     topics: &["machine-learning","deep-learning","pytorch","tensorflow","nlp","computer-vision","generative-ai"] },
+    GhDomain { key: "ai_coding", label: "AI 编程/Agent/Skills", topics: &["claude","claude-code","mcp","model-context-protocol","ai-agents","langchain","rag","prompt-engineering","github-copilot","cursor","coding-assistant"] },
+    GhDomain { key: "data",      label: "数据工程",        topics: &["data-science","data-engineering","data-analysis","apache-spark","etl","pandas"] },
+    GhDomain { key: "devops",    label: "DevOps/云原生",   topics: &["devops","kubernetes","docker","terraform","ansible","cloud-native","observability"] },
+    GhDomain { key: "mobile",    label: "移动开发",        topics: &["android","ios","flutter","react-native","swift","kotlin","jetpack-compose"] },
+    GhDomain { key: "security",  label: "安全",            topics: &["security","cybersecurity","penetration-testing","cryptography","ethical-hacking","infosec"] },
+    GhDomain { key: "web3",      label: "区块链/Web3",     topics: &["blockchain","ethereum","solidity","web3","smart-contracts","defi"] },
+    GhDomain { key: "gamedev",   label: "游戏开发",        topics: &["gamedev","unity","godot","unreal-engine","game-engine"] },
+    GhDomain { key: "database",  label: "数据库",          topics: &["database","postgresql","mysql","redis","mongodb","sqlite"] },
+    GhDomain { key: "embedded",  label: "嵌入式/IoT",      topics: &["embedded","iot","arduino","raspberry-pi","esp32","microcontroller"] },
+    GhDomain { key: "devtools",  label: "开发工具/效率",   topics: &["cli","developer-tools","vscode","neovim","terminal","automation"] },
+];
+
+/// 收集所选领域 key 对应的全部 topic（按出现顺序去重，未知 key 跳过）。
+fn gh_domain_topics(keys: &[&str]) -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = Vec::new();
+    for k in keys {
+        if let Some(d) = GH_DOMAINS.iter().find(|d| d.key == *k) {
+            for t in d.topics {
+                if !out.contains(t) { out.push(t); }
+            }
+        }
+    }
+    out
+}
+
+/// 按号龄分期返回当日 GitHub L1 配额：(stars, follows, watches)。
+fn gh_daily_quota(phase: &str) -> (i64, i64, i64) {
+    match phase {
+        "growth" => (3, 2, 1),
+        "mature" => (2, 1, 1),
+        _ => (1, 0, 0), // warmup / 未知：极轻
+    }
+}
+
+/// L2（评论）是否解锁：非 warmup、号龄≥7 天、且已有 L1 历史。
+fn gh_l2_allowed(age_days: i64, phase: &str, l1_action_count: i64) -> bool {
+    phase != "warmup" && age_days >= 7 && l1_action_count > 0
+}
+
+/// 从候选里去掉已操作项，用确定性洗牌（seed）挑至多 n 个。
+/// seed 由调用方用时间派生（脚本不可用 rand，引擎里用 get_random_delay 同源时间种子）。
+fn gh_pick_targets(candidates: &[String], already: &std::collections::HashSet<String>, n: usize, seed: u64) -> Vec<String> {
+    let mut pool: Vec<String> = candidates.iter().filter(|c| !already.contains(*c)).cloned().collect();
+    // 简单确定性洗牌（xorshift）：避免引入 rand 依赖，且 seed 相同结果稳定可测。
+    let mut s = seed | 1;
+    for i in (1..pool.len()).rev() {
+        s ^= s << 13; s ^= s >> 7; s ^= s << 17;
+        let j = (s as usize) % (i + 1);
+        pool.swap(i, j);
+    }
+    pool.truncate(n);
+    pool
+}
+
 #[derive(Clone, Copy)]
 struct PlatformMeta {
     scene: &'static str,   // research|product|social|content|career|lifestyle
@@ -16082,5 +16148,76 @@ mod platform_meta_tests {
                 p
             );
         }
+    }
+
+    // ===== GitHub 养号：纯逻辑单元测试 =====
+
+    #[test]
+    fn gh_domains_keys_unique_and_topics_nonempty() {
+        use std::collections::HashSet;
+        let mut seen = HashSet::new();
+        for d in GH_DOMAINS {
+            assert!(seen.insert(d.key), "duplicate domain key {}", d.key);
+            assert!(!d.label.is_empty(), "empty label for {}", d.key);
+            assert!(!d.topics.is_empty(), "no topics for {}", d.key);
+        }
+        for k in ["frontend", "backend", "ml", "ai_coding", "devops"] {
+            assert!(GH_DOMAINS.iter().any(|d| d.key == k), "missing domain {}", k);
+        }
+    }
+
+    #[test]
+    fn gh_domain_topics_collects_and_dedups() {
+        let t = gh_domain_topics(&["frontend", "ai_coding"]);
+        assert!(t.contains(&"react"));
+        assert!(t.contains(&"claude"));
+        let t2 = gh_domain_topics(&["frontend", "unknown_xyz"]);
+        assert!(t2.contains(&"react"));
+        let t3 = gh_domain_topics(&["frontend", "frontend"]);
+        let uniq: std::collections::HashSet<_> = t3.iter().collect();
+        assert_eq!(uniq.len(), t3.len());
+    }
+
+    #[test]
+    fn gh_daily_quota_by_phase() {
+        assert_eq!(gh_daily_quota("warmup"), (1, 0, 0));
+        let (s, f, w) = gh_daily_quota("growth");
+        assert!(s >= 1 && s <= 3 && f <= 2 && w <= 1);
+        let (s2, _, _) = gh_daily_quota("mature");
+        assert!(s2 >= 1);
+        assert_eq!(gh_daily_quota("unknown"), (1, 0, 0));
+    }
+
+    #[test]
+    fn gh_l2_gate() {
+        assert!(!gh_l2_allowed(30, "warmup", 50));
+        assert!(!gh_l2_allowed(6, "growth", 50));
+        assert!(!gh_l2_allowed(10, "growth", 0));
+        assert!(gh_l2_allowed(7, "growth", 5));
+        assert!(gh_l2_allowed(30, "mature", 100));
+    }
+
+    #[test]
+    fn gh_pick_targets_filters_and_limits() {
+        use std::collections::HashSet;
+        let cands = vec![
+            "https://github.com/a/x".to_string(),
+            "https://github.com/b/y".to_string(),
+            "https://github.com/c/z".to_string(),
+        ];
+        let mut already = HashSet::new();
+        already.insert("https://github.com/a/x".to_string());
+        let picked = gh_pick_targets(&cands, &already, 2, 12345);
+        assert!(picked.len() <= 2);
+        assert!(!picked.contains(&"https://github.com/a/x".to_string()));
+        for p in &picked { assert!(cands.contains(p)); }
+    }
+
+    #[test]
+    fn gh_pick_targets_empty_when_all_acted() {
+        use std::collections::HashSet;
+        let cands = vec!["https://github.com/a/x".to_string()];
+        let already: HashSet<String> = cands.iter().cloned().collect();
+        assert!(gh_pick_targets(&cands, &already, 3, 1).is_empty());
     }
 }
