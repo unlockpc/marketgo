@@ -10502,7 +10502,50 @@ async fn github_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -
         }
         tokio::time::sleep(std::time::Duration::from_millis(get_random_delay(60, 180))).await;
     }
-    let _ = (n_follow, n_watch); // Task 7b 接入 follow/watch
+    // follow：对已 star 的 repo follow 其 owner（owner profile = https://github.com/owner）
+    if n_follow > 0 {
+        for repo in chosen.iter().take(n_follow as usize) {
+            let owner_url = repo.rsplitn(2, '/').nth(1).unwrap_or(repo).to_string();
+            if owner_url.matches('/').count() != 3 { continue; } // 仅 https://github.com/owner 形态
+            let acted = {
+                let st = app.state::<AppState>();
+                let locked = st.db.lock().map_err(|e| e.to_string())?;
+                gh_already_acted(&locked, account_id, &owner_url)
+            };
+            if !acted {
+                let u = owner_url.clone();
+                let res = tauri::async_runtime::spawn_blocking(move || gh_follow_user_blocking(&u)).await
+                    .map_err(|e| e.to_string())?;
+                if res.is_ok() {
+                    let st = app.state::<AppState>();
+                    let locked = st.db.lock();
+                    if let Ok(conn) = locked { let _ = gh_record_action(&conn, account_id, "follow", &owner_url); }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(get_random_delay(60, 180))).await;
+            }
+        }
+    }
+    // watch：对第一个 star 的 repo watch（target 用 "<repo>#watch" 与 star 区分）
+    if n_watch > 0 {
+        if let Some(repo) = chosen.first() {
+            let watch_key = format!("{}#watch", repo);
+            let acted = {
+                let st = app.state::<AppState>();
+                let locked = st.db.lock().map_err(|e| e.to_string())?;
+                gh_already_acted(&locked, account_id, &watch_key)
+            };
+            if !acted {
+                let r = repo.clone();
+                let res = tauri::async_runtime::spawn_blocking(move || gh_watch_repo_blocking(&r)).await
+                    .map_err(|e| e.to_string())?;
+                if res.is_ok() {
+                    let st = app.state::<AppState>();
+                    let locked = st.db.lock();
+                    if let Ok(conn) = locked { let _ = gh_record_action(&conn, account_id, "watch", &watch_key); }
+                }
+            }
+        }
+    }
 
     // 6) 写养号统计（与通用养号一致）
     {
@@ -10539,6 +10582,34 @@ fn gh_star_repo_blocking(repo_url: &str) -> Result<(), String> {
         }
     }
     Err("未找到 star 按钮（可能已 star / 改版 / 未登录）".to_string())
+}
+
+/// 在用户 profile 页点 Follow（best-effort，需对照实时 GitHub 校准）。
+fn gh_follow_user_blocking(user_url: &str) -> Result<(), String> {
+    unzoo_navigate(user_url)?;
+    std::thread::sleep(std::time::Duration::from_millis(get_random_delay(2, 5)));
+    for sel in ["form[action$='/follow'] button", "button[aria-label^='Follow']"] {
+        if unzoo_element_exists(sel) {
+            unzoo_click(sel).map_err(|e| format!("点击 follow 失败: {}", e))?;
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            return Ok(());
+        }
+    }
+    Err("未找到 follow 按钮".to_string())
+}
+
+/// 在 repo 页点 Watch（best-effort，需对照实时 GitHub 校准）。
+fn gh_watch_repo_blocking(repo_url: &str) -> Result<(), String> {
+    unzoo_navigate(repo_url)?;
+    std::thread::sleep(std::time::Duration::from_millis(get_random_delay(2, 5)));
+    for sel in ["button[aria-label*='watch' i]", "summary[aria-label*='Notifications']"] {
+        if unzoo_element_exists(sel) {
+            unzoo_click(sel).map_err(|e| format!("点击 watch 失败: {}", e))?;
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            return Ok(());
+        }
+    }
+    Err("未找到 watch 入口".to_string())
 }
 
 /// Get nurturing status for an account
