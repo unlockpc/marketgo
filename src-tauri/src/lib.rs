@@ -1013,6 +1013,13 @@ fn gh_domains_catalog() -> Vec<GhDomainItem> {
     }).collect()
 }
 
+/// 读取某账号已选领域（供前端打开多选框时回勾）。
+#[tauri::command]
+fn get_account_gh_domains(state: State<AppState>, account_id: String) -> Result<Vec<String>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    Ok(account_gh_domains(&conn, &account_id))
+}
+
 /// 保存某账号所选领域（仅保留合法 key）。
 #[tauri::command]
 fn set_account_gh_domains(state: State<AppState>, account_id: String, domains: Vec<String>) -> Result<(), String> {
@@ -10138,6 +10145,7 @@ fn get_account_with_profile(state: State<AppState>, account_id: String) -> Resul
 /// Start nurturing an account - simulates browsing without posting
 #[tauri::command]
 async fn start_account_nurture(
+    app: AppHandle,
     state: State<'_, AppState>,
     account_id: String,
 ) -> Result<String, String> {
@@ -10192,6 +10200,11 @@ async fn start_account_nurture(
 
     set_active_tab(Some(tab_id.clone()));
     log::info!("[NURTURE] Created browser tab: {}", tab_id);
+
+    // GitHub 走专属领域社交养号，不走通用滚动。
+    if platform.eq_ignore_ascii_case("github") {
+        return github_nurture_run(&app, &account_id, 60).await;
+    }
 
     // Step 3: Navigate and simulate browsing.
     // 阻塞版 + spawn_blocking：内部走阻塞 reqwest，绝不能在 async 上下文直接调，
@@ -10375,6 +10388,11 @@ fn check_platform_login_status(platform: &str) -> Result<bool, String> {
         Ok(false)
     } else if logged_in_count >= 2 {
         Ok(true)
+    } else if logged_out_count == 0 && logged_in_count >= 1 {
+        // 没有任何「请登录/注册」提示 + 至少一个登录后标志 → 判为已登录。
+        // 修复：现代站点（如 GitHub 新版导航）前 3000 字常只露出 1 个登录后关键词，
+        // 旧阈值「≥2 才算登录」会把已登录账号误判为未登录。
+        Ok(true)
     } else {
         // Ambiguous - assume logged out for safety
         log::warn!("[LOGIN CHECK] Ambiguous login status for {}, assuming not logged in", platform);
@@ -10430,6 +10448,7 @@ fn simulate_browsing_blocking(platform: &str, duration_seconds: i64) -> Result<i
 /// 浏览器调用走 spawn_blocking（阻塞 reqwest 不能在 async 直接调，见项目约定）。
 /// follow/watch 见同文件 follow/watch 助手（Task 7b 接入）；L2 评论见末尾（Task 9）。
 async fn github_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Result<String, String> {
+    let session_start = std::time::Instant::now();
     // 1) 读领域 + 分期
     let (domains, phase) = {
         let st = app.state::<AppState>();
@@ -10475,6 +10494,8 @@ async fn github_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -
             if segs.len() == 2 { Some(format!("https://github.com/{}/{}", segs[0], segs[1])) } else { None }
         }).collect();
     repos.dedup();
+    log::info!("[GH-NURTURE] topic={} 采到 {} 个候选 repo, phase={}, 配额(star/follow/watch)={}/{}/{}",
+        topic, repos.len(), phase, n_star, n_follow, n_watch);
 
     // 4) DB 过滤：本账号已操作 + 跨账号触碰过多（≥3 个 persona）→ 排除
     let chosen: Vec<String> = {
@@ -10488,6 +10509,7 @@ async fn github_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -
         }
         gh_pick_targets(&repos, &already, n_star.max(1) as usize, seed)
     };
+    log::info!("[GH-NURTURE] 过滤后选中 {} 个 repo 准备 star: {:?}", chosen.len(), chosen);
 
     // 5) 浏览器：逐个 star（含拟人间隔）
     let mut done = 0i64;
@@ -10596,69 +10618,77 @@ async fn github_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -
         }
     }
 
-    // 6) 写养号统计（与通用养号一致）
+    // 6) 写养号统计（如实记录本次耗时 + 累加总时长，与通用养号一致）
+    let elapsed_secs = session_start.elapsed().as_secs() as i64;
     {
         let st = app.state::<AppState>();
         let locked = st.db.lock(); // 绑定到 locked，确保其借用在 st 之前释放
         if let Ok(conn) = locked {
             let now = Utc::now().to_rfc3339();
             let today = Local::now().format("%Y-%m-%d").to_string();
-            let _ = conn.execute("UPDATE accounts SET last_nurture_at=?1, health_status='healthy', last_health_check=?1 WHERE id=?2", params![now, account_id]);
             let _ = conn.execute(
-                "INSERT INTO nurture_daily_logs (id, account_id, date, sessions_completed, total_seconds) VALUES (?1,?2,?3,1,0) \
-                 ON CONFLICT(account_id,date) DO UPDATE SET sessions_completed=sessions_completed+1",
-                params![Uuid::new_v4().to_string(), account_id, today]);
+                "UPDATE accounts SET nurture_started_at=COALESCE(nurture_started_at,?1), last_nurture_at=?1, \
+                 total_nurture_seconds=COALESCE(total_nurture_seconds,0)+?2, health_status='healthy', last_health_check=?1 WHERE id=?3",
+                params![now, elapsed_secs, account_id]);
+            let _ = conn.execute(
+                "INSERT INTO nurture_daily_logs (id, account_id, date, sessions_completed, total_seconds) VALUES (?1,?2,?3,1,?4) \
+                 ON CONFLICT(account_id,date) DO UPDATE SET sessions_completed=sessions_completed+1, total_seconds=total_seconds+?4",
+                params![Uuid::new_v4().to_string(), account_id, today, elapsed_secs]);
         }
     }
-    Ok(format!("GitHub 养号完成：topic={} star={}", topic, done))
+    log::info!("[GH-NURTURE] account={} topic={} star={} 耗时={}s", account_id, topic, done, elapsed_secs);
+    Ok(format!("GitHub 养号完成：topic={} star={} 用时{}s", topic, done, elapsed_secs))
 }
 
-/// 在 repo 页点 Star（best-effort 选择器，需对照实时 GitHub 校准）。
-/// 已 star 时按钮文案为 Unstar/Starred，选择器只匹配 "Star ..." 以免误取消。
+/// 依次尝试一组选择器，命中即点击；全程打日志，便于对照实时 GitHub 校准选择器。
+fn gh_click_first(action: &str, url: &str, selectors: &[&str]) -> Result<String, String> {
+    log::info!("[GH-ACTION] {} 目标={}", action, url);
+    for sel in selectors {
+        let exists = unzoo_element_exists(sel);
+        log::info!("[GH-ACTION] {} 选择器 '{}' 存在={}", action, sel, exists);
+        if exists {
+            unzoo_click(sel).map_err(|e| format!("{} 点击失败({}): {}", action, sel, e))?;
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            log::info!("[GH-ACTION] {} ✓ 已点击 '{}'", action, sel);
+            return Ok(sel.to_string());
+        }
+    }
+    Err(format!("{} 未命中任何选择器（已试 {} 个，可能已操作/改版/未登录）", action, selectors.len()))
+}
+
+/// 在 repo 页点 Star（已 star 时按钮文案为 Unstar，选择器只匹配未 star 态以免误取消）。
 fn gh_star_repo_blocking(repo_url: &str) -> Result<(), String> {
     unzoo_navigate(repo_url)?;
     std::thread::sleep(std::time::Duration::from_millis(get_random_delay(2, 5)));
-    let star_selectors = [
+    gh_click_first("star", repo_url, &[
         "button[aria-label^='Star this']",
         "button[aria-label^='Star ']",
         "form[action$='/star'] button",
-    ];
-    for sel in star_selectors {
-        if unzoo_element_exists(sel) {
-            unzoo_click(sel).map_err(|e| format!("点击 star 失败: {}", e))?;
-            std::thread::sleep(std::time::Duration::from_millis(800));
-            return Ok(());
-        }
-    }
-    Err("未找到 star 按钮（可能已 star / 改版 / 未登录）".to_string())
+        ".starring-container.unstarred button",
+        "[data-testid='star-button']",
+    ]).map(|_| ())
 }
 
-/// 在用户 profile 页点 Follow（best-effort，需对照实时 GitHub 校准）。
+/// 在用户 profile 页点 Follow。
 fn gh_follow_user_blocking(user_url: &str) -> Result<(), String> {
     unzoo_navigate(user_url)?;
     std::thread::sleep(std::time::Duration::from_millis(get_random_delay(2, 5)));
-    for sel in ["form[action$='/follow'] button", "button[aria-label^='Follow']"] {
-        if unzoo_element_exists(sel) {
-            unzoo_click(sel).map_err(|e| format!("点击 follow 失败: {}", e))?;
-            std::thread::sleep(std::time::Duration::from_millis(800));
-            return Ok(());
-        }
-    }
-    Err("未找到 follow 按钮".to_string())
+    gh_click_first("follow", user_url, &[
+        "form[action$='/follow'] button",
+        "button[aria-label^='Follow']",
+        "[data-testid='follow-button']",
+    ]).map(|_| ())
 }
 
-/// 在 repo 页点 Watch（best-effort，需对照实时 GitHub 校准）。
+/// 在 repo 页点 Watch。
 fn gh_watch_repo_blocking(repo_url: &str) -> Result<(), String> {
     unzoo_navigate(repo_url)?;
     std::thread::sleep(std::time::Duration::from_millis(get_random_delay(2, 5)));
-    for sel in ["button[aria-label*='watch' i]", "summary[aria-label*='Notifications']"] {
-        if unzoo_element_exists(sel) {
-            unzoo_click(sel).map_err(|e| format!("点击 watch 失败: {}", e))?;
-            std::thread::sleep(std::time::Duration::from_millis(800));
-            return Ok(());
-        }
-    }
-    Err("未找到 watch 入口".to_string())
+    gh_click_first("watch", repo_url, &[
+        "button[aria-label*='watch' i]",
+        "summary[aria-label*='Notifications']",
+        "[data-testid='watch-button']",
+    ]).map(|_| ())
 }
 
 /// 良性、不带推广意图的短评论（养号阶段建立真人感，绝不带链接/产品）。
@@ -10823,6 +10853,7 @@ fn list_accounts_with_nurture_status(state: State<AppState>) -> Result<Vec<serde
 /// Quick nurture - run a short browsing session
 #[tauri::command]
 async fn quick_nurture(
+    app: AppHandle,
     state: State<'_, AppState>,
     account_id: String,
     seconds: i64,
@@ -10890,6 +10921,11 @@ async fn quick_nurture(
     };
 
     set_active_tab(Some(tab_id));
+
+    // GitHub 走专属领域社交养号（按领域 star/follow/watch + L2），不走通用滚动。
+    if platform.eq_ignore_ascii_case("github") {
+        return github_nurture_run(&app, &account_id, seconds).await;
+    }
 
     // Simulate browsing for specified duration.
     // 走阻塞版 + spawn_blocking（阻塞 reqwest 不能在 async 里直接调，否则导航 panic、tab 空白不操作）。
@@ -16347,6 +16383,7 @@ pub fn run() {
             get_nurture_overview,
             enqueue_nurture,
             gh_domains_catalog,
+            get_account_gh_domains,
             set_account_gh_domains,
             list_leads,
             update_lead_status,
