@@ -1000,6 +1000,32 @@ fn account_gh_domains(conn: &Connection, account_id: &str) -> Vec<String> {
     raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok()).unwrap_or_default()
 }
 
+#[derive(serde::Serialize)]
+pub struct GhDomainItem { pub key: String, pub label: String, pub topics: Vec<String> }
+
+/// 给前端渲染领域多选框。
+#[tauri::command]
+fn gh_domains_catalog() -> Vec<GhDomainItem> {
+    GH_DOMAINS.iter().map(|d| GhDomainItem {
+        key: d.key.to_string(),
+        label: d.label.to_string(),
+        topics: d.topics.iter().map(|t| t.to_string()).collect(),
+    }).collect()
+}
+
+/// 保存某账号所选领域（仅保留合法 key）。
+#[tauri::command]
+fn set_account_gh_domains(state: State<AppState>, account_id: String, domains: Vec<String>) -> Result<(), String> {
+    let valid: Vec<String> = domains.into_iter()
+        .filter(|k| GH_DOMAINS.iter().any(|d| d.key == k))
+        .collect();
+    let json = serde_json::to_string(&valid).map_err(|e| e.to_string())?;
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    conn.execute("UPDATE accounts SET gh_domains=?1 WHERE id=?2", params![json, account_id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 struct PlatformMeta {
     scene: &'static str,   // research|product|social|content|career|lifestyle
@@ -16057,6 +16083,8 @@ pub fn run() {
             reject_reply,
             get_nurture_overview,
             enqueue_nurture,
+            gh_domains_catalog,
+            set_account_gh_domains,
             list_leads,
             update_lead_status,
             get_marketing_stats,
