@@ -16,9 +16,10 @@
 
 ### L1 / L2 定义
 
+- **profile 补全 —— 人工手动（不自动化）**
+  - Name / Bio（及可选头像、profile README）由人工填好，养号引擎不碰 profile 设置。空 profile 的号不应进入 L2 评论（见 L2 解锁闸门），由人工保证 profile 就绪。
 - **L1 —— 社交信号（日常，低频）**
-  - 一次性 profile 补全（`gh_profile_setup` 标记）：设置 Name + Bio。头像 / profile README 为可选，先不强求（上传类 DOM 操作脆弱）。
-  - 每个活跃日的动作池（随机化，不固定套路）：浏览 home/explore/trending（拟人停留）、star 1~3 个领域内 repo、follow 0~2 个开发者、watch 0~1 个 repo。
+  - 纯日常社交动作，无一次性步骤：每个活跃日的动作池（随机化，不固定套路）——浏览 home/explore/trending（拟人停留）、star 1~3 个领域内 repo、follow 0~2 个开发者、watch 0~1 个 repo。
 - **L2 —— 真实互动（偶尔，更克制）**
   - 在已有 Issues/Discussions 下发**良性短评论**（如「同样遇到这个问题」「按这个方法解决了，谢谢」），LLM 生成 + 审核闸门，**不带任何推广意图**（推广是独立环节）。
   - 频率按周计（每周 2~4 条），只在已有线程评论、不主动开 issue。
@@ -82,10 +83,9 @@ nurture 调度器（现有, 7×24, 活跃时段 + 最小间隔 + per-persona 隔
 
 ## 6. 数据模型（最小改动）
 
-- `accounts` 加两列：
+- `accounts` 加一列：
   - `gh_domains` —— 所选领域 key 的 JSON 数组。
-  - `gh_profile_setup` —— bool，一次性 profile 是否已补全。
-  - **不加 token 列**。
+  - **不加 token 列**；profile 完整度由人工保证、不入库（不加 `gh_profile_setup`）。
 - 新表 `gh_actions_log(id, account_id, action_type, target, date, created_at)` —— 节奏控制 + 去重 + 跨账号去同质化。
 - `GH_DOMAINS` 静态常量（key/label/topics）+ 一个返回它的 Tauri 命令供前端渲染多选框。
 
@@ -109,7 +109,7 @@ nurture 调度器（现有, 7×24, 活跃时段 + 最小间隔 + per-persona 隔
 
 - 不做 L3 contribution 绿格 / commit。
 - 不引入 GitHub API / PAT / token 存储 / SSH。
-- 不做头像自动上传（可选、后续再说）。
+- 不做自动 profile 补全（Name/Bio/头像/profile README 均由人工手动完成）。
 - 不在养号阶段做任何推广（推广是独立环节）。
 
 ## 10. 待定 / 需用户输入
