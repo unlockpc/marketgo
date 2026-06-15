@@ -1499,6 +1499,41 @@ function pickProvisionPlatforms(email: string, catalog: CatalogItem[]): Promise<
 }
 (window as any).pickProvisionPlatforms = pickProvisionPlatforms;
 
+interface GhDomainItem { key: string; label: string; topics: string[] }
+
+// GitHub 养号领域多选（按账号）。复用 .modal.active 显示约定。
+(window as any).pickGithubDomains = async function(accountId: string): Promise<void> {
+  let cat: GhDomainItem[] = [];
+  try { cat = await invoke<GhDomainItem[]>('gh_domains_catalog'); }
+  catch (e) { showToast('加载领域失败: ' + e, 'error'); return; }
+  const overlay = document.createElement('div');
+  overlay.className = 'modal active';
+  overlay.innerHTML = `
+    <div class="modal-content">
+      <div class="modal-header"><h3>选择 GitHub 养号领域（可多选）</h3></div>
+      <div class="modal-body">
+        ${cat.map(d => `<label style="display:block;margin:6px 0;">
+          <input type="checkbox" value="${d.key}"> ${d.label}
+          <span style="color:var(--text-muted);font-size:12px;">(${d.topics.slice(0,4).join(', ')}…)</span>
+        </label>`).join('')}
+      </div>
+      <div class="modal-footer">
+        <button class="btn" id="ghDomCancel">取消</button>
+        <button class="btn btn-success" id="ghDomSave">保存</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#ghDomCancel')!.addEventListener('click', () => overlay.remove());
+  overlay.querySelector('#ghDomSave')!.addEventListener('click', async () => {
+    const keys = Array.from(overlay.querySelectorAll<HTMLInputElement>('input:checked')).map(i => i.value);
+    try {
+      await invoke('set_account_gh_domains', { accountId, domains: keys });
+      showToast('GitHub 领域已保存', 'success');
+      overlay.remove();
+    } catch (e) { showToast('保存失败: ' + e, 'error'); }
+  });
+};
+
 // ===== #4 加账号：手机号 / 账号密码 分区录入凭据 =====
 interface AddAcctEntry { platform: string; username: string; password: string; }
 
@@ -2909,6 +2944,7 @@ function renderAccountCard(account: any): string {
         <div class="account-actions">
           <button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="自动登录：查登录→Google登录→否则注册">🔑 自动登录</button>
           <button class="btn btn-small btn-success" data-nurture-account="${account.id}" onclick="openNurtureModal('${account.id}', '${escapeHtml(account.platform)}', '${escapeHtml(account.username || account.email || 'N/A')}')" title="${t('nurture.quickNurture')}">🌱 ${t('nurture.quickNurture')}</button>
+          ${account.platform === 'github' ? `<button class="btn btn-small btn-secondary" onclick="pickGithubDomains('${account.id}')" title="选择 GitHub 养号领域">🎯 领域</button>` : ''}
           ${stage === 'new' ? `<button class="btn btn-small btn-warning" onclick="startWarmup('${account.id}')" title="开始养号">🔥 开始养号</button>` : ''}
           ${stage !== 'active' ? `<button class="btn btn-small btn-secondary" onclick="finishAccountNurture('${account.id}')" title="老账号无需养号，直接标为正常">✅ ${t('nurture.finishBtn')}</button>` : ''}
         </div>
