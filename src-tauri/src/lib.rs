@@ -969,6 +969,37 @@ fn gh_pick_targets(candidates: &[String], already: &std::collections::HashSet<St
     pool
 }
 
+/// 该账号是否已对某 target 执行过任何 GitHub 动作。
+fn gh_already_acted(conn: &Connection, account_id: &str, target: &str) -> bool {
+    conn.query_row(
+        "SELECT 1 FROM gh_actions_log WHERE account_id=?1 AND target=?2 LIMIT 1",
+        params![account_id, target], |_| Ok(true)).unwrap_or(false)
+}
+
+/// 记一条 GitHub 动作。
+fn gh_record_action(conn: &Connection, account_id: &str, action_type: &str, target: &str) -> Result<(), String> {
+    let today = Local::now().format("%Y-%m-%d").to_string();
+    conn.execute(
+        "INSERT INTO gh_actions_log (id, account_id, action_type, target, date) VALUES (?1,?2,?3,?4,?5)",
+        params![Uuid::new_v4().to_string(), account_id, action_type, target, today])
+        .map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// 有多少个不同账号触碰过该 target（跨账号去同质化用）。
+fn gh_target_persona_count(conn: &Connection, target: &str) -> i64 {
+    conn.query_row(
+        "SELECT COUNT(DISTINCT account_id) FROM gh_actions_log WHERE target=?1",
+        params![target], |r| r.get(0)).unwrap_or(0)
+}
+
+/// 读账号所选领域（gh_domains JSON 数组），解析失败/空 → 空 vec。
+fn account_gh_domains(conn: &Connection, account_id: &str) -> Vec<String> {
+    let raw: Option<String> = conn.query_row(
+        "SELECT gh_domains FROM accounts WHERE id=?1",
+        params![account_id], |r| r.get(0)).ok().flatten();
+    raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok()).unwrap_or_default()
+}
+
 #[derive(Clone, Copy)]
 struct PlatformMeta {
     scene: &'static str,   // research|product|social|content|career|lifestyle
@@ -3206,6 +3237,18 @@ fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             actions_performed TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
+
+        -- GitHub 养号动作日志（节奏控制 + 去重 + 跨账号去同质化）
+        CREATE TABLE IF NOT EXISTS gh_actions_log (
+            id TEXT PRIMARY KEY,
+            account_id TEXT NOT NULL,
+            action_type TEXT NOT NULL,   -- star | follow | watch | comment
+            target TEXT NOT NULL,        -- repo/user/thread 的 URL
+            date TEXT NOT NULL,          -- YYYY-MM-DD
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_gh_actions_acct ON gh_actions_log(account_id, action_type);
+        CREATE INDEX IF NOT EXISTS idx_gh_actions_target ON gh_actions_log(target);
         "
     )
 }
@@ -3241,6 +3284,9 @@ fn run_migrations(conn: &Connection) -> rusqlite::Result<()> {
         let _ = conn.execute("ALTER TABLE accounts ADD COLUMN total_nurture_seconds INTEGER DEFAULT 0", []);
         let _ = conn.execute("ALTER TABLE accounts ADD COLUMN last_nurture_at TEXT", []);
     }
+
+    // GitHub 养号：所选领域（JSON 数组）。幂等，已存在则忽略错误。
+    let _ = conn.execute("ALTER TABLE accounts ADD COLUMN gh_domains TEXT", []);
 
     // Check if nurture_strategies table exists and add default strategies
     let has_nurture_strategies: bool = conn
@@ -16219,5 +16265,49 @@ mod platform_meta_tests {
         let cands = vec!["https://github.com/a/x".to_string()];
         let already: HashSet<String> = cands.iter().cloned().collect();
         assert!(gh_pick_targets(&cands, &already, 3, 1).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod gh_db_tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    fn setup() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch("
+            CREATE TABLE accounts (id TEXT PRIMARY KEY, gh_domains TEXT);
+            CREATE TABLE gh_actions_log (id TEXT PRIMARY KEY, account_id TEXT, action_type TEXT, target TEXT, date TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        ").unwrap();
+        c
+    }
+
+    #[test]
+    fn record_and_already_acted() {
+        let c = setup();
+        let tgt = "https://github.com/a/x";
+        assert!(!gh_already_acted(&c, "acc1", tgt));
+        gh_record_action(&c, "acc1", "star", tgt).unwrap();
+        assert!(gh_already_acted(&c, "acc1", tgt));
+        assert!(!gh_already_acted(&c, "acc2", tgt));
+    }
+
+    #[test]
+    fn target_persona_count_cross_account() {
+        let c = setup();
+        let tgt = "https://github.com/a/x";
+        gh_record_action(&c, "acc1", "star", tgt).unwrap();
+        gh_record_action(&c, "acc2", "star", tgt).unwrap();
+        gh_record_action(&c, "acc2", "star", tgt).unwrap();
+        assert_eq!(gh_target_persona_count(&c, tgt), 2);
+    }
+
+    #[test]
+    fn read_account_domains() {
+        let c = setup();
+        c.execute("INSERT INTO accounts (id, gh_domains) VALUES ('acc1', '[\"frontend\",\"ai_coding\"]')", []).unwrap();
+        let d = account_gh_domains(&c, "acc1");
+        assert_eq!(d, vec!["frontend".to_string(), "ai_coding".to_string()]);
+        assert!(account_gh_domains(&c, "nope").is_empty());
     }
 }
