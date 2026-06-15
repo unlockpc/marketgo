@@ -10547,6 +10547,55 @@ async fn github_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -
         }
     }
 
+    // 5.5) L2：满足闸门时，在所选领域 repo 的某 Issue 下入一条良性评论（review 模式入审核队列）
+    {
+        let st = app.state::<AppState>();
+        let (age, l1_count, mode) = {
+            let conn = st.db.lock().map_err(|e| e.to_string())?;
+            let created: Option<String> = conn.query_row("SELECT created_at FROM accounts WHERE id=?1", params![account_id], |r| r.get(0)).ok().flatten();
+            let age = created.as_deref().and_then(parse_dt).map(|c| (Utc::now() - c).num_days()).unwrap_or(0);
+            let l1: i64 = conn.query_row("SELECT COUNT(*) FROM gh_actions_log WHERE account_id=?1 AND action_type IN ('star','follow','watch')", params![account_id], |r| r.get(0)).unwrap_or(0);
+            (age, l1, engine_reply_mode(&conn))
+        };
+        let weekly: i64 = {
+            let conn = st.db.lock().map_err(|e| e.to_string())?;
+            conn.query_row("SELECT COUNT(*) FROM gh_actions_log WHERE account_id=?1 AND action_type='comment' AND date >= date('now','-7 day')", params![account_id], |r| r.get(0)).unwrap_or(0)
+        };
+        if gh_l2_allowed(age, &phase, l1_count) && weekly < 3 {
+            if let Some(repo) = chosen.first() {
+                let issues_url = format!("{}/issues?q=is%3Aissue+is%3Aopen", repo);
+                let thread = tauri::async_runtime::spawn_blocking(move || {
+                    unzoo_navigate(&issues_url)?;
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                    let links = unzoo_get_links("a[href*='/issues/']")?;
+                    Ok::<Option<String>, String>(links.into_iter().find(|h| h.contains("/issues/") && h.chars().filter(|c| *c=='/').count() >= 6))
+                }).await.map_err(|e| e.to_string())??;
+                if let Some(thread_url) = thread {
+                    let already = {
+                        let locked = st.db.lock().map_err(|e| e.to_string())?;
+                        gh_already_acted(&locked, account_id, &thread_url)
+                    };
+                    if !already {
+                        let text = gh_benign_comment(seed);
+                        if mode == "auto" {
+                            let tu = thread_url.clone(); let tx = text.clone();
+                            let _ = tauri::async_runtime::spawn_blocking(move || post_reply_to_url("github", &tu, &tx)).await.map_err(|e| e.to_string())?;
+                        } else {
+                            let locked = st.db.lock();
+                            if let Ok(conn) = locked {
+                                let _ = conn.execute(
+                                    "INSERT INTO reply_history (id, platform, post_url, reply_content, status) VALUES (?1,'github',?2,?3,'pending_review')",
+                                    params![Uuid::new_v4().to_string(), thread_url, text]);
+                            }
+                        }
+                        let locked = st.db.lock();
+                        if let Ok(conn) = locked { let _ = gh_record_action(&conn, account_id, "comment", &thread_url); }
+                    }
+                }
+            }
+        }
+    }
+
     // 6) 写养号统计（与通用养号一致）
     {
         let st = app.state::<AppState>();
@@ -10610,6 +10659,19 @@ fn gh_watch_repo_blocking(repo_url: &str) -> Result<(), String> {
         }
     }
     Err("未找到 watch 入口".to_string())
+}
+
+/// 良性、不带推广意图的短评论（养号阶段建立真人感，绝不带链接/产品）。
+fn gh_benign_comment(seed: u64) -> String {
+    const POOL: &[&str] = &[
+        "Ran into the same thing — thanks for documenting this.",
+        "This worked for me, appreciate the write-up.",
+        "Nice, the explanation here is really clear.",
+        "Confirmed on my side too. Helpful, thanks!",
+        "Subscribing — running into something similar.",
+        "Great repo, learned a lot reading through this.",
+    ];
+    POOL[(seed as usize) % POOL.len()].to_string()
 }
 
 /// Get nurturing status for an account
@@ -16494,6 +16556,16 @@ mod platform_meta_tests {
         let cands = vec!["https://github.com/a/x".to_string()];
         let already: HashSet<String> = cands.iter().cloned().collect();
         assert!(gh_pick_targets(&cands, &already, 3, 1).is_empty());
+    }
+
+    #[test]
+    fn gh_benign_comment_is_nonpromotional() {
+        for i in 0..6 {
+            let c = gh_benign_comment(i);
+            assert!(!c.is_empty());
+            assert!(!c.contains("http")); // 不带链接/推广
+        }
+        assert_ne!(gh_benign_comment(0), gh_benign_comment(1));
     }
 }
 
