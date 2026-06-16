@@ -3371,9 +3371,13 @@
     }
     const statusEl = document.getElementById("nurtureStatusText");
     if (statusEl) {
-      const elapsedMins = Math.floor(elapsed / 60);
-      const elapsedSecs = elapsed % 60;
-      statusEl.innerHTML = `<span class="spinner-small"></span> ${t("nurture.running")} - ${elapsedMins}:${elapsedSecs.toString().padStart(2, "0")} / ${Math.floor(nurtureTotalSeconds / 60)}:${(nurtureTotalSeconds % 60).toString().padStart(2, "0")}`;
+      if (remaining === 0) {
+        statusEl.innerHTML = `<span class="spinner-small"></span> \u517B\u53F7\u8FDB\u884C\u4E2D\u2026\uFF08\u540E\u53F0\u6267\u884C\u52A8\u4F5C\uFF0C\u5B8C\u6210\u540E\u81EA\u52A8\u5173\u95ED\uFF09`;
+      } else {
+        const elapsedMins = Math.floor(elapsed / 60);
+        const elapsedSecs = elapsed % 60;
+        statusEl.innerHTML = `<span class="spinner-small"></span> ${t("nurture.running")} - ${elapsedMins}:${elapsedSecs.toString().padStart(2, "0")} / ${Math.floor(nurtureTotalSeconds / 60)}:${(nurtureTotalSeconds % 60).toString().padStart(2, "0")}`;
+      }
     }
     if (currentNurtureTaskId) {
       const task = tasks.find((t2) => t2.id === currentNurtureTaskId);

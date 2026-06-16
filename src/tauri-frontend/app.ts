@@ -3634,9 +3634,14 @@ function updateNurtureTimer() {
   // Update status text
   const statusEl = document.getElementById('nurtureStatusText');
   if (statusEl) {
-    const elapsedMins = Math.floor(elapsed / 60);
-    const elapsedSecs = elapsed % 60;
-    statusEl.innerHTML = `<span class="spinner-small"></span> ${t('nurture.running')} - ${elapsedMins}:${elapsedSecs.toString().padStart(2, '0')} / ${Math.floor(nurtureTotalSeconds / 60)}:${(nurtureTotalSeconds % 60).toString().padStart(2, '0')}`;
+    if (remaining === 0) {
+      // 动作驱动养号(GitHub/X)实际时长由动作决定，常超过设定时长 → 倒计时归零后不再显示误导计数
+      statusEl.innerHTML = `<span class="spinner-small"></span> 养号进行中…（后台执行动作，完成后自动关闭）`;
+    } else {
+      const elapsedMins = Math.floor(elapsed / 60);
+      const elapsedSecs = elapsed % 60;
+      statusEl.innerHTML = `<span class="spinner-small"></span> ${t('nurture.running')} - ${elapsedMins}:${elapsedSecs.toString().padStart(2, '0')} / ${Math.floor(nurtureTotalSeconds / 60)}:${(nurtureTotalSeconds % 60).toString().padStart(2, '0')}`;
+    }
   }
 
   // Update task progress in Tasks page
