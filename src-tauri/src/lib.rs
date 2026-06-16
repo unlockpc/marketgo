@@ -10420,6 +10420,9 @@ async fn start_account_nurture(
     if platform.eq_ignore_ascii_case("github") {
         return github_nurture_run(&app, &account_id, 60).await;
     }
+    if platform.eq_ignore_ascii_case("twitter") || platform.eq_ignore_ascii_case("x") {
+        return x_nurture_run(&app, &account_id, 60).await;
+    }
 
     // Step 3: Navigate and simulate browsing.
     // 阻塞版 + spawn_blocking：内部走阻塞 reqwest，绝不能在 async 上下文直接调，
@@ -10855,6 +10858,180 @@ async fn github_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -
     Ok(format!("GitHub 养号完成：topic={} star={} 用时{}s", topic, done, elapsed_secs))
 }
 
+/// X 养号：按方向取关键词→搜索采推文/用户→去重选取→点赞/关注/转推/回复 + 极少原创。
+async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Result<String, String> {
+    let session_start = std::time::Instant::now();
+    // 1) 读方向 + 分期
+    let (niches, phase) = {
+        let st = app.state::<AppState>();
+        let conn = st.db.lock().map_err(|e| e.to_string())?;
+        let niches = account_x_niches(&conn, account_id);
+        let created: Option<String> = conn.query_row("SELECT created_at FROM accounts WHERE id=?1", params![account_id], |r| r.get(0)).ok().flatten();
+        let age = created.as_deref().and_then(parse_dt).map(|c| (Utc::now() - c).num_days()).unwrap_or(0);
+        let strat = conn.query_row("SELECT warmup_days, daily_sessions_min, daily_sessions_max FROM nurture_strategies WHERE platform='twitter'",
+            [], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,i64>(1)?, r.get::<_,i64>(2)?))).ok();
+        let (warmup, smin, smax) = strat.unwrap_or((21, 2, 4));
+        let (phase, _t) = nurture_phase_and_target(age, warmup, smin, smax);
+        (niches, phase.to_string())
+    };
+    if niches.is_empty() {
+        return Ok("账号未选方向，跳过 X 养号".to_string());
+    }
+    let (n_like, n_follow, n_engage) = x_daily_quota(&phase);
+
+    // 2) 选方向 → 关键词
+    let keys: Vec<&str> = niches.iter().map(|s| s.as_str()).collect();
+    let kws = x_niche_keywords(&keys);
+    if kws.is_empty() { return Ok("方向无可用关键词".to_string()); }
+    let seed = get_random_delay(1, 100_000);
+    let kw = kws[(seed as usize) % kws.len()];
+
+    // 3) 浏览器：搜索最新推文，采 permalink
+    let kw_q = kw.replace(' ', "%20");
+    let tweet_links: Vec<String> = tauri::async_runtime::spawn_blocking(move || {
+        let url = format!("https://x.com/search?q={}&f=live", kw_q);
+        unzoo_navigate(&url)?;
+        std::thread::sleep(std::time::Duration::from_secs(4));
+        if !check_platform_login_status("twitter").unwrap_or(false) {
+            return Err("未登录 twitter".to_string());
+        }
+        unzoo_get_links("a[href*='/status/']")
+    }).await.map_err(|e| format!("采集异常: {}", e))??;
+
+    // 规范化为 https://x.com/<user>/status/<id>
+    let mut tweets: Vec<String> = tweet_links.into_iter().filter_map(|h| {
+        let idx = h.find("/status/")?;
+        let after = &h[idx + "/status/".len()..];
+        let id: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if id.is_empty() { return None; }
+        let head = &h[..idx];
+        Some(format!("{}/status/{}", head.trim_end_matches('/'), id))
+    }).collect();
+    tweets.sort(); tweets.dedup();
+    log::info!("[X-NURTURE] kw={} 采到 {} 条推文, phase={}, 配额(like/follow/engage)={}/{}/{}",
+        kw, tweets.len(), phase, n_like, n_follow, n_engage);
+
+    // 4) DB 过滤（本账号已操作 + 跨账号≥3）
+    let chosen: Vec<String> = {
+        let st = app.state::<AppState>();
+        let conn = st.db.lock().map_err(|e| e.to_string())?;
+        let mut already = std::collections::HashSet::new();
+        for t in &tweets {
+            if x_already_acted(&conn, account_id, t) || x_target_persona_count(&conn, t) >= 3 {
+                already.insert(t.clone());
+            }
+        }
+        gh_pick_targets(&tweets, &already, n_like.max(1) as usize, seed)
+    };
+
+    // 5) L1 点赞
+    let mut likes = 0i64;
+    for t in &chosen {
+        let tc = t.clone();
+        let r = tauri::async_runtime::spawn_blocking(move || x_like_blocking(&tc)).await.map_err(|e| e.to_string())?;
+        if r.is_ok() {
+            let st = app.state::<AppState>();
+            let locked = st.db.lock();
+            if let Ok(conn) = locked { let _ = x_record_action(&conn, account_id, "like", t); }
+            likes += 1;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(get_random_delay(60, 180))).await;
+    }
+
+    // 6) L1 关注（被赞推文的作者 profile）
+    let mut follows = 0i64;
+    if n_follow > 0 {
+        for t in chosen.iter().take(n_follow as usize) {
+            let prof = t.split("/status/").next().unwrap_or("").to_string();
+            if prof.matches('/').count() != 3 { continue; }
+            let acted = { let st = app.state::<AppState>(); let l = st.db.lock().map_err(|e| e.to_string())?; x_already_acted(&l, account_id, &prof) };
+            if acted { continue; }
+            let p = prof.clone();
+            let r = tauri::async_runtime::spawn_blocking(move || x_follow_blocking(&p)).await.map_err(|e| e.to_string())?;
+            if r.is_ok() {
+                let st = app.state::<AppState>(); let l = st.db.lock();
+                if let Ok(conn) = l { let _ = x_record_action(&conn, account_id, "follow", &prof); }
+                follows += 1;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(get_random_delay(90, 240))).await;
+        }
+    }
+
+    // 7a) L2：engage 预算内，对部分已点赞推文转推/回复（偶数转推、奇数回复）
+    let mut engages = 0i64;
+    if n_engage > 0 {
+        for (i, t) in chosen.iter().take(n_engage as usize).enumerate() {
+            let key = format!("{}#engage", t);
+            let acted = { let st = app.state::<AppState>(); let l = st.db.lock().map_err(|e| e.to_string())?; x_already_acted(&l, account_id, &key) };
+            if acted { continue; }
+            let tc = t.clone();
+            let r = if i % 2 == 0 {
+                tauri::async_runtime::spawn_blocking(move || x_retweet_blocking(&tc)).await.map_err(|e| e.to_string())?
+            } else {
+                let txt = x_benign_tweet(seed.wrapping_add(i as u64));
+                tauri::async_runtime::spawn_blocking(move || x_reply_blocking(&tc, &txt)).await.map_err(|e| e.to_string())?
+            };
+            if r.is_ok() {
+                let st = app.state::<AppState>(); let l = st.db.lock();
+                if let Ok(conn) = l {
+                    let at = if i % 2 == 0 { "retweet" } else { "reply" };
+                    let _ = x_record_action(&conn, account_id, at, &key);
+                }
+                engages += 1;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(get_random_delay(120, 300))).await;
+        }
+    }
+    let _ = engages;
+
+    // 7b) L3：满足闸门时发 1 条极少原创（每周 ≤1 条）
+    {
+        let st = app.state::<AppState>();
+        let (age, l1, weekly) = {
+            let conn = st.db.lock().map_err(|e| e.to_string())?;
+            let created: Option<String> = conn.query_row("SELECT created_at FROM accounts WHERE id=?1", params![account_id], |r| r.get(0)).ok().flatten();
+            let age = created.as_deref().and_then(parse_dt).map(|c| (Utc::now() - c).num_days()).unwrap_or(0);
+            let l1: i64 = conn.query_row("SELECT COUNT(*) FROM x_actions_log WHERE account_id=?1 AND action_type IN ('like','follow')", params![account_id], |r| r.get(0)).unwrap_or(0);
+            let weekly: i64 = conn.query_row("SELECT COUNT(*) FROM x_actions_log WHERE account_id=?1 AND action_type='tweet' AND date >= date('now','-7 day')", params![account_id], |r| r.get(0)).unwrap_or(0);
+            (age, l1, weekly)
+        };
+        if x_l3_allowed(age, l1) && weekly < 1 {
+            let text = x_benign_tweet(seed.wrapping_mul(7));
+            let txt = text.clone();
+            let r = tauri::async_runtime::spawn_blocking(move || x_post_tweet_blocking(&txt)).await.map_err(|e| e.to_string())?;
+            if r.is_ok() {
+                let st2 = app.state::<AppState>(); let l = st2.db.lock();
+                if let Ok(conn) = l {
+                    let tag = format!("tweet:{}", Local::now().format("%Y-%m-%d"));
+                    let _ = x_record_action(&conn, account_id, "tweet", &tag);
+                }
+                log::info!("[X-NURTURE] 发了 1 条原创");
+            }
+        }
+    }
+
+    // 8) 记录耗时 + 动作
+    let elapsed = session_start.elapsed().as_secs() as i64;
+    {
+        let st = app.state::<AppState>();
+        let locked = st.db.lock();
+        if let Ok(conn) = locked {
+            let now = Utc::now().to_rfc3339();
+            let today = Local::now().format("%Y-%m-%d").to_string();
+            let _ = conn.execute(
+                "UPDATE accounts SET nurture_started_at=COALESCE(nurture_started_at,?1), last_nurture_at=?1, \
+                 total_nurture_seconds=COALESCE(total_nurture_seconds,0)+?2, health_status='healthy', last_health_check=?1 WHERE id=?3",
+                params![now, elapsed, account_id]);
+            let _ = conn.execute(
+                "INSERT INTO nurture_daily_logs (id, account_id, date, sessions_completed, total_seconds) VALUES (?1,?2,?3,1,?4) \
+                 ON CONFLICT(account_id,date) DO UPDATE SET sessions_completed=sessions_completed+1, total_seconds=total_seconds+?4",
+                params![Uuid::new_v4().to_string(), account_id, today, elapsed]);
+        }
+    }
+    log::info!("[X-NURTURE] account={} kw={} like={} follow={} 耗时={}s", account_id, kw, likes, follows, elapsed);
+    Ok(format!("X 养号完成：kw={} like={} follow={} 用时{}s", kw, likes, follows, elapsed))
+}
+
 /// 依次尝试一组选择器，命中即点击；全程打日志，便于对照实时 GitHub 校准选择器。
 fn gh_click_first(action: &str, url: &str, selectors: &[&str]) -> Result<String, String> {
     log::info!("[GH-ACTION] {} 目标={}", action, url);
@@ -11216,6 +11393,9 @@ async fn quick_nurture(
     // GitHub 走专属领域社交养号（按领域 star/follow/watch + L2），不走通用滚动。
     if platform.eq_ignore_ascii_case("github") {
         return github_nurture_run(&app, &account_id, seconds).await;
+    }
+    if platform.eq_ignore_ascii_case("twitter") || platform.eq_ignore_ascii_case("x") {
+        return x_nurture_run(&app, &account_id, seconds).await;
     }
 
     // Simulate browsing for specified duration.
@@ -14797,6 +14977,19 @@ async fn engine_execute(app: &AppHandle, task: &ClaimedTask) -> TaskOutcome {
                         TaskOutcome::Blocked(e)
                     }
                     Err(e) => TaskOutcome::Retry(format!("GitHub 养号失败: {}", e)),
+                };
+            }
+            if platform.eq_ignore_ascii_case("twitter") || platform.eq_ignore_ascii_case("x") {
+                return match x_nurture_run(app, &account_id, duration).await {
+                    Ok(msg) => { log::info!("[X-NURTURE] {}", msg); TaskOutcome::Success(None) }
+                    Err(e) if e.contains("未登录") => {
+                        let st = app.state::<AppState>();
+                        if let Ok(c) = st.db.lock() {
+                            let _ = c.execute("UPDATE accounts SET health_status='logged_out', last_health_check=datetime('now') WHERE id=?1", params![account_id]);
+                        }
+                        TaskOutcome::Blocked(e)
+                    }
+                    Err(e) => TaskOutcome::Retry(format!("X 养号失败: {}", e)),
                 };
             }
 
