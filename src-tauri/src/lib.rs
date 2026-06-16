@@ -1172,6 +1172,31 @@ fn platform_scenes() -> std::collections::HashMap<String, String> {
     }).collect()
 }
 
+/// account_id → 已选养号方向/领域 key 列表（github 取 gh_domains，twitter/x 取 x_niches）。
+/// 一次性批量返回，供前端在账号卡片展示「养号方向」标签。
+#[tauri::command]
+fn account_niches(state: State<AppState>) -> Result<std::collections::HashMap<String, Vec<String>>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare("SELECT id, platform, gh_domains, x_niches FROM accounts").map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], |r| Ok((
+        r.get::<_, String>(0)?, r.get::<_, String>(1)?,
+        r.get::<_, Option<String>>(2)?, r.get::<_, Option<String>>(3)?,
+    ))).map_err(|e| e.to_string())?;
+    let mut out = std::collections::HashMap::new();
+    for row in rows.flatten() {
+        let (id, platform, gh, x) = row;
+        let raw = match platform.to_lowercase().as_str() {
+            "github" => gh,
+            "twitter" | "x" => x,
+            _ => None,
+        };
+        if let Some(keys) = raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok()) {
+            if !keys.is_empty() { out.insert(id, keys); }
+        }
+    }
+    Ok(out)
+}
+
 #[derive(Clone, Copy)]
 struct PlatformMeta {
     scene: &'static str,   // research|product|social|content|career|lifestyle
@@ -16887,6 +16912,7 @@ pub fn run() {
             get_account_x_niches,
             set_account_x_niches,
             platform_scenes,
+            account_niches,
             set_unzoo_input_mode,
             list_leads,
             update_lead_status,

@@ -2372,6 +2372,10 @@ async function analyzeUrl() {
 // Accounts
 // 平台 → 场景类别 key，缓存一次（供账号卡片展示类别徽章）
 let platformSceneMap: Record<string, string> = {};
+// 养号方向/领域：key→label（静态，缓存一次）+ account_id→已选 key 列表（每次刷新）
+let ghDomainLabels: Record<string, string> = {};
+let xNicheLabels: Record<string, string> = {};
+let accountNichesMap: Record<string, string[]> = {};
 
 async function loadAccounts() {
   try {
@@ -2379,6 +2383,11 @@ async function loadAccounts() {
     if (Object.keys(platformSceneMap).length === 0) {
       try { platformSceneMap = (await invoke<Record<string, string>>('platform_scenes')) || {}; } catch { /* */ }
     }
+    if (Object.keys(ghDomainLabels).length === 0) {
+      try { (await invoke<any[]>('gh_domains_catalog')).forEach(d => { ghDomainLabels[d.key] = d.label; }); } catch { /* */ }
+      try { (await invoke<any[]>('x_niches_catalog')).forEach(n => { xNicheLabels[n.key] = n.label; }); } catch { /* */ }
+    }
+    try { accountNichesMap = (await invoke<Record<string, string[]>>('account_niches')) || {}; } catch { /* */ }
     // 加载身份(persona)列表，用于按 Gmail 分组 + 归属下拉
     try { personasCache = (await invoke('persona_list')) || []; } catch { personasCache = []; }
     // 加载机场代理状态（节点池），并入邮箱中心页顶部
@@ -2973,6 +2982,12 @@ function renderAccountCard(account: any): string {
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
           <span class="account-platform" style="font-weight:700;">${escapeHtml(account.platform)}</span>
           ${platformSceneMap[account.platform] ? `<span class="stage-badge" style="background:var(--bg-secondary);color:var(--text-muted);" title="平台场景类别">${t('scene.' + platformSceneMap[account.platform])}</span>` : ''}
+          ${(() => {
+            const keys = accountNichesMap[account.id] || [];
+            if (!keys.length) return '';
+            const lm = account.platform === 'github' ? ghDomainLabels : ((account.platform === 'twitter' || account.platform === 'x') ? xNicheLabels : {});
+            return keys.map(k => `<span class="stage-badge" style="background:var(--bg-secondary);color:var(--primary);" title="养号方向">🎯 ${escapeHtml(lm[k] || k)}</span>`).join('');
+          })()}
           ${healthBadge}
           ${stageBadge}
           ${nurtureDaysProgress}

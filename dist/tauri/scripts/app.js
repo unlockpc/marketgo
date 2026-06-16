@@ -2232,6 +2232,9 @@
     showToast("Edit feature coming soon", "info");
   };
   var platformSceneMap = {};
+  var ghDomainLabels = {};
+  var xNicheLabels = {};
+  var accountNichesMap = {};
   async function loadAccounts() {
     try {
       accounts = await invoke2("list_accounts");
@@ -2240,6 +2243,24 @@
           platformSceneMap = await invoke2("platform_scenes") || {};
         } catch {
         }
+      }
+      if (Object.keys(ghDomainLabels).length === 0) {
+        try {
+          (await invoke2("gh_domains_catalog")).forEach((d) => {
+            ghDomainLabels[d.key] = d.label;
+          });
+        } catch {
+        }
+        try {
+          (await invoke2("x_niches_catalog")).forEach((n) => {
+            xNicheLabels[n.key] = n.label;
+          });
+        } catch {
+        }
+      }
+      try {
+        accountNichesMap = await invoke2("account_niches") || {};
+      } catch {
       }
       try {
         personasCache = await invoke2("persona_list") || [];
@@ -2785,6 +2806,12 @@
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
           <span class="account-platform" style="font-weight:700;">${escapeHtml(account.platform)}</span>
           ${platformSceneMap[account.platform] ? `<span class="stage-badge" style="background:var(--bg-secondary);color:var(--text-muted);" title="\u5E73\u53F0\u573A\u666F\u7C7B\u522B">${t("scene." + platformSceneMap[account.platform])}</span>` : ""}
+          ${(() => {
+        const keys = accountNichesMap[account.id] || [];
+        if (!keys.length) return "";
+        const lm = account.platform === "github" ? ghDomainLabels : account.platform === "twitter" || account.platform === "x" ? xNicheLabels : {};
+        return keys.map((k) => `<span class="stage-badge" style="background:var(--bg-secondary);color:var(--primary);" title="\u517B\u53F7\u65B9\u5411">\u{1F3AF} ${escapeHtml(lm[k] || k)}</span>`).join("");
+      })()}
           ${healthBadge}
           ${stageBadge}
           ${nurtureDaysProgress}
