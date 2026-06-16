@@ -10968,7 +10968,14 @@ async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Res
                 return Ok((Some(state.to_string()), Vec::new()));
             }
         }
-        if !check_platform_login_status("twitter").unwrap_or(false) {
+        // 登录判定走 DOM 元素（X 是重 SPA、窄窗导航只有图标无文字，文本法会误判未登录）：
+        // 有「账号切换/Home/发推」标记=登录；仅当出现登录按钮且无登录标记时才判未登录。
+        let logged_in_marker = unzoo_element_exists("[data-testid=\"SideNav_AccountSwitcher_Button\"]")
+            || unzoo_element_exists("[data-testid=\"AppTabBar_Home_Link\"]")
+            || unzoo_element_exists("[data-testid=\"SideNav_NewTweet_Button\"]");
+        let logged_out_marker = unzoo_element_exists("[data-testid=\"loginButton\"]")
+            || unzoo_element_exists("a[href=\"/login\"]");
+        if logged_out_marker && !logged_in_marker {
             return Err("未登录 twitter".to_string());
         }
         Ok((None, unzoo_get_links("a[href*='/status/']")?))
