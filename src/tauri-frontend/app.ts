@@ -3625,10 +3625,15 @@ function updateNurtureTimer() {
     timerEl.textContent = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   }
 
-  // Update progress bar
+  // Update progress bar（倒计时归零→不确定态滚动条纹，表示后台仍在执行）
   const progressBar = document.getElementById('nurtureProgressBar');
   if (progressBar) {
-    progressBar.style.width = `${progress}%`;
+    if (remaining === 0) {
+      progressBar.classList.add('nurture-indeterminate');
+    } else {
+      progressBar.classList.remove('nurture-indeterminate');
+      progressBar.style.width = `${progress}%`;
+    }
   }
 
   // Update status text

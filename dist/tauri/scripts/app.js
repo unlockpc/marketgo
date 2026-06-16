@@ -3367,7 +3367,12 @@
     }
     const progressBar = document.getElementById("nurtureProgressBar");
     if (progressBar) {
-      progressBar.style.width = `${progress}%`;
+      if (remaining === 0) {
+        progressBar.classList.add("nurture-indeterminate");
+      } else {
+        progressBar.classList.remove("nurture-indeterminate");
+        progressBar.style.width = `${progress}%`;
+      }
     }
     const statusEl = document.getElementById("nurtureStatusText");
     if (statusEl) {
