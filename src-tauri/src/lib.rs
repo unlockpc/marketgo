@@ -1163,6 +1163,15 @@ fn set_account_x_niches(state: State<AppState>, account_id: String, niches: Vec<
     Ok(())
 }
 
+/// 平台 → 场景类别 key（research/product/social/content/career/lifestyle）。
+/// 供前端在已开通账号卡片上展示场景类别徽章（与开通选择器同一套分类）。
+#[tauri::command]
+fn platform_scenes() -> std::collections::HashMap<String, String> {
+    PLATFORM_KEYS.iter().filter_map(|&p| {
+        platform_meta(p).map(|m| (p.to_string(), m.scene.to_string()))
+    }).collect()
+}
+
 #[derive(Clone, Copy)]
 struct PlatformMeta {
     scene: &'static str,   // research|product|social|content|career|lifestyle
@@ -16877,6 +16886,7 @@ pub fn run() {
             x_niches_catalog,
             get_account_x_niches,
             set_account_x_niches,
+            platform_scenes,
             set_unzoo_input_mode,
             list_leads,
             update_lead_status,

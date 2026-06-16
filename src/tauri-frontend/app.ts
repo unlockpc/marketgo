@@ -2370,9 +2370,15 @@ async function analyzeUrl() {
 };
 
 // Accounts
+// 平台 → 场景类别 key，缓存一次（供账号卡片展示类别徽章）
+let platformSceneMap: Record<string, string> = {};
+
 async function loadAccounts() {
   try {
     accounts = await invoke('list_accounts');
+    if (Object.keys(platformSceneMap).length === 0) {
+      try { platformSceneMap = (await invoke<Record<string, string>>('platform_scenes')) || {}; } catch { /* */ }
+    }
     // 加载身份(persona)列表，用于按 Gmail 分组 + 归属下拉
     try { personasCache = (await invoke('persona_list')) || []; } catch { personasCache = []; }
     // 加载机场代理状态（节点池），并入邮箱中心页顶部
@@ -2966,6 +2972,7 @@ function renderAccountCard(account: any): string {
       <div class="account-item">
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
           <span class="account-platform" style="font-weight:700;">${escapeHtml(account.platform)}</span>
+          ${platformSceneMap[account.platform] ? `<span class="stage-badge" style="background:var(--bg-secondary);color:var(--text-muted);" title="平台场景类别">${t('scene.' + platformSceneMap[account.platform])}</span>` : ''}
           ${healthBadge}
           ${stageBadge}
           ${nurtureDaysProgress}

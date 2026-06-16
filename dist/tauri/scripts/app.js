@@ -2231,9 +2231,16 @@
   window.editProduct = function(id) {
     showToast("Edit feature coming soon", "info");
   };
+  var platformSceneMap = {};
   async function loadAccounts() {
     try {
       accounts = await invoke2("list_accounts");
+      if (Object.keys(platformSceneMap).length === 0) {
+        try {
+          platformSceneMap = await invoke2("platform_scenes") || {};
+        } catch {
+        }
+      }
       try {
         personasCache = await invoke2("persona_list") || [];
       } catch {
@@ -2777,6 +2784,7 @@
       <div class="account-item">
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
           <span class="account-platform" style="font-weight:700;">${escapeHtml(account.platform)}</span>
+          ${platformSceneMap[account.platform] ? `<span class="stage-badge" style="background:var(--bg-secondary);color:var(--text-muted);" title="\u5E73\u53F0\u573A\u666F\u7C7B\u522B">${t("scene." + platformSceneMap[account.platform])}</span>` : ""}
           ${healthBadge}
           ${stageBadge}
           ${nurtureDaysProgress}
