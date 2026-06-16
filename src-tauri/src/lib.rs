@@ -10769,7 +10769,7 @@ async fn github_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -
         if !check_platform_login_status("github").unwrap_or(false) {
             return Err("未登录 github".to_string());
         }
-        unzoo_get_links("article h3 a[href^='/'], h3 a[href*='/']")
+        unzoo_get_links("article h3 a[href^=\"/\"], h3 a[href*=\"/\"]")
     }).await.map_err(|e| format!("采集异常: {}", e))??;
 
     // 规范化为 owner/repo 两段的绝对 URL
@@ -10875,7 +10875,7 @@ async fn github_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -
                 let thread = tauri::async_runtime::spawn_blocking(move || {
                     unzoo_navigate(&issues_url)?;
                     std::thread::sleep(std::time::Duration::from_secs(3));
-                    let links = unzoo_get_links("a[href*='/issues/']")?;
+                    let links = unzoo_get_links("a[href*=\"/issues/\"]")?;
                     Ok::<Option<String>, String>(links.into_iter().find(|h| h.contains("/issues/") && h.chars().filter(|c| *c=='/').count() >= 6))
                 }).await.map_err(|e| e.to_string())??;
                 if let Some(thread_url) = thread {
@@ -10978,7 +10978,13 @@ async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Res
         if logged_out_marker && !logged_in_marker {
             return Err("未登录 twitter".to_string());
         }
-        Ok((None, unzoo_get_links("a[href*='/status/']")?))
+        // 等推文渲染（X SPA 懒加载，Latest 较慢；最多再等 ~10s）
+        let mut waited = 0;
+        while !unzoo_element_exists("[data-testid=\"tweet\"]") && waited < 10 {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            waited += 2;
+        }
+        Ok((None, unzoo_get_links("a[href*=\"/status/\"]")?))
     }).await.map_err(|e| format!("采集异常: {}", e))??;
     // A：检测到已封/锁定 → 写 health_status，停止本次养号
     if let Some(state) = probe.0 {
