@@ -1130,6 +1130,39 @@ fn set_account_gh_domains(state: State<AppState>, account_id: String, domains: V
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+pub struct XNicheItem { pub key: String, pub label: String, pub keywords: Vec<String> }
+
+/// 给前端渲染 X 方向多选框（16 官方方向，双语 label）。
+#[tauri::command]
+fn x_niches_catalog() -> Vec<XNicheItem> {
+    X_NICHES.iter().map(|n| XNicheItem {
+        key: n.key.to_string(),
+        label: n.label.to_string(),
+        keywords: n.keywords.iter().map(|w| w.to_string()).collect(),
+    }).collect()
+}
+
+/// 读取某账号已选 X 方向（供前端回勾）。
+#[tauri::command]
+fn get_account_x_niches(state: State<AppState>, account_id: String) -> Result<Vec<String>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    Ok(account_x_niches(&conn, &account_id))
+}
+
+/// 保存某账号所选 X 方向（仅保留合法 key）。
+#[tauri::command]
+fn set_account_x_niches(state: State<AppState>, account_id: String, niches: Vec<String>) -> Result<(), String> {
+    let valid: Vec<String> = niches.into_iter()
+        .filter(|k| X_NICHES.iter().any(|n| n.key == k))
+        .collect();
+    let json = serde_json::to_string(&valid).map_err(|e| e.to_string())?;
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    conn.execute("UPDATE accounts SET x_niches=?1 WHERE id=?2", params![json, account_id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 struct PlatformMeta {
     scene: &'static str,   // research|product|social|content|career|lifestyle
@@ -1224,7 +1257,9 @@ fn platform_ip_policy(platform: &str) -> &'static str {
         // 国内固定 IP：只留「确定需要」国内住宅/4G 固定 IP 的强风控平台（小红书、微博）
         "weibo" | "xiaohongshu" | "redbook" => "residential_cn",
         // 国外固定 IP
-        "twitter" | "x" | "reddit" | "linkedin" | "facebook" | "vk" | "naver_blog" => "static_overseas",
+        "reddit" | "linkedin" | "facebook" | "vk" | "naver_blog" => "static_overseas",
+        // X：数据中心/VPN 级 IP 即可，per-persona 专属机场节点（区域稳定）足够，无需国外固定专线
+        "twitter" | "x" => "shared_overseas",
         // 其余：机场共享轮换即可。含较宽松的国内站（知乎/即刻/CSDN/少数派/开源中国——
         //   手机号登录≠IP严，挂 Gmail 身份、走机场 IP 即可），以及海外开发者/产品/内容社区。
         _ => "shared_overseas",
@@ -16570,6 +16605,9 @@ pub fn run() {
             gh_domains_catalog,
             get_account_gh_domains,
             set_account_gh_domains,
+            x_niches_catalog,
+            get_account_x_niches,
+            set_account_x_niches,
             set_unzoo_input_mode,
             list_leads,
             update_lead_status,
