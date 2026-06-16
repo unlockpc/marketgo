@@ -1009,21 +1009,34 @@ fn x_benign_tweet(seed: u64) -> String {
 }
 
 /// 按页面文本分类 X 账号健康风险。banned(已封) | locked(锁定需验证) | restricted(只读/限流/受限) | None。
+/// 兼容英文 / 简体 / 繁体界面（X UI 语言随账号设置而变）。
 fn x_classify_health(text: &str) -> Option<&'static str> {
-    let t = text.to_lowercase();
+    let t = text.to_lowercase(); // 英文匹配用小写；中文不受影响
+    // 已封（冻结/停用/停权）
     if t.contains("account is suspended") || t.contains("account suspended")
-        || t.contains("your account is suspended") {
+        || t.contains("your account is suspended")
+        || text.contains("账号已被冻结") || text.contains("帐号已被冻结") || text.contains("帳號已被凍結")
+        || text.contains("已被停用") || text.contains("已被停权") || text.contains("已被停權") {
         return Some("banned");
     }
+    // 锁定（需验证）
     if t.contains("your account has been locked") || t.contains("account has been locked")
         || t.contains("verify your identity") || t.contains("we've detected unusual")
-        || t.contains("help us confirm") || t.contains("solve this puzzle") {
+        || t.contains("help us confirm") || t.contains("solve this puzzle")
+        || text.contains("账号已被锁定") || text.contains("帐户已被锁定") || text.contains("帳號已被鎖定")
+        || text.contains("验证你的身份") || text.contains("验证您的身份") || text.contains("驗證你的身份")
+        || text.contains("检测到异常活动") || text.contains("偵測到異常") {
         return Some("locked");
     }
+    // 只读 / 限流 / 受限
     if t.contains("unable to perform this action") || t.contains("you are unable to")
         || t.contains("over the daily limit") || t.contains("reached your daily limit")
         || t.contains("rate limit") || t.contains("try again later")
-        || t.contains("temporarily restricted") {
+        || t.contains("temporarily restricted")
+        || text.contains("无法执行此操作") || text.contains("無法執行此動作")
+        || text.contains("已达到当日上限") || text.contains("已達到每日上限")
+        || text.contains("操作频率过高") || text.contains("请稍后再试") || text.contains("請稍後再試")
+        || text.contains("暂时受限") || text.contains("暫時受限") {
         return Some("restricted");
     }
     None
@@ -17255,8 +17268,13 @@ mod platform_meta_tests {
         assert_eq!(x_classify_health("Your account has been locked"), Some("locked"));
         assert_eq!(x_classify_health("You are unable to perform this action"), Some("restricted"));
         assert_eq!(x_classify_health("Rate limit exceeded, try again later"), Some("restricted"));
+        // 中文界面（简/繁）
+        assert_eq!(x_classify_health("你的账号已被冻结"), Some("banned"));
+        assert_eq!(x_classify_health("验证你的身份以继续"), Some("locked"));
+        assert_eq!(x_classify_health("无法执行此操作，请稍后再试"), Some("restricted"));
         // 正常页面（含登录后导航词）不误报
         assert_eq!(x_classify_health("Home timeline, Post, Notifications, Messages"), None);
+        assert_eq!(x_classify_health("首页 发推 通知 私信"), None);
     }
 }
 
