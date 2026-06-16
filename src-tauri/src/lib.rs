@@ -10919,6 +10919,82 @@ fn gh_benign_comment(seed: u64) -> String {
     POOL[(seed as usize) % POOL.len()].to_string()
 }
 
+// ===== X 动作助手（human 模式语义定位；unzoo_click/type 已路由到 human）=====
+// 选择器用 X 稳定的 data-testid（CSS 属性选择器），best-effort，需实测校准。
+
+/// 点赞某推文（已 Like 的 testid 为 "unlike"，只点 "like" 不取消）。
+fn x_like_blocking(tweet_url: &str) -> Result<(), String> {
+    unzoo_navigate(tweet_url)?;
+    std::thread::sleep(std::time::Duration::from_millis(get_random_delay(2, 5)));
+    log::info!("[X-ACTION] like 目标={}", tweet_url);
+    if unzoo_element_exists("[data-testid=\"like\"]") {
+        unzoo_click("[data-testid=\"like\"]").map_err(|e| format!("like 失败: {}", e))?;
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        return Ok(());
+    }
+    Err("未找到 like 按钮（可能已赞/改版/未登录）".to_string())
+}
+
+/// 关注某用户 profile（已关注 testid 含 "-unfollow"，只点 "-follow"）。
+fn x_follow_blocking(profile_url: &str) -> Result<(), String> {
+    unzoo_navigate(profile_url)?;
+    std::thread::sleep(std::time::Duration::from_millis(get_random_delay(2, 5)));
+    log::info!("[X-ACTION] follow 目标={}", profile_url);
+    if unzoo_element_exists("[data-testid$=\"-follow\"]") {
+        unzoo_click("[data-testid$=\"-follow\"]").map_err(|e| format!("follow 失败: {}", e))?;
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        return Ok(());
+    }
+    Err("未找到 follow 按钮（可能已关注/改版/未登录）".to_string())
+}
+
+/// 转推（Repost）某推文。
+fn x_retweet_blocking(tweet_url: &str) -> Result<(), String> {
+    unzoo_navigate(tweet_url)?;
+    std::thread::sleep(std::time::Duration::from_millis(get_random_delay(2, 5)));
+    log::info!("[X-ACTION] retweet 目标={}", tweet_url);
+    if !unzoo_element_exists("[data-testid=\"retweet\"]") {
+        return Err("未找到 retweet 按钮".to_string());
+    }
+    unzoo_click("[data-testid=\"retweet\"]").map_err(|e| format!("retweet 失败: {}", e))?;
+    std::thread::sleep(std::time::Duration::from_millis(get_random_delay(1, 2)));
+    unzoo_click("[data-testid=\"retweetConfirm\"]").map_err(|e| format!("retweet 确认失败: {}", e))?;
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    Ok(())
+}
+
+/// 回复某推文（正文走 unzoo_type → human_type）。
+fn x_reply_blocking(tweet_url: &str, text: &str) -> Result<(), String> {
+    unzoo_navigate(tweet_url)?;
+    std::thread::sleep(std::time::Duration::from_millis(get_random_delay(2, 5)));
+    log::info!("[X-ACTION] reply 目标={}", tweet_url);
+    if !unzoo_element_exists("[data-testid=\"reply\"]") {
+        return Err("未找到 reply 按钮".to_string());
+    }
+    unzoo_click("[data-testid=\"reply\"]").map_err(|e| format!("reply 打开失败: {}", e))?;
+    std::thread::sleep(std::time::Duration::from_millis(get_random_delay(1, 2)));
+    unzoo_type("[data-testid=\"tweetTextarea_0\"]", text).map_err(|e| format!("reply 输入失败: {}", e))?;
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    unzoo_click("[data-testid=\"tweetButton\"]").map_err(|e| format!("reply 发布失败: {}", e))?;
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+    Ok(())
+}
+
+/// 发一条原创推文（home compose）。
+fn x_post_tweet_blocking(text: &str) -> Result<(), String> {
+    unzoo_navigate("https://x.com/compose/post")?;
+    std::thread::sleep(std::time::Duration::from_millis(get_random_delay(2, 5)));
+    log::info!("[X-ACTION] tweet（原创）");
+    if !unzoo_element_exists("[data-testid=\"tweetTextarea_0\"]") {
+        return Err("未找到发推输入框".to_string());
+    }
+    unzoo_type("[data-testid=\"tweetTextarea_0\"]", text).map_err(|e| format!("发推输入失败: {}", e))?;
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    unzoo_click("[data-testid=\"tweetButton\"]").map_err(|e| format!("发推发布失败: {}", e))?;
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+    Ok(())
+}
+
 /// Get nurturing status for an account
 #[tauri::command]
 fn get_account_nurture_status(state: State<AppState>, account_id: String) -> Result<serde_json::Value, String> {
