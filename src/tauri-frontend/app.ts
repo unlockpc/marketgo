@@ -2447,6 +2447,14 @@ function getHealthBadge(account: any): string {
   const healthScore = account.health_score || 100;
   const warmupStage = account.warmup_stage || 'none';
 
+  // 优先反映真实登录态健康 health_status（由养号/体检更新）
+  const hs = account.health_status || 'unknown';
+  if (hs === 'banned') return '<span class="account-health-badge danger">🔴 已封</span>';
+  if (hs === 'locked') return '<span class="account-health-badge danger">🔒 锁定·待验证</span>';
+  if (hs === 'shadowbanned') return '<span class="account-health-badge danger">🔴 疑似封禁</span>';
+  if (hs === 'restricted') return '<span class="account-health-badge warning">⚠️ 受限·限流</span>';
+  if (hs === 'logged_out') return '<span class="account-health-badge warning">🟠 掉登录</span>';
+
   if (status === 'banned' || status === 'suspended') {
     return '<span class="account-health-badge danger">🔴 Banned</span>';
   }
@@ -7119,6 +7127,8 @@ function renderNurtureOverview(list: NurtureOverviewDto[]) {
     logged_out: '<span class="task-stat" style="background:#dc2626;color:#fff;">掉登录</span>',
     shadowbanned: '<span class="task-stat" style="background:#dc2626;color:#fff;">疑似封禁</span>',
     banned: '<span class="task-stat" style="background:#dc2626;color:#fff;">已封</span>',
+    locked: '<span class="task-stat" style="background:#ea580c;color:#fff;">锁定·待验证</span>',
+    restricted: '<span class="task-stat" style="background:#f59e0b;color:#fff;">受限·限流</span>',
     unknown: '<span class="task-stat" style="background:#6b7280;color:#fff;">待体检</span>',
   };
   const phaseLabel: Record<string, string> = { warmup: '🐣 新号期', growth: '📈 成长期', mature: '🌳 成熟期', '—': '— 无策略' };

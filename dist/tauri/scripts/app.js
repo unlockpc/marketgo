@@ -2316,6 +2316,12 @@
     const status = account.status || "active";
     const healthScore = account.health_score || 100;
     const warmupStage = account.warmup_stage || "none";
+    const hs = account.health_status || "unknown";
+    if (hs === "banned") return '<span class="account-health-badge danger">\u{1F534} \u5DF2\u5C01</span>';
+    if (hs === "locked") return '<span class="account-health-badge danger">\u{1F512} \u9501\u5B9A\xB7\u5F85\u9A8C\u8BC1</span>';
+    if (hs === "shadowbanned") return '<span class="account-health-badge danger">\u{1F534} \u7591\u4F3C\u5C01\u7981</span>';
+    if (hs === "restricted") return '<span class="account-health-badge warning">\u26A0\uFE0F \u53D7\u9650\xB7\u9650\u6D41</span>';
+    if (hs === "logged_out") return '<span class="account-health-badge warning">\u{1F7E0} \u6389\u767B\u5F55</span>';
     if (status === "banned" || status === "suspended") {
       return '<span class="account-health-badge danger">\u{1F534} Banned</span>';
     }
@@ -6174,6 +6180,8 @@ ${a.body}`,
       logged_out: '<span class="task-stat" style="background:#dc2626;color:#fff;">\u6389\u767B\u5F55</span>',
       shadowbanned: '<span class="task-stat" style="background:#dc2626;color:#fff;">\u7591\u4F3C\u5C01\u7981</span>',
       banned: '<span class="task-stat" style="background:#dc2626;color:#fff;">\u5DF2\u5C01</span>',
+      locked: '<span class="task-stat" style="background:#ea580c;color:#fff;">\u9501\u5B9A\xB7\u5F85\u9A8C\u8BC1</span>',
+      restricted: '<span class="task-stat" style="background:#f59e0b;color:#fff;">\u53D7\u9650\xB7\u9650\u6D41</span>',
       unknown: '<span class="task-stat" style="background:#6b7280;color:#fff;">\u5F85\u4F53\u68C0</span>'
     };
     const phaseLabel = { warmup: "\u{1F423} \u65B0\u53F7\u671F", growth: "\u{1F4C8} \u6210\u957F\u671F", mature: "\u{1F333} \u6210\u719F\u671F", "\u2014": "\u2014 \u65E0\u7B56\u7565" };

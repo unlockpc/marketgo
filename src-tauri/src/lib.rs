@@ -1008,6 +1008,27 @@ fn x_benign_tweet(seed: u64) -> String {
     POOL[(seed as usize) % POOL.len()].to_string()
 }
 
+/// 按页面文本分类 X 账号健康风险。banned(已封) | locked(锁定需验证) | restricted(只读/限流/受限) | None。
+fn x_classify_health(text: &str) -> Option<&'static str> {
+    let t = text.to_lowercase();
+    if t.contains("account is suspended") || t.contains("account suspended")
+        || t.contains("your account is suspended") {
+        return Some("banned");
+    }
+    if t.contains("your account has been locked") || t.contains("account has been locked")
+        || t.contains("verify your identity") || t.contains("we've detected unusual")
+        || t.contains("help us confirm") || t.contains("solve this puzzle") {
+        return Some("locked");
+    }
+    if t.contains("unable to perform this action") || t.contains("you are unable to")
+        || t.contains("over the daily limit") || t.contains("reached your daily limit")
+        || t.contains("rate limit") || t.contains("try again later")
+        || t.contains("temporarily restricted") {
+        return Some("restricted");
+    }
+    None
+}
+
 /// 按号龄分期返回当日 GitHub L1 配额：(stars, follows, watches)。
 fn gh_daily_quota(phase: &str) -> (i64, i64, i64) {
     match phase {
@@ -3668,7 +3689,7 @@ fn run_migrations(conn: &Connection) -> rusqlite::Result<()> {
     );
 
     // P0-3 账号健康监测：accounts 增列。
-    //   health_status: unknown | healthy | logged_out | shadowbanned | banned
+    //   health_status: unknown | healthy | logged_out | shadowbanned | banned | locked | restricted
     for col in [
         "ALTER TABLE accounts ADD COLUMN health_status TEXT DEFAULT 'unknown'",
         "ALTER TABLE accounts ADD COLUMN karma INTEGER DEFAULT 0",
@@ -10922,15 +10943,33 @@ async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Res
 
     // 3) 浏览器：搜索最新推文，采 permalink
     let kw_q = kw.replace(' ', "%20");
-    let tweet_links: Vec<String> = tauri::async_runtime::spawn_blocking(move || {
+    let probe: (Option<String>, Vec<String>) = tauri::async_runtime::spawn_blocking(move || {
         let url = format!("https://x.com/search?q={}&f=live", kw_q);
         unzoo_navigate(&url)?;
         std::thread::sleep(std::time::Duration::from_secs(4));
+        // A：体检——抓页面文本判封禁/锁定（suspended/locked 会重定向到对应页）
+        let raw = unzoo_evaluate("(document.body.innerText||'').slice(0,4000)").unwrap_or_default();
+        let text = serde_json::from_str::<String>(&raw).unwrap_or(raw);
+        if let Some(state) = x_classify_health(&text) {
+            if state == "banned" || state == "locked" {
+                return Ok((Some(state.to_string()), Vec::new()));
+            }
+        }
         if !check_platform_login_status("twitter").unwrap_or(false) {
             return Err("未登录 twitter".to_string());
         }
-        unzoo_get_links("a[href*='/status/']")
+        Ok((None, unzoo_get_links("a[href*='/status/']")?))
     }).await.map_err(|e| format!("采集异常: {}", e))??;
+    // A：检测到已封/锁定 → 写 health_status，停止本次养号
+    if let Some(state) = probe.0 {
+        let st = app.state::<AppState>();
+        if let Ok(conn) = st.db.lock() {
+            let _ = conn.execute("UPDATE accounts SET health_status=?1, last_health_check=datetime('now') WHERE id=?2", params![state, account_id]);
+        }
+        log::warn!("[X-NURTURE] account={} 检测到账号状态 {} → 停止养号", account_id, state);
+        return Ok(format!("X 账号状态异常({})，已停止养号", state));
+    }
+    let tweet_links: Vec<String> = probe.1;
 
     // 规范化为 https://x.com/<user>/status/<id>
     let mut tweets: Vec<String> = tweet_links.into_iter().filter_map(|h| {
@@ -10958,23 +10997,28 @@ async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Res
         gh_pick_targets(&tweets, &already, n_like.max(1) as usize, seed)
     };
 
-    // 5) L1 点赞
+    // 5) L1 点赞（B：动作命中限流/受限 → 退避，停止本轮剩余动作）
     let mut likes = 0i64;
+    let mut aborted_health: Option<String> = None;
     for t in &chosen {
         let tc = t.clone();
         let r = tauri::async_runtime::spawn_blocking(move || x_like_blocking(&tc)).await.map_err(|e| e.to_string())?;
-        if r.is_ok() {
-            let st = app.state::<AppState>();
-            let locked = st.db.lock();
-            if let Ok(conn) = locked { let _ = x_record_action(&conn, account_id, "like", t); }
-            likes += 1;
+        match r {
+            Ok(_) => {
+                let st = app.state::<AppState>();
+                let locked = st.db.lock();
+                if let Ok(conn) = locked { let _ = x_record_action(&conn, account_id, "like", t); }
+                likes += 1;
+            }
+            Err(e) if e.starts_with("HEALTH:") => { aborted_health = Some(e[7..].to_string()); break; }
+            Err(_) => {}
         }
         tokio::time::sleep(std::time::Duration::from_millis(get_random_delay(60, 180))).await;
     }
 
     // 6) L1 关注（被赞推文的作者 profile）
     let mut follows = 0i64;
-    if n_follow > 0 {
+    if aborted_health.is_none() && n_follow > 0 {
         for t in chosen.iter().take(n_follow as usize) {
             let prof = t.split("/status/").next().unwrap_or("").to_string();
             if prof.matches('/').count() != 3 { continue; }
@@ -10993,7 +11037,7 @@ async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Res
 
     // 7a) L2：engage 预算内，对部分已点赞推文转推/回复（偶数转推、奇数回复）
     let mut engages = 0i64;
-    if n_engage > 0 {
+    if aborted_health.is_none() && n_engage > 0 {
         for (i, t) in chosen.iter().take(n_engage as usize).enumerate() {
             let key = format!("{}#engage", t);
             let acted = { let st = app.state::<AppState>(); let l = st.db.lock().map_err(|e| e.to_string())?; x_already_acted(&l, account_id, &key) };
@@ -11019,7 +11063,7 @@ async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Res
     let _ = engages;
 
     // 7b) L3：满足闸门时发 1 条极少原创（每周 ≤1 条）
-    {
+    if aborted_health.is_none() {
         let st = app.state::<AppState>();
         let (age, l1, weekly) = {
             let conn = st.db.lock().map_err(|e| e.to_string())?;
@@ -11044,8 +11088,9 @@ async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Res
         }
     }
 
-    // 8) 记录耗时 + 动作
+    // 8) 记录耗时 + 动作（B：命中受限则写 restricted，否则 healthy）
     let elapsed = session_start.elapsed().as_secs() as i64;
+    let final_health = aborted_health.as_deref().unwrap_or("healthy");
     {
         let st = app.state::<AppState>();
         let locked = st.db.lock();
@@ -11054,16 +11099,20 @@ async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Res
             let today = Local::now().format("%Y-%m-%d").to_string();
             let _ = conn.execute(
                 "UPDATE accounts SET nurture_started_at=COALESCE(nurture_started_at,?1), last_nurture_at=?1, \
-                 total_nurture_seconds=COALESCE(total_nurture_seconds,0)+?2, health_status='healthy', last_health_check=?1 WHERE id=?3",
-                params![now, elapsed, account_id]);
+                 total_nurture_seconds=COALESCE(total_nurture_seconds,0)+?2, health_status=?4, last_health_check=?1 WHERE id=?3",
+                params![now, elapsed, account_id, final_health]);
             let _ = conn.execute(
                 "INSERT INTO nurture_daily_logs (id, account_id, date, sessions_completed, total_seconds) VALUES (?1,?2,?3,1,?4) \
                  ON CONFLICT(account_id,date) DO UPDATE SET sessions_completed=sessions_completed+1, total_seconds=total_seconds+?4",
                 params![Uuid::new_v4().to_string(), account_id, today, elapsed]);
         }
     }
-    log::info!("[X-NURTURE] account={} kw={} like={} follow={} 耗时={}s", account_id, kw, likes, follows, elapsed);
-    Ok(format!("X 养号完成：kw={} like={} follow={} 用时{}s", kw, likes, follows, elapsed))
+    if let Some(s) = &aborted_health {
+        log::warn!("[X-NURTURE] account={} 养号中检测到 {} → 已退避", account_id, s);
+    }
+    log::info!("[X-NURTURE] account={} kw={} like={} follow={} 耗时={}s health={}", account_id, kw, likes, follows, elapsed, final_health);
+    let note = aborted_health.as_deref().map(|s| format!("（{}退避）", s)).unwrap_or_default();
+    Ok(format!("X 养号完成：kw={} like={} follow={}{} 用时{}s", kw, likes, follows, note, elapsed))
 }
 
 /// 依次尝试一组选择器，命中即点击；全程打日志，便于对照实时 GitHub 校准选择器。
@@ -11133,6 +11182,16 @@ fn gh_benign_comment(seed: u64) -> String {
 // ===== X 动作助手（human 模式语义定位；unzoo_click/type 已路由到 human）=====
 // 选择器用 X 稳定的 data-testid（CSS 属性选择器），best-effort，需实测校准。
 
+/// 动作失败时抓当前页面文本分类健康风险；命中则返回 "HEALTH:<state>" 供上层退避，否则返回 default。
+fn x_fail_health(default: &str) -> String {
+    let raw = unzoo_evaluate("(document.body.innerText||'').slice(0,4000)").unwrap_or_default();
+    let text = serde_json::from_str::<String>(&raw).unwrap_or(raw);
+    match x_classify_health(&text) {
+        Some(s) => format!("HEALTH:{}", s),
+        None => default.to_string(),
+    }
+}
+
 /// 点赞某推文（已 Like 的 testid 为 "unlike"，只点 "like" 不取消）。
 fn x_like_blocking(tweet_url: &str) -> Result<(), String> {
     unzoo_navigate(tweet_url)?;
@@ -11143,7 +11202,7 @@ fn x_like_blocking(tweet_url: &str) -> Result<(), String> {
         std::thread::sleep(std::time::Duration::from_millis(800));
         return Ok(());
     }
-    Err("未找到 like 按钮（可能已赞/改版/未登录）".to_string())
+    Err(x_fail_health("未找到 like 按钮（可能已赞/改版/未登录）"))
 }
 
 /// 关注某用户 profile（已关注 testid 含 "-unfollow"，只点 "-follow"）。
@@ -11156,7 +11215,7 @@ fn x_follow_blocking(profile_url: &str) -> Result<(), String> {
         std::thread::sleep(std::time::Duration::from_millis(800));
         return Ok(());
     }
-    Err("未找到 follow 按钮（可能已关注/改版/未登录）".to_string())
+    Err(x_fail_health("未找到 follow 按钮（可能已关注/改版/未登录）"))
 }
 
 /// 转推（Repost）某推文。
@@ -12314,7 +12373,7 @@ fn account_outbound_guard(conn: &Connection, platform: &str, account_id: &Option
     let (created_at, health) = match row { Some(v) => v, None => return Ok(()) };
 
     // 健康闸门：任何对外动作都拦（包括 mention）
-    if matches!(health.as_str(), "logged_out" | "banned" | "shadowbanned") {
+    if matches!(health.as_str(), "logged_out" | "banned" | "shadowbanned" | "locked" | "restricted") {
         return Err(format!("账号健康异常({})，已暂停对外动作；请重新登录或更换账号", health));
     }
 
@@ -14177,7 +14236,7 @@ fn nurture_schedule_tick(conn: &Connection) {
     };
 
     for (aid, platform, created_at, health, last_nurture) in accounts {
-        if matches!(health.as_str(), "banned" | "logged_out" | "shadowbanned") { continue; }
+        if matches!(health.as_str(), "banned" | "logged_out" | "shadowbanned" | "locked" | "restricted") { continue; }
         let strat = conn.query_row(
             "SELECT warmup_days, daily_sessions_min, daily_sessions_max, session_duration_min, \
                     session_duration_max, active_hours_start, active_hours_end, enabled \
@@ -17188,6 +17247,16 @@ mod platform_meta_tests {
             assert!(!t.contains("http"));
         }
         assert_ne!(x_benign_tweet(0), x_benign_tweet(1));
+    }
+
+    #[test]
+    fn x_classify_health_maps() {
+        assert_eq!(x_classify_health("Your account is suspended"), Some("banned"));
+        assert_eq!(x_classify_health("Your account has been locked"), Some("locked"));
+        assert_eq!(x_classify_health("You are unable to perform this action"), Some("restricted"));
+        assert_eq!(x_classify_health("Rate limit exceeded, try again later"), Some("restricted"));
+        // 正常页面（含登录后导航词）不误报
+        assert_eq!(x_classify_health("Home timeline, Post, Notifications, Messages"), None);
     }
 }
 
