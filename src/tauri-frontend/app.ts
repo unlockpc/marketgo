@@ -1538,6 +1538,15 @@ interface GhDomainItem { key: string; label: string; topics: string[] }
   });
 };
 
+// 账号卡片养号方向行：展开/收起多余标签
+(window as any).toggleNicheRow = function(btn: HTMLElement) {
+  const row = btn.parentElement as HTMLElement;
+  const expanded = row.getAttribute('data-expanded') === '1';
+  row.querySelectorAll<HTMLElement>('[data-extra="1"]').forEach(el => { el.style.display = expanded ? 'none' : ''; });
+  row.setAttribute('data-expanded', expanded ? '0' : '1');
+  btn.textContent = expanded ? ('展开 +' + btn.getAttribute('data-more')) : '收起';
+};
+
 interface XNicheItem { key: string; label: string; keywords: string[] }
 
 // X 养号方向多选（按账号，X 官方 16 方向双语）。复用 .modal.active 显示约定。
@@ -2990,12 +2999,6 @@ function renderAccountCard(account: any): string {
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
           <span class="account-platform" style="font-weight:700;">${escapeHtml(account.platform)}</span>
           ${platformSceneMap[account.platform] ? `<span class="stage-badge" style="background:var(--bg-secondary);color:var(--text-muted);" title="平台场景类别">${t('scene.' + platformSceneMap[account.platform])}</span>` : ''}
-          ${(() => {
-            const keys = accountNichesMap[account.id] || [];
-            if (!keys.length) return '';
-            const lm = account.platform === 'github' ? ghDomainLabels : ((account.platform === 'twitter' || account.platform === 'x') ? xNicheLabels : {});
-            return keys.map(k => `<span class="stage-badge" style="background:var(--bg-secondary);color:var(--primary);" title="养号方向">🎯 ${escapeHtml(lm[k] || k)}</span>`).join('');
-          })()}
           ${healthBadge}
           ${stageBadge}
           ${nurtureDaysProgress}
@@ -3004,6 +3007,17 @@ function renderAccountCard(account: any): string {
           </span>
         </div>
         <div class="account-username text-muted" style="font-size:13px;">${escapeHtml(account.username || account.email || 'N/A')}</div>
+        ${(() => {
+          const keys = accountNichesMap[account.id] || [];
+          if (!keys.length) return '';
+          const lm = account.platform === 'github' ? ghDomainLabels : ((account.platform === 'twitter' || account.platform === 'x') ? xNicheLabels : {});
+          const chip = (k: string, hidden: boolean) => `<span class="stage-badge" style="background:var(--bg-secondary);color:var(--primary);${hidden ? 'display:none;' : ''}" data-extra="${hidden ? '1' : '0'}" title="养号方向">🎯 ${escapeHtml(lm[k] || k)}</span>`;
+          const chips = keys.map((k, i) => chip(k, i >= 2)).join('');
+          const more = keys.length > 2
+            ? `<button class="btn btn-small btn-secondary" style="padding:0 8px;font-size:11px;" onclick="toggleNicheRow(this)" data-more="${keys.length - 2}">展开 +${keys.length - 2}</button>`
+            : '';
+          return `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:4px;" data-expanded="0">${chips}${more}</div>`;
+        })()}
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           ${personaBadge}
           ${account.login_method !== 'google'

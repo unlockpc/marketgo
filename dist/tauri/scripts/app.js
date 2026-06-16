@@ -1565,6 +1565,15 @@
       }
     });
   };
+  window.toggleNicheRow = function(btn) {
+    const row = btn.parentElement;
+    const expanded = row.getAttribute("data-expanded") === "1";
+    row.querySelectorAll('[data-extra="1"]').forEach((el) => {
+      el.style.display = expanded ? "none" : "";
+    });
+    row.setAttribute("data-expanded", expanded ? "0" : "1");
+    btn.textContent = expanded ? "\u5C55\u5F00 +" + btn.getAttribute("data-more") : "\u6536\u8D77";
+  };
   window.pickXNiches = async function(accountId) {
     let cat = [];
     let current = [];
@@ -2812,12 +2821,6 @@
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
           <span class="account-platform" style="font-weight:700;">${escapeHtml(account.platform)}</span>
           ${platformSceneMap[account.platform] ? `<span class="stage-badge" style="background:var(--bg-secondary);color:var(--text-muted);" title="\u5E73\u53F0\u573A\u666F\u7C7B\u522B">${t("scene." + platformSceneMap[account.platform])}</span>` : ""}
-          ${(() => {
-        const keys = accountNichesMap[account.id] || [];
-        if (!keys.length) return "";
-        const lm = account.platform === "github" ? ghDomainLabels : account.platform === "twitter" || account.platform === "x" ? xNicheLabels : {};
-        return keys.map((k) => `<span class="stage-badge" style="background:var(--bg-secondary);color:var(--primary);" title="\u517B\u53F7\u65B9\u5411">\u{1F3AF} ${escapeHtml(lm[k] || k)}</span>`).join("");
-      })()}
           ${healthBadge}
           ${stageBadge}
           ${nurtureDaysProgress}
@@ -2826,6 +2829,15 @@
           </span>
         </div>
         <div class="account-username text-muted" style="font-size:13px;">${escapeHtml(account.username || account.email || "N/A")}</div>
+        ${(() => {
+        const keys = accountNichesMap[account.id] || [];
+        if (!keys.length) return "";
+        const lm = account.platform === "github" ? ghDomainLabels : account.platform === "twitter" || account.platform === "x" ? xNicheLabels : {};
+        const chip = (k, hidden) => `<span class="stage-badge" style="background:var(--bg-secondary);color:var(--primary);${hidden ? "display:none;" : ""}" data-extra="${hidden ? "1" : "0"}" title="\u517B\u53F7\u65B9\u5411">\u{1F3AF} ${escapeHtml(lm[k] || k)}</span>`;
+        const chips = keys.map((k, i) => chip(k, i >= 2)).join("");
+        const more = keys.length > 2 ? `<button class="btn btn-small btn-secondary" style="padding:0 8px;font-size:11px;" onclick="toggleNicheRow(this)" data-more="${keys.length - 2}">\u5C55\u5F00 +${keys.length - 2}</button>` : "";
+        return `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:4px;" data-expanded="0">${chips}${more}</div>`;
+      })()}
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           ${personaBadge}
           ${account.login_method !== "google" ? `<button class="chip-btn" onclick="transferAccountPersona('${account.id}','${escapeHtml(account.persona_id || "")}')" title="\u628A\u8FD9\u4E2A\u8D26\u53F7\u6539\u6302\u5230\u522B\u7684\u8EAB\u4EFD\u4E0B">\u{1F504} ${escapeHtml(t("transfer.btn"))}</button>` : ""}
