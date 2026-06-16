@@ -1565,6 +1565,44 @@
       }
     });
   };
+  window.pickXNiches = async function(accountId) {
+    let cat = [];
+    let current = [];
+    try {
+      cat = await invoke2("x_niches_catalog");
+      current = await invoke2("get_account_x_niches", { accountId });
+    } catch (e) {
+      showToast("\u52A0\u8F7D\u65B9\u5411\u5931\u8D25: " + e, "error");
+      return;
+    }
+    const overlay = document.createElement("div");
+    overlay.className = "modal active";
+    overlay.innerHTML = `
+    <div class="modal-content">
+      <div class="modal-header"><h3>\u9009\u62E9 X \u517B\u53F7\u65B9\u5411\uFF08\u53EF\u591A\u9009\uFF09</h3></div>
+      <div class="modal-body">
+        ${cat.map((d) => `<label style="display:block;margin:6px 0;">
+          <input type="checkbox" value="${d.key}"${current.includes(d.key) ? " checked" : ""}> ${d.label}
+        </label>`).join("")}
+      </div>
+      <div class="modal-footer">
+        <button class="btn" id="xNicheCancel">\u53D6\u6D88</button>
+        <button class="btn btn-success" id="xNicheSave">\u4FDD\u5B58</button>
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector("#xNicheCancel").addEventListener("click", () => overlay.remove());
+    overlay.querySelector("#xNicheSave").addEventListener("click", async () => {
+      const keys = Array.from(overlay.querySelectorAll("input:checked")).map((i) => i.value);
+      try {
+        await invoke2("set_account_x_niches", { accountId, niches: keys });
+        showToast("X \u65B9\u5411\u5DF2\u4FDD\u5B58", "success");
+        overlay.remove();
+      } catch (e) {
+        showToast("\u4FDD\u5B58\u5931\u8D25: " + e, "error");
+      }
+    });
+  };
   function pickAddAccounts(email, candidates) {
     return new Promise((resolve) => {
       const overlay = document.createElement("div");
@@ -2757,6 +2795,7 @@
           <button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="\u81EA\u52A8\u767B\u5F55\uFF1A\u67E5\u767B\u5F55\u2192Google\u767B\u5F55\u2192\u5426\u5219\u6CE8\u518C">\u{1F511} \u81EA\u52A8\u767B\u5F55</button>
           <button class="btn btn-small btn-success" data-nurture-account="${account.id}" onclick="openNurtureModal('${account.id}', '${escapeHtml(account.platform)}', '${escapeHtml(account.username || account.email || "N/A")}')" title="${t("nurture.quickNurture")}">\u{1F331} ${t("nurture.quickNurture")}</button>
           ${account.platform === "github" ? `<button class="btn btn-small btn-secondary" onclick="pickGithubDomains('${account.id}')" title="\u9009\u62E9 GitHub \u517B\u53F7\u9886\u57DF">\u{1F3AF} \u9886\u57DF</button>` : ""}
+          ${account.platform === "twitter" || account.platform === "x" ? `<button class="btn btn-small btn-secondary" onclick="pickXNiches('${account.id}')" title="\u9009\u62E9 X \u517B\u53F7\u65B9\u5411">\u{1F3AF} \u65B9\u5411</button>` : ""}
           ${stage === "new" ? `<button class="btn btn-small btn-warning" onclick="startWarmup('${account.id}')" title="\u5F00\u59CB\u517B\u53F7">\u{1F525} \u5F00\u59CB\u517B\u53F7</button>` : ""}
           ${stage !== "active" ? `<button class="btn btn-small btn-secondary" onclick="finishAccountNurture('${account.id}')" title="\u8001\u8D26\u53F7\u65E0\u9700\u517B\u53F7\uFF0C\u76F4\u63A5\u6807\u4E3A\u6B63\u5E38">\u2705 ${t("nurture.finishBtn")}</button>` : ""}
         </div>

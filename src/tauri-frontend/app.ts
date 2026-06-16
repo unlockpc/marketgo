@@ -1538,6 +1538,43 @@ interface GhDomainItem { key: string; label: string; topics: string[] }
   });
 };
 
+interface XNicheItem { key: string; label: string; keywords: string[] }
+
+// X 养号方向多选（按账号，X 官方 16 方向双语）。复用 .modal.active 显示约定。
+(window as any).pickXNiches = async function(accountId: string): Promise<void> {
+  let cat: XNicheItem[] = [];
+  let current: string[] = [];
+  try {
+    cat = await invoke<XNicheItem[]>('x_niches_catalog');
+    current = await invoke<string[]>('get_account_x_niches', { accountId });
+  } catch (e) { showToast('加载方向失败: ' + e, 'error'); return; }
+  const overlay = document.createElement('div');
+  overlay.className = 'modal active';
+  overlay.innerHTML = `
+    <div class="modal-content">
+      <div class="modal-header"><h3>选择 X 养号方向（可多选）</h3></div>
+      <div class="modal-body">
+        ${cat.map(d => `<label style="display:block;margin:6px 0;">
+          <input type="checkbox" value="${d.key}"${current.includes(d.key) ? ' checked' : ''}> ${d.label}
+        </label>`).join('')}
+      </div>
+      <div class="modal-footer">
+        <button class="btn" id="xNicheCancel">取消</button>
+        <button class="btn btn-success" id="xNicheSave">保存</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#xNicheCancel')!.addEventListener('click', () => overlay.remove());
+  overlay.querySelector('#xNicheSave')!.addEventListener('click', async () => {
+    const keys = Array.from(overlay.querySelectorAll<HTMLInputElement>('input:checked')).map(i => i.value);
+    try {
+      await invoke('set_account_x_niches', { accountId, niches: keys });
+      showToast('X 方向已保存', 'success');
+      overlay.remove();
+    } catch (e) { showToast('保存失败: ' + e, 'error'); }
+  });
+};
+
 // ===== #4 加账号：手机号 / 账号密码 分区录入凭据 =====
 interface AddAcctEntry { platform: string; username: string; password: string; }
 
@@ -2949,6 +2986,7 @@ function renderAccountCard(account: any): string {
           <button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="自动登录：查登录→Google登录→否则注册">🔑 自动登录</button>
           <button class="btn btn-small btn-success" data-nurture-account="${account.id}" onclick="openNurtureModal('${account.id}', '${escapeHtml(account.platform)}', '${escapeHtml(account.username || account.email || 'N/A')}')" title="${t('nurture.quickNurture')}">🌱 ${t('nurture.quickNurture')}</button>
           ${account.platform === 'github' ? `<button class="btn btn-small btn-secondary" onclick="pickGithubDomains('${account.id}')" title="选择 GitHub 养号领域">🎯 领域</button>` : ''}
+          ${(account.platform === 'twitter' || account.platform === 'x') ? `<button class="btn btn-small btn-secondary" onclick="pickXNiches('${account.id}')" title="选择 X 养号方向">🎯 方向</button>` : ''}
           ${stage === 'new' ? `<button class="btn btn-small btn-warning" onclick="startWarmup('${account.id}')" title="开始养号">🔥 开始养号</button>` : ''}
           ${stage !== 'active' ? `<button class="btn btn-small btn-secondary" onclick="finishAccountNurture('${account.id}')" title="老账号无需养号，直接标为正常">✅ ${t('nurture.finishBtn')}</button>` : ''}
         </div>
