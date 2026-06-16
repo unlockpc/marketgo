@@ -940,6 +940,74 @@ fn gh_domain_topics(keys: &[&str]) -> Vec<&'static str> {
     out
 }
 
+/// X(Twitter) 养号方向：X 消费端 Topics 的 16 个官方顶层方向。label 双语展示。
+pub struct XNiche {
+    pub key: &'static str,
+    pub label: &'static str,          // "English(中文)"
+    pub keywords: &'static [&'static str],
+}
+
+const X_NICHES: &[XNiche] = &[
+    XNiche { key: "technology",       label: "Technology(科技)",            keywords: &["technology","tech","AI","software"] },
+    XNiche { key: "business_finance", label: "Business & finance(商业财经)", keywords: &["business","finance","investing"] },
+    XNiche { key: "science",          label: "Science(科学)",               keywords: &["science","research"] },
+    XNiche { key: "careers",          label: "Careers(职业)",               keywords: &["careers","jobs","hiring"] },
+    XNiche { key: "gaming",           label: "Gaming(游戏)",                keywords: &["gaming","games"] },
+    XNiche { key: "news",             label: "News(新闻)",                  keywords: &["news","breaking news"] },
+    XNiche { key: "entertainment",    label: "Entertainment(娱乐)",         keywords: &["entertainment"] },
+    XNiche { key: "arts_culture",     label: "Arts & culture(艺术文化)",    keywords: &["art","culture"] },
+    XNiche { key: "music",            label: "Music(音乐)",                 keywords: &["music"] },
+    XNiche { key: "movies_tv",        label: "Movies & TV(影视)",           keywords: &["movies","film","TV"] },
+    XNiche { key: "sports",           label: "Sports(体育)",                keywords: &["sports"] },
+    XNiche { key: "fashion_beauty",   label: "Fashion & beauty(时尚美妆)",  keywords: &["fashion","beauty"] },
+    XNiche { key: "food",             label: "Food(美食)",                  keywords: &["food","cooking"] },
+    XNiche { key: "travel",           label: "Travel(旅行)",                keywords: &["travel"] },
+    XNiche { key: "outdoors",         label: "Outdoors(户外)",              keywords: &["outdoors","hiking"] },
+    XNiche { key: "hobbies",          label: "Hobbies & interests(兴趣爱好)", keywords: &["hobbies","DIY"] },
+];
+
+/// 收集所选方向 key 对应的全部关键词（按出现顺序去重，未知 key 跳过）。
+fn x_niche_keywords(keys: &[&str]) -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = Vec::new();
+    for k in keys {
+        if let Some(n) = X_NICHES.iter().find(|n| n.key == *k) {
+            for w in n.keywords {
+                if !out.contains(w) { out.push(w); }
+            }
+        }
+    }
+    out
+}
+
+/// 按号龄分期返回当日 X 配额：(likes, follows, engages)。engages = 转推+回复预算。
+/// X 反自动化最严 → 量级极保守、关注最克制。
+fn x_daily_quota(phase: &str) -> (i64, i64, i64) {
+    match phase {
+        "growth" => (5, 2, 2),
+        "mature" => (5, 1, 3),
+        "warmup" => (2, 0, 0), // 仅点赞
+        _ => (1, 0, 0),
+    }
+}
+
+/// 极少量原创是否解锁：号龄 ≥ 14 天且已有 L1 历史（点赞/关注）。频率上限由调用方按周限。
+fn x_l3_allowed(age_days: i64, l1_action_count: i64) -> bool {
+    age_days >= 14 && l1_action_count > 0
+}
+
+/// 良性、不带推广意图的短推文（仅填充时间线、绝不带链接/产品）。
+fn x_benign_tweet(seed: u64) -> String {
+    const POOL: &[&str] = &[
+        "Spent the morning reading through some great threads here. Always learning.",
+        "Underrated: taking notes by hand. Retains so much better.",
+        "Quiet productive day. Small steps add up.",
+        "Coffee + a clear todo list might be the real productivity hack.",
+        "Good docs are worth more than clever code. Change my mind.",
+        "Weekend plan: less screen, more walks.",
+    ];
+    POOL[(seed as usize) % POOL.len()].to_string()
+}
+
 /// 按号龄分期返回当日 GitHub L1 配额：(stars, follows, watches)。
 fn gh_daily_quota(phase: &str) -> (i64, i64, i64) {
     match phase {
@@ -16678,6 +16746,62 @@ mod platform_meta_tests {
             assert!(!c.contains("http")); // 不带链接/推广
         }
         assert_ne!(gh_benign_comment(0), gh_benign_comment(1));
+    }
+
+    // ===== X 养号：纯逻辑单元测试 =====
+
+    #[test]
+    fn x_niches_keys_unique_and_16_dirs() {
+        use std::collections::HashSet;
+        let mut seen = HashSet::new();
+        for n in X_NICHES {
+            assert!(seen.insert(n.key), "duplicate niche key {}", n.key);
+            assert!(!n.label.is_empty() && !n.keywords.is_empty(), "bad niche {}", n.key);
+        }
+        assert_eq!(X_NICHES.len(), 16, "X 官方顶层方向应为 16 个");
+        for k in ["technology", "business_finance", "science", "gaming", "music"] {
+            assert!(X_NICHES.iter().any(|n| n.key == k), "missing niche {}", k);
+        }
+    }
+
+    #[test]
+    fn x_niche_keywords_collects_and_dedups() {
+        let kw = x_niche_keywords(&["technology", "science"]);
+        assert!(kw.contains(&"tech"));
+        assert!(kw.contains(&"science"));
+        let kw2 = x_niche_keywords(&["technology", "unknown_xyz"]);
+        assert!(kw2.contains(&"tech"));
+        let kw3 = x_niche_keywords(&["technology", "technology"]);
+        let uniq: std::collections::HashSet<_> = kw3.iter().collect();
+        assert_eq!(uniq.len(), kw3.len());
+    }
+
+    #[test]
+    fn x_daily_quota_by_phase() {
+        assert_eq!(x_daily_quota("warmup"), (2, 0, 0));
+        let (l, f, e) = x_daily_quota("growth");
+        assert!(l >= 3 && f >= 1 && e >= 1);
+        let (l2, _, _) = x_daily_quota("mature");
+        assert!(l2 >= 1);
+        assert_eq!(x_daily_quota("unknown"), (1, 0, 0));
+    }
+
+    #[test]
+    fn x_l3_gate() {
+        assert!(!x_l3_allowed(6, 50));
+        assert!(!x_l3_allowed(20, 0));
+        assert!(x_l3_allowed(14, 1));
+        assert!(x_l3_allowed(40, 100));
+    }
+
+    #[test]
+    fn x_benign_tweet_is_nonpromotional() {
+        for i in 0..6 {
+            let t = x_benign_tweet(i);
+            assert!(!t.is_empty());
+            assert!(!t.contains("http"));
+        }
+        assert_ne!(x_benign_tweet(0), x_benign_tweet(1));
     }
 }
 
