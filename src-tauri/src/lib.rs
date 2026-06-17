@@ -1042,6 +1042,22 @@ fn x_classify_health(text: &str) -> Option<&'static str> {
     None
 }
 
+/// 从形如 "1,234 Followers" / "1.2K Followers" / "3.4M" 解析粉丝数。读不出返回 None。
+fn x_parse_count(s: &str) -> Option<i64> {
+    let start = s.find(|c: char| c.is_ascii_digit())?;
+    let token: String = s[start..].chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == ',' || matches!(c, 'K'|'M'|'B'|'k'|'m'|'b'))
+        .collect();
+    let mult = match token.chars().last() {
+        Some('K') | Some('k') => 1_000.0,
+        Some('M') | Some('m') => 1_000_000.0,
+        Some('B') | Some('b') => 1_000_000_000.0,
+        _ => 1.0,
+    };
+    let num: String = token.chars().filter(|c| c.is_ascii_digit() || *c == '.').collect();
+    num.parse::<f64>().ok().map(|n| (n * mult) as i64)
+}
+
 /// 按号龄分期返回当日 GitHub L1 配额：(stars, follows, watches)。
 fn gh_daily_quota(phase: &str) -> (i64, i64, i64) {
     match phase {
@@ -10891,20 +10907,40 @@ async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Res
         tokio::time::sleep(std::time::Duration::from_millis(get_random_delay(60, 180))).await;
     }
 
-    // 6) L1 关注（被赞推文的作者 profile）
+    // 6) L1 关注：People 搜索找该领域好用户 → 质量门(有简介+粉丝≥500)达标才关注
     let mut follows = 0i64;
     if aborted_health.is_none() && n_follow > 0 {
-        for t in chosen.iter().take(n_follow as usize) {
-            let prof = t.split("/status/").next().unwrap_or("").to_string();
-            if prof.matches('/').count() != 3 { continue; }
-            let acted = { let st = app.state::<AppState>(); let l = st.db.lock().map_err(|e| e.to_string())?; x_already_acted(&l, account_id, &prof) };
-            if acted { continue; }
+        let ukw = kws[((seed >> 3) as usize) % kws.len()].to_string(); // 换一个子话题搜人
+        let candidates: Vec<String> = match tauri::async_runtime::spawn_blocking(move || x_search_users_blocking(&ukw)).await {
+            Ok(Ok(v)) => v,
+            _ => Vec::new(), // people 搜索失败就不关注，不影响其它动作
+        };
+        // 过滤已关注 + 跨账号去重；多取些候选（质量门会刷掉一部分）
+        let pool: Vec<String> = {
+            let st = app.state::<AppState>();
+            let conn = st.db.lock().map_err(|e| e.to_string())?;
+            let mut already = std::collections::HashSet::new();
+            for p in &candidates {
+                if x_already_acted(&conn, account_id, p) || x_target_persona_count(&conn, p) >= 3 {
+                    already.insert(p.clone());
+                }
+            }
+            gh_pick_targets(&candidates, &already, (n_follow * 3).max(3) as usize, seed)
+        };
+        for prof in &pool {
+            if follows >= n_follow { break; }
             let p = prof.clone();
-            let r = tauri::async_runtime::spawn_blocking(move || x_follow_blocking(&p)).await.map_err(|e| e.to_string())?;
-            if r.is_ok() {
-                let st = app.state::<AppState>(); let l = st.db.lock();
-                if let Ok(conn) = l { let _ = x_record_action(&conn, account_id, "follow", &prof); }
-                follows += 1;
+            let res = tauri::async_runtime::spawn_blocking(move || x_follow_quality_blocking(&p)).await
+                .map_err(|e| e.to_string())?;
+            match res {
+                Ok(true) => {
+                    let st = app.state::<AppState>(); let l = st.db.lock();
+                    if let Ok(conn) = l { let _ = x_record_action(&conn, account_id, "follow", prof); }
+                    follows += 1;
+                }
+                Ok(false) => {} // 不达标/已关注，下一个
+                Err(e) if e.starts_with("HEALTH:") => { aborted_health = Some(e[7..].to_string()); break; }
+                Err(_) => {}
             }
             tokio::time::sleep(std::time::Duration::from_millis(get_random_delay(90, 240))).await;
         }
@@ -11080,17 +11116,57 @@ fn x_like_blocking(tweet_url: &str) -> Result<(), String> {
     Err(x_fail_health("未找到 like 按钮（可能已赞/改版/未登录）"))
 }
 
-/// 关注某用户 profile（已关注 testid 含 "-unfollow"，只点 "-follow"）。
-fn x_follow_blocking(profile_url: &str) -> Result<(), String> {
+/// People 搜索：按领域词找该领域的账号，返回候选 profile URL 列表。
+fn x_search_users_blocking(kw: &str) -> Result<Vec<String>, String> {
+    let q = kw.replace(' ', "%20");
+    unzoo_navigate(&format!("https://x.com/search?q={}&f=user", q))?;
+    std::thread::sleep(std::time::Duration::from_secs(4));
+    let mut waited = 0;
+    while !unzoo_element_exists("[data-testid=\"UserCell\"]") && waited < 10 {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        waited += 2;
+    }
+    let links = unzoo_get_links("[data-testid=\"UserCell\"] a[href^=\"/\"]")?;
+    // 规范化为 https://x.com/<handle>（单段路径，排除保留路径）
+    let reserved = ["i","search","hashtag","explore","home","notifications","messages","settings","compose"];
+    let mut profiles: Vec<String> = links.into_iter().filter_map(|h| {
+        let path = h.trim_start_matches("https://x.com").trim_start_matches('/');
+        if path.is_empty() || path.contains('/') || path.contains('?') { return None; }
+        if reserved.contains(&path) { return None; }
+        Some(format!("https://x.com/{}", path))
+    }).collect();
+    profiles.sort(); profiles.dedup();
+    log::info!("[X-ACTION] people 搜索 kw={} 采到 {} 个候选账号", kw, profiles.len());
+    Ok(profiles)
+}
+
+/// 关注一个「好用户」：在其主页读 简介 + 粉丝数 做质量门，达标才关注。
+/// 返回 Ok(true)=已关注 / Ok(false)=跳过(不达标/已关注) / Err=异常(含 HEALTH:)。
+fn x_follow_quality_blocking(profile_url: &str) -> Result<bool, String> {
     unzoo_navigate(profile_url)?;
     std::thread::sleep(std::time::Duration::from_millis(get_random_delay(2, 5)));
-    log::info!("[X-ACTION] follow 目标={}", profile_url);
-    if unzoo_element_exists("[data-testid$=\"-follow\"]") {
-        unzoo_click("[data-testid$=\"-follow\"]").map_err(|e| format!("follow 失败: {}", e))?;
-        std::thread::sleep(std::time::Duration::from_millis(800));
-        return Ok(());
+    // 没有 follow 按钮（已关注 / 改版 / 自己）→ 跳过
+    if !unzoo_element_exists("[data-testid$=\"-follow\"]") {
+        return Ok(false);
     }
-    Err(x_fail_health("未找到 follow 按钮（可能已关注/改版/未登录）"))
+    // 读简介
+    let bio_raw = unzoo_evaluate("(() => { const e = document.querySelector('[data-testid=\"UserDescription\"]'); return e ? e.innerText : ''; })()").unwrap_or_default();
+    let bio = serde_json::from_str::<String>(&bio_raw).unwrap_or(bio_raw);
+    // 读粉丝数
+    let fol_raw = unzoo_evaluate("(() => { const a = document.querySelector('a[href$=\"/verified_followers\"], a[href$=\"/followers\"]'); return a ? a.innerText : ''; })()").unwrap_or_default();
+    let fol = serde_json::from_str::<String>(&fol_raw).unwrap_or(fol_raw);
+    let followers = x_parse_count(&fol);
+    // 质量门：有简介 且 (粉丝≥500，或粉丝读不出时放行靠 People 排序兜底)
+    let has_bio = !bio.trim().is_empty();
+    let followers_ok = followers.map(|n| n >= 500).unwrap_or(true);
+    if !(has_bio && followers_ok) {
+        log::info!("[X-ACTION] follow 跳过(质量不达标) bio={} followers={:?} {}", has_bio, followers, profile_url);
+        return Ok(false);
+    }
+    unzoo_click("[data-testid$=\"-follow\"]").map_err(|e| x_fail_health(&format!("follow 点击失败: {}", e)))?;
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    log::info!("[X-ACTION] follow ✓ followers={:?} {}", followers, profile_url);
+    Ok(true)
 }
 
 /// 转推（Repost）某推文。
@@ -17135,6 +17211,12 @@ mod platform_meta_tests {
         assert_eq!(x_classify_health("你的账号已被冻结"), Some("banned"));
         assert_eq!(x_classify_health("验证你的身份以继续"), Some("locked"));
         assert_eq!(x_classify_health("无法执行此操作，请稍后再试"), Some("restricted"));
+        // 顺带测粉丝数解析
+        assert_eq!(x_parse_count("1,234 Followers"), Some(1234));
+        assert_eq!(x_parse_count("1.2K Followers"), Some(1200));
+        assert_eq!(x_parse_count("3.4M"), Some(3_400_000));
+        assert_eq!(x_parse_count("Followers 5,678"), Some(5678));
+        assert_eq!(x_parse_count("no digits"), None);
         // 正常页面（含登录后导航词）不误报
         assert_eq!(x_classify_health("Home timeline, Post, Notifications, Messages"), None);
         assert_eq!(x_classify_health("首页 发推 通知 私信"), None);
