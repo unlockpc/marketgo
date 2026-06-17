@@ -3045,7 +3045,6 @@ function renderAccountCard(account: any): string {
           <button class="btn btn-small btn-success" data-nurture-account="${account.id}" onclick="openNurtureModal('${account.id}', '${escapeHtml(account.platform)}', '${escapeHtml(account.username || account.email || 'N/A')}')" title="${t('nurture.quickNurture')}">🌱 ${t('nurture.quickNurture')}</button>
           ${account.platform === 'github' ? `<button class="btn btn-small btn-secondary" onclick="pickGithubDomains('${account.id}')" title="选择 GitHub 养号领域">🎯 领域</button>` : ''}
           ${(account.platform === 'twitter' || account.platform === 'x') ? `<button class="btn btn-small btn-secondary" onclick="pickXNiches('${account.id}')" title="选择 X 养号方向">🎯 方向</button>` : ''}
-          ${stage === 'new' ? `<button class="btn btn-small btn-warning" onclick="startWarmup('${account.id}')" title="开始养号">🔥 开始养号</button>` : ''}
           ${stage !== 'active' ? `<button class="btn btn-small btn-secondary" onclick="finishAccountNurture('${account.id}')" title="老账号无需养号，直接标为正常">✅ ${t('nurture.finishBtn')}</button>` : ''}
         </div>
       </div>
@@ -3134,16 +3133,6 @@ function renderAccountCard(account: any): string {
 };
 
 // Start warmup for a new account
-(window as any).startWarmup = async function(accountId: string) {
-  try {
-    await invoke('start_account_nurture', { accountId });
-    showToast(currentLanguage === 'zh' ? '已开始养号' : 'Warmup started', 'success');
-    await loadAccounts(); // This also loads lifecycles and renders accounts
-  } catch (error) {
-    showToast(`Error: ${error}`, 'error');
-  }
-};
-
 // #19 一键结束养号：老账号无需养号，直接标为正常并停止自动养号
 (window as any).finishAccountNurture = async function(accountId: string) {
   if (!(await uiConfirm(t('nurture.finishConfirm')))) return;

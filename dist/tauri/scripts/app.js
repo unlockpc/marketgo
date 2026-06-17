@@ -2862,7 +2862,6 @@
           <button class="btn btn-small btn-success" data-nurture-account="${account.id}" onclick="openNurtureModal('${account.id}', '${escapeHtml(account.platform)}', '${escapeHtml(account.username || account.email || "N/A")}')" title="${t("nurture.quickNurture")}">\u{1F331} ${t("nurture.quickNurture")}</button>
           ${account.platform === "github" ? `<button class="btn btn-small btn-secondary" onclick="pickGithubDomains('${account.id}')" title="\u9009\u62E9 GitHub \u517B\u53F7\u9886\u57DF">\u{1F3AF} \u9886\u57DF</button>` : ""}
           ${account.platform === "twitter" || account.platform === "x" ? `<button class="btn btn-small btn-secondary" onclick="pickXNiches('${account.id}')" title="\u9009\u62E9 X \u517B\u53F7\u65B9\u5411">\u{1F3AF} \u65B9\u5411</button>` : ""}
-          ${stage === "new" ? `<button class="btn btn-small btn-warning" onclick="startWarmup('${account.id}')" title="\u5F00\u59CB\u517B\u53F7">\u{1F525} \u5F00\u59CB\u517B\u53F7</button>` : ""}
           ${stage !== "active" ? `<button class="btn btn-small btn-secondary" onclick="finishAccountNurture('${account.id}')" title="\u8001\u8D26\u53F7\u65E0\u9700\u517B\u53F7\uFF0C\u76F4\u63A5\u6807\u4E3A\u6B63\u5E38">\u2705 ${t("nurture.finishBtn")}</button>` : ""}
         </div>
       </div>
@@ -2953,15 +2952,6 @@
       }
     }));
     document.body.appendChild(overlay);
-  };
-  window.startWarmup = async function(accountId) {
-    try {
-      await invoke2("start_account_nurture", { accountId });
-      showToast(currentLanguage === "zh" ? "\u5DF2\u5F00\u59CB\u517B\u53F7" : "Warmup started", "success");
-      await loadAccounts();
-    } catch (error) {
-      showToast(`Error: ${error}`, "error");
-    }
   };
   window.finishAccountNurture = async function(accountId) {
     if (!await uiConfirm(t("nurture.finishConfirm"))) return;
