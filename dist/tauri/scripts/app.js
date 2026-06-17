@@ -159,7 +159,7 @@
       "accounts.pageTitle": "\u{1F464} \u8EAB\u4EFD\u7BA1\u7406",
       // 账号生命周期阶段徽章
       "stage.new": "\u65B0\u8D26\u53F7",
-      "stage.warming": "\u517B\u53F7\u4E2D ({n}\u5929)",
+      "stage.warming": "\u517B\u53F7\u4E2D \xB7 \u5269{n}\u5929",
       "stage.active": "\u6B63\u5E38",
       "accounts.addAccount": "+ \u6DFB\u52A0\u8D26\u53F7",
       "accounts.overallHealth": "\u6574\u4F53\u5065\u5EB7",
@@ -614,7 +614,7 @@
       "accounts.pageTitle": "\u{1F464} Identities",
       // Account lifecycle stage badges
       "stage.new": "New",
-      "stage.warming": "Warming ({n}d)",
+      "stage.warming": "Warming \xB7 {n}d left",
       "stage.active": "Active",
       "accounts.addAccount": "+ Add Account",
       "accounts.overallHealth": "Overall Health",

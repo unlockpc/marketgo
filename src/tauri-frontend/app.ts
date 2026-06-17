@@ -51,7 +51,7 @@ const translations: Record<Language, Record<string, string>> = {
     'accounts.pageTitle': '👤 身份管理',
     // 账号生命周期阶段徽章
     'stage.new': '新账号',
-    'stage.warming': '养号中 ({n}天)',
+    'stage.warming': '养号中 · 剩{n}天',
     'stage.active': '正常',
     'accounts.addAccount': '+ 添加账号',
     'accounts.overallHealth': '整体健康',
@@ -520,7 +520,7 @@ const translations: Record<Language, Record<string, string>> = {
     'accounts.pageTitle': '👤 Identities',
     // Account lifecycle stage badges
     'stage.new': 'New',
-    'stage.warming': 'Warming ({n}d)',
+    'stage.warming': 'Warming · {n}d left',
     'stage.active': 'Active',
     'accounts.addAccount': '+ Add Account',
     'accounts.overallHealth': 'Overall Health',
