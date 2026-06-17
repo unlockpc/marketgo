@@ -11561,7 +11561,9 @@ fn get_account_lifecycle(
         "SELECT COALESCE(nurture_skip,0) FROM accounts WHERE id = ?1",
         params![account_id], |row| row.get(0)).unwrap_or(0);
 
-    let raw_days_since = (now - start_date).num_days() as i32;
+    // 按自然日(本地时区)算养号天数：昨天开始→今天=1天，不必满 24 小时（更符合直觉）
+    let raw_days_since = (Local::now().date_naive()
+        - start_date.with_timezone(&Local).date_naive()).num_days() as i32;
     let days_since_start = if skip == 1 { warmup_days } else { raw_days_since };
     let days_remaining = (warmup_days - days_since_start).max(0);
     let progress_percent = ((days_since_start as f64 / warmup_days as f64) * 100.0).min(100.0);
