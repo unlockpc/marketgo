@@ -2965,8 +2965,6 @@ function renderAccountCard(account: any): string {
     const daysSinceStart = lifecycle?.days_since_start ?? 0;
     const warmupDays = lifecycle?.warmup_days ?? 14;
     const todaySessions = lifecycle?.today?.sessions_completed || 0;
-    const todayTarget = lifecycle?.today?.sessions_min || 2;
-    const todayCompleted = todaySessions >= todayTarget;
 
     // Stage badge（#16 柔和胶囊风格，与健康徽章统一）
     const stageBadges: Record<string, string> = {
@@ -2983,17 +2981,14 @@ function renderAccountCard(account: any): string {
     // Today's nurture progress
     const todayProgress = lifecycle ? `
       <div class="nurture-today" style="margin: 8px 0; padding: 8px; background: var(--bg-secondary); border-radius: 6px;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
-          <span style="font-size: 12px; color: var(--text-muted);">今日养号进度</span>
-          <span style="font-size: 12px; font-weight: bold; color: ${todayCompleted ? 'var(--success)' : 'var(--warning)'};">
-            ${todaySessions} / ${todayTarget} 次
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <span style="font-size: 12px; color: var(--text-muted);">今日养号</span>
+          <span style="font-size: 12px; font-weight: bold; color: ${todaySessions > 0 ? 'var(--success)' : 'var(--text-muted)'};">
+            ${todaySessions} 次
           </span>
         </div>
-        <div style="background: var(--border); border-radius: 4px; height: 6px; overflow: hidden;">
-          <div style="background: ${todayCompleted ? 'var(--success)' : 'var(--primary)'}; height: 100%; width: ${Math.min(100, (todaySessions / todayTarget) * 100)}%; transition: width 0.3s;"></div>
-        </div>
         ${stage === 'warming' ? `
-          <div style="margin-top: 5px; font-size: 11px; color: var(--text-muted);">
+          <div style="margin-top: 6px; font-size: 11px; color: var(--text-muted);">
             养号进度: ${progressPercent}% (剩余 ${daysRemaining} 天)
           </div>
         ` : ''}

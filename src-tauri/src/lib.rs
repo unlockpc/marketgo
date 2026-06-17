@@ -11625,21 +11625,18 @@ fn get_account_lifecycle(
 
     // Calculate lifecycle status
     let now = Utc::now();
-    let start_date = nurture_started_at
-        .as_ref()
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .map(|d| d.with_timezone(&Utc))
-        .unwrap_or(now);
 
     // #19 跳过养号标记：成熟账号一键结束养号 → 直接当作「正常 / 养满」
     let skip: i64 = conn.query_row(
         "SELECT COALESCE(nurture_skip,0) FROM accounts WHERE id = ?1",
         params![account_id], |row| row.get(0)).unwrap_or(0);
 
-    // 按自然日(本地时区)算养号天数：昨天开始→今天=1天，不必满 24 小时（更符合直觉）
-    let raw_days_since = (Local::now().date_naive()
-        - start_date.with_timezone(&Local).date_naive()).num_days() as i32;
-    let days_since_start = if skip == 1 { warmup_days } else { raw_days_since };
+    // 养号天数 = 实际「养过号的天数」（nurture_daily_logs 去重日期数）：今天养了就算今天，
+    // 跳过的日子不计——比按日历差更贴合「养了几天」的真实含义。
+    let nurtured_days: i32 = conn.query_row(
+        "SELECT COUNT(DISTINCT date) FROM nurture_daily_logs WHERE account_id = ?1",
+        params![account_id], |r| r.get(0)).unwrap_or(0);
+    let days_since_start = if skip == 1 { warmup_days } else { nurtured_days };
     let days_remaining = (warmup_days - days_since_start).max(0);
     let progress_percent = ((days_since_start as f64 / warmup_days as f64) * 100.0).min(100.0);
 

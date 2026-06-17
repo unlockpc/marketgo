@@ -2800,8 +2800,6 @@
       const daysSinceStart = lifecycle?.days_since_start ?? 0;
       const warmupDays = lifecycle?.warmup_days ?? 14;
       const todaySessions = lifecycle?.today?.sessions_completed || 0;
-      const todayTarget = lifecycle?.today?.sessions_min || 2;
-      const todayCompleted = todaySessions >= todayTarget;
       const stageBadges = {
         "new": `<span class="stage-badge new">\u{1F195} ${t("stage.new")}</span>`,
         "warming": `<span class="stage-badge warming">\u{1F525} ${tf("stage.warming", { n: daysRemaining })}</span>`,
@@ -2811,17 +2809,14 @@
       const stageBadge = stageBadges[stage] || stageBadges["new"];
       const todayProgress = lifecycle ? `
       <div class="nurture-today" style="margin: 8px 0; padding: 8px; background: var(--bg-secondary); border-radius: 6px;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
-          <span style="font-size: 12px; color: var(--text-muted);">\u4ECA\u65E5\u517B\u53F7\u8FDB\u5EA6</span>
-          <span style="font-size: 12px; font-weight: bold; color: ${todayCompleted ? "var(--success)" : "var(--warning)"};">
-            ${todaySessions} / ${todayTarget} \u6B21
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <span style="font-size: 12px; color: var(--text-muted);">\u4ECA\u65E5\u517B\u53F7</span>
+          <span style="font-size: 12px; font-weight: bold; color: ${todaySessions > 0 ? "var(--success)" : "var(--text-muted)"};">
+            ${todaySessions} \u6B21
           </span>
         </div>
-        <div style="background: var(--border); border-radius: 4px; height: 6px; overflow: hidden;">
-          <div style="background: ${todayCompleted ? "var(--success)" : "var(--primary)"}; height: 100%; width: ${Math.min(100, todaySessions / todayTarget * 100)}%; transition: width 0.3s;"></div>
-        </div>
         ${stage === "warming" ? `
-          <div style="margin-top: 5px; font-size: 11px; color: var(--text-muted);">
+          <div style="margin-top: 6px; font-size: 11px; color: var(--text-muted);">
             \u517B\u53F7\u8FDB\u5EA6: ${progressPercent}% (\u5269\u4F59 ${daysRemaining} \u5929)
           </div>
         ` : ""}
