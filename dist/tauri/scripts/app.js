@@ -159,7 +159,8 @@
       "accounts.pageTitle": "\u{1F464} \u8EAB\u4EFD\u7BA1\u7406",
       // 账号生命周期阶段徽章
       "stage.new": "\u65B0\u8D26\u53F7",
-      "stage.warming": "\u517B\u53F7\u4E2D \xB7 \u5269{n}\u5929",
+      "stage.warming": "\u9884\u70ED\u4E2D \xB7 \u5269{n}\u5929",
+      "stage.growing": "\u6210\u957F\u4E2D \xB7 \u5269{n}\u5929",
       "stage.active": "\u6B63\u5E38",
       "accounts.addAccount": "+ \u6DFB\u52A0\u8D26\u53F7",
       "accounts.overallHealth": "\u6574\u4F53\u5065\u5EB7",
@@ -622,7 +623,8 @@
       "accounts.pageTitle": "\u{1F464} Identities",
       // Account lifecycle stage badges
       "stage.new": "New",
-      "stage.warming": "Warming \xB7 {n}d left",
+      "stage.warming": "Warmup \xB7 {n}d left",
+      "stage.growing": "Growth \xB7 {n}d left",
       "stage.active": "Active",
       "accounts.addAccount": "+ Add Account",
       "accounts.overallHealth": "Overall Health",
@@ -2817,13 +2819,16 @@
       const progressPercent = lifecycle?.progress_percent || 0;
       const daysSinceStart = lifecycle?.days_since_start ?? 0;
       const warmupDays = lifecycle?.warmup_days ?? 14;
+      const totalCycleDays = lifecycle?.total_cycle_days ?? warmupDays;
       const todaySessions = lifecycle?.today?.sessions_completed || 0;
+      const phaseRemaining = stage === "warming" ? Math.max(0, warmupDays - daysSinceStart) : stage === "growing" ? Math.max(0, totalCycleDays - daysSinceStart) : daysRemaining;
       const stageBadges = {
         "new": `<span class="stage-badge new">\u{1F195} ${t("stage.new")}</span>`,
-        "warming": `<span class="stage-badge warming">\u{1F525} ${tf("stage.warming", { n: daysRemaining })}</span>`,
+        "warming": `<span class="stage-badge warming">\u{1F525} ${tf("stage.warming", { n: phaseRemaining })}</span>`,
+        "growing": `<span class="stage-badge growing">\u{1F33F} ${tf("stage.growing", { n: phaseRemaining })}</span>`,
         "active": `<span class="stage-badge active">\u2705 ${t("stage.active")}</span>`
       };
-      const nurtureDaysProgress = lifecycle ? `<span class="stage-badge ${stage}" title="${escapeHtml(t("nurture.daysProgressTitle"))}">\u{1F331} ${Math.min(daysSinceStart, warmupDays)}/${warmupDays} ${t("nurture.days")}</span>` : "";
+      const nurtureDaysProgress = lifecycle ? `<span class="stage-badge ${stage}" title="${escapeHtml(t("nurture.daysProgressTitle"))}">\u{1F331} ${Math.min(daysSinceStart, totalCycleDays)}/${totalCycleDays} ${t("nurture.days")}</span>` : "";
       const stageBadge = stageBadges[stage] || stageBadges["new"];
       const todayProgress = lifecycle ? `
       <div class="nurture-today" style="margin: 8px 0; padding: 8px; background: var(--bg-secondary); border-radius: 6px;">
@@ -2833,7 +2838,7 @@
             ${todaySessions} \u6B21
           </span>
         </div>
-        ${stage === "warming" ? `
+        ${stage === "warming" || stage === "growing" ? `
           <div style="margin-top: 6px; font-size: 11px; color: var(--text-muted);">
             \u517B\u53F7\u8FDB\u5EA6: ${progressPercent}% (\u5269\u4F59 ${daysRemaining} \u5929)
           </div>

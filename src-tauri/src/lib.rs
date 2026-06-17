@@ -11620,14 +11620,16 @@ fn get_account_lifecycle(
         |row| row.get(0),
     ).unwrap_or(0);
 
-    // Get platform strategy
-    let (warmup_days, daily_min, daily_max): (i32, i32, i32) = conn
+    // Get platform strategy（养号周期：预热 + 成长两段；成长 NULL 时兜底=预热）
+    let (warmup_days, growth_days, daily_min, daily_max): (i32, i32, i32, i32) = conn
         .query_row(
-            "SELECT warmup_days, daily_sessions_min, daily_sessions_max FROM nurture_strategies WHERE platform = ?1",
+            "SELECT warmup_days, COALESCE(growth_days, warmup_days), daily_sessions_min, daily_sessions_max FROM nurture_strategies WHERE platform = ?1",
             params![platform],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
-        .unwrap_or((14, 2, 5)); // Default values
+        .unwrap_or((14, 14, 2, 5)); // Default values
+    // 完整养号周期 = 预热 + 成长（到达「成熟」所需天数）
+    let total_cycle_days = (warmup_days + growth_days).max(1);
 
     // Calculate lifecycle status
     let now = Utc::now();
@@ -11642,17 +11644,19 @@ fn get_account_lifecycle(
     let nurtured_days: i32 = conn.query_row(
         "SELECT COUNT(DISTINCT date) FROM nurture_daily_logs WHERE account_id = ?1",
         params![account_id], |r| r.get(0)).unwrap_or(0);
-    let days_since_start = if skip == 1 { warmup_days } else { nurtured_days };
-    let days_remaining = (warmup_days - days_since_start).max(0);
-    let progress_percent = ((days_since_start as f64 / warmup_days as f64) * 100.0).min(100.0);
+    let days_since_start = if skip == 1 { total_cycle_days } else { nurtured_days };
+    let days_remaining = (total_cycle_days - days_since_start).max(0);   // 距「成熟」还剩几天
+    let progress_percent = ((days_since_start as f64 / total_cycle_days as f64) * 100.0).min(100.0);
 
-    // Determine lifecycle stage
+    // Determine lifecycle stage：预热 → 成长 → 成熟（active），按「实际养过号的天数」分段
     let stage = if skip == 1 {
         "active"
     } else if nurture_started_at.is_none() {
         "new"
     } else if days_since_start < warmup_days {
         "warming"
+    } else if days_since_start < total_cycle_days {
+        "growing"
     } else {
         "active"
     };
@@ -11675,6 +11679,8 @@ fn get_account_lifecycle(
         "platform": platform,
         "stage": stage,
         "warmup_days": warmup_days,
+        "growth_days": growth_days,
+        "total_cycle_days": total_cycle_days,
         "days_since_start": days_since_start,
         "days_remaining": days_remaining,
         "progress_percent": format!("{:.0}", progress_percent),

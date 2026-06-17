@@ -51,7 +51,8 @@ const translations: Record<Language, Record<string, string>> = {
     'accounts.pageTitle': '👤 身份管理',
     // 账号生命周期阶段徽章
     'stage.new': '新账号',
-    'stage.warming': '养号中 · 剩{n}天',
+    'stage.warming': '预热中 · 剩{n}天',
+    'stage.growing': '成长中 · 剩{n}天',
     'stage.active': '正常',
     'accounts.addAccount': '+ 添加账号',
     'accounts.overallHealth': '整体健康',
@@ -528,7 +529,8 @@ const translations: Record<Language, Record<string, string>> = {
     'accounts.pageTitle': '👤 Identities',
     // Account lifecycle stage badges
     'stage.new': 'New',
-    'stage.warming': 'Warming · {n}d left',
+    'stage.warming': 'Warmup · {n}d left',
+    'stage.growing': 'Growth · {n}d left',
     'stage.active': 'Active',
     'accounts.addAccount': '+ Add Account',
     'accounts.overallHealth': 'Overall Health',
@@ -2982,17 +2984,26 @@ function renderAccountCard(account: any): string {
     const progressPercent = lifecycle?.progress_percent || 0;
     const daysSinceStart = lifecycle?.days_since_start ?? 0;
     const warmupDays = lifecycle?.warmup_days ?? 14;
+    // 完整养号周期（预热+成长，到「成熟」的总天数）；兜底用 warmup
+    const totalCycleDays = lifecycle?.total_cycle_days ?? warmupDays;
     const todaySessions = lifecycle?.today?.sessions_completed || 0;
 
-    // Stage badge（#16 柔和胶囊风格，与健康徽章统一）
+    // Stage badge（#16 柔和胶囊风格，与健康徽章统一）。
+    // 徽章里的「剩N天」= 当前阶段剩余（预热剩到成长 / 成长剩到成熟），比总剩余更直观
+    const phaseRemaining = stage === 'warming'
+      ? Math.max(0, warmupDays - daysSinceStart)
+      : stage === 'growing'
+        ? Math.max(0, totalCycleDays - daysSinceStart)
+        : daysRemaining;
     const stageBadges: Record<string, string> = {
       'new': `<span class="stage-badge new">🆕 ${t('stage.new')}</span>`,
-      'warming': `<span class="stage-badge warming">🔥 ${tf('stage.warming', { n: daysRemaining })}</span>`,
+      'warming': `<span class="stage-badge warming">🔥 ${tf('stage.warming', { n: phaseRemaining })}</span>`,
+      'growing': `<span class="stage-badge growing">🌿 ${tf('stage.growing', { n: phaseRemaining })}</span>`,
       'active': `<span class="stage-badge active">✅ ${t('stage.active')}</span>`
     };
-    // 养号天数进度：已养天数 / 需要总天数（如 3/14 天）
+    // 养号天数进度：已养天数 / 完整周期总天数（如 3/15 天）
     const nurtureDaysProgress = lifecycle
-      ? `<span class="stage-badge ${stage}" title="${escapeHtml(t('nurture.daysProgressTitle'))}">🌱 ${Math.min(daysSinceStart, warmupDays)}/${warmupDays} ${t('nurture.days')}</span>`
+      ? `<span class="stage-badge ${stage}" title="${escapeHtml(t('nurture.daysProgressTitle'))}">🌱 ${Math.min(daysSinceStart, totalCycleDays)}/${totalCycleDays} ${t('nurture.days')}</span>`
       : '';
     const stageBadge = stageBadges[stage] || stageBadges['new'];
 
@@ -3005,7 +3016,7 @@ function renderAccountCard(account: any): string {
             ${todaySessions} 次
           </span>
         </div>
-        ${stage === 'warming' ? `
+        ${(stage === 'warming' || stage === 'growing') ? `
           <div style="margin-top: 6px; font-size: 11px; color: var(--text-muted);">
             养号进度: ${progressPercent}% (剩余 ${daysRemaining} 天)
           </div>
