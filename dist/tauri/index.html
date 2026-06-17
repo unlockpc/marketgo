@@ -1423,6 +1423,8 @@
         </header>
 
         <div class="settings-container">
+          <!-- 区段快速导航：内容由 buildSettingsNav() 动态生成 -->
+          <nav id="settingsNav" class="settings-nav" aria-label="Settings sections"></nav>
           <!-- AI Configuration -->
           <section class="settings-section">
             <h3>🤖 <span data-i18n="settings.aiConfig">AI Configuration</span></h3>
@@ -1537,6 +1539,44 @@
               <input type="number" id="schedulerMaxPosts" class="input" value="50" min="1">
             </div>
             <button class="btn btn-primary" id="btnSaveScheduler" data-i18n="settings.saveScheduler">Save Scheduler Settings</button>
+          </section>
+
+          <!-- Nurture Cycle Configuration -->
+          <section class="settings-section">
+            <h3 data-i18n="settings.nurtureCycle">Nurture Cycle</h3>
+            <p class="text-muted" style="font-size:12px;margin-bottom:10px;" data-i18n="settings.nurtureCycleDesc">Customize the nurture pace for new accounts.</p>
+            <div class="form-group">
+              <label data-i18n="settings.nurturePlatform">Platform</label>
+              <select id="nurturePlatform" class="select">
+                <option value="twitter">Twitter / X</option>
+                <option value="github">GitHub</option>
+                <option value="linkedin">LinkedIn</option>
+                <option value="reddit">Reddit</option>
+                <option value="weibo">Weibo</option>
+                <option value="zhihu">Zhihu</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label data-i18n="settings.nurtureWarmupDays">Warmup duration (days)</label>
+              <input type="number" id="nurtureWarmupDays" class="input" value="5" min="1" max="90">
+            </div>
+            <div class="form-group">
+              <label data-i18n="settings.nurtureGrowthDays">Growth duration (days)</label>
+              <input type="number" id="nurtureGrowthDays" class="input" value="5" min="0" max="180">
+            </div>
+            <div class="form-group">
+              <label data-i18n="settings.nurtureSessions">Daily sessions (min – max)</label>
+              <div style="display:flex;gap:10px;align-items:center;">
+                <input type="number" id="nurtureSessionsMin" class="input" value="2" min="1" style="flex:1;">
+                <span>–</span>
+                <input type="number" id="nurtureSessionsMax" class="input" value="4" min="1" style="flex:1;">
+              </div>
+            </div>
+            <div class="form-group" style="display:flex;align-items:center;gap:8px;">
+              <input type="checkbox" id="nurtureEnabled" checked>
+              <label for="nurtureEnabled" style="margin:0;" data-i18n="settings.nurtureEnabled">Enable nurture for this platform</label>
+            </div>
+            <button class="btn btn-primary" id="btnSaveNurture" data-i18n="settings.saveNurture">Save Nurture Cycle</button>
           </section>
 
           <!-- Proxy Management -->

@@ -1831,6 +1831,40 @@ textarea.input {
   border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   margin-bottom: 16px;
+  scroll-margin-top: 60px;          /* 点导航跳转时不被粘性导航条盖住标题 */
+}
+
+/* 设置页区段快速导航（粘性 chip 条，动态生成） */
+.settings-nav {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 0;
+  margin-bottom: 12px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-light);
+}
+.settings-nav-chip {
+  padding: 5px 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-primary);
+  color: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.settings-nav-chip:hover { background: var(--bg-hover); }
+.settings-nav-chip.active {
+  background: var(--accent-light);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
 }
 
 .settings-section h3 {

@@ -277,6 +277,14 @@ const translations: Record<Language, Record<string, string>> = {
     'settings.interval': '间隔 (分钟)',
     'settings.maxDailyPosts': '每日最大发布数',
     'settings.saveScheduler': '保存调度器设置',
+    'settings.nurtureCycle': '养号周期',
+    'settings.nurtureCycleDesc': '自定义新号的养号节奏：预热时长 + 成长时长两段独立配置。预热期只点赞；成长期开放关注+互动；之后进入成熟期（全量，无时长）。发原创在走完预热期后解锁。不修改则用默认值（X 为预热 5 / 成长 5，成熟从第 10 天起）。',
+    'settings.nurturePlatform': '平台',
+    'settings.nurtureWarmupDays': '预热时长（天）',
+    'settings.nurtureGrowthDays': '成长时长（天）',
+    'settings.nurtureSessions': '每日养号次数 (最少 – 最多)',
+    'settings.nurtureEnabled': '启用该平台养号',
+    'settings.saveNurture': '保存养号周期',
     'settings.proxyPool': '代理池',
     'settings.addProxy': '+ 添加代理',
     'settings.proxyDesc': '管理多账号操作的代理。每个账号可以使用不同的代理。',
@@ -745,6 +753,14 @@ const translations: Record<Language, Record<string, string>> = {
     'settings.interval': 'Interval (minutes)',
     'settings.maxDailyPosts': 'Max Daily Posts',
     'settings.saveScheduler': 'Save Scheduler Settings',
+    'settings.nurtureCycle': 'Nurture Cycle',
+    'settings.nurtureCycleDesc': 'Customize the nurture pace for new accounts with two independent durations: warmup + growth. Warmup likes only; growth opens follows + engagement; after that the account is mature (full pace, no duration). Original posting unlocks once warmup is over. Leave unchanged to use the default (warmup 5 / growth 5 for X, mature from day 10).',
+    'settings.nurturePlatform': 'Platform',
+    'settings.nurtureWarmupDays': 'Warmup duration (days)',
+    'settings.nurtureGrowthDays': 'Growth duration (days)',
+    'settings.nurtureSessions': 'Daily sessions (min – max)',
+    'settings.nurtureEnabled': 'Enable nurture for this platform',
+    'settings.saveNurture': 'Save Nurture Cycle',
     'settings.proxyPool': 'Proxy Pool',
     'settings.addProxy': '+ Add Proxy',
     'settings.proxyDesc': 'Manage proxies for multi-account operations. Each account can use a different proxy.',
@@ -1347,6 +1363,8 @@ function initModals() {
   document.getElementById('btnSaveAI')?.addEventListener('click', saveAISettings);
   document.getElementById('btnTestAI')?.addEventListener('click', testAIConnection);
   document.getElementById('btnSaveScheduler')?.addEventListener('click', saveSchedulerSettings);
+  document.getElementById('btnSaveNurture')?.addEventListener('click', saveNurtureStrategy);
+  document.getElementById('nurturePlatform')?.addEventListener('change', populateNurtureForm);
   document.getElementById('aiProvider')?.addEventListener('change', () => { populateDefaultModels(); updateAIKeyVisibility(); });
   document.getElementById('btnRefreshModels')?.addEventListener('click', refreshModels);
   // Engage page
@@ -5344,6 +5362,9 @@ async function loadSettings() {
     langSelector.value = currentLanguage;
   }
 
+  // 区段导航不依赖后端，先建好（即使后续后端调用失败也有导航）
+  buildSettingsNav();
+
   try {
     // 尝试从后端加载 providers
     try {
@@ -5374,6 +5395,8 @@ async function loadSettings() {
     await loadScheduledJobs();
     // Load proxies
     await loadProxies();
+    // Load nurture cycle strategies
+    await loadNurtureStrategies();
     // Load browser profiles for settings page
     await loadSettingsProfiles();
     // Setup profile event handlers
@@ -5857,6 +5880,118 @@ async function saveSchedulerSettings() {
     showToast('Scheduler settings saved', 'success');
   } catch (error) {
     showToast('Failed to save scheduler settings', 'error');
+  }
+}
+
+// 设置页区段快速导航：遍历 .settings-section 生成跳转 chip，滚动时高亮当前区段。
+let settingsNavObserver: IntersectionObserver | null = null;
+function buildSettingsNav() {
+  const nav = document.getElementById('settingsNav');
+  const container = document.querySelector('#page-settings .settings-container');
+  if (!nav || !container) return;
+  const sections = Array.from(container.querySelectorAll('.settings-section')) as HTMLElement[];
+  nav.innerHTML = '';
+  const chipBySection = new Map<string, HTMLButtonElement>();
+  sections.forEach((sec, i) => {
+    if (!sec.id) sec.id = `settings-sec-${i}`;
+    const h3 = sec.querySelector('h3');
+    const label = (h3?.textContent || `Section ${i + 1}`).trim();
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'settings-nav-chip';
+    chip.textContent = label;
+    chip.addEventListener('click', () => sec.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+    nav.appendChild(chip);
+    chipBySection.set(sec.id, chip);
+  });
+  // 滚动高亮：区段进入视口上半区时点亮对应 chip
+  if (settingsNavObserver) settingsNavObserver.disconnect();
+  settingsNavObserver = new IntersectionObserver((entries) => {
+    entries.forEach((e) => {
+      if (!e.isIntersecting) return;
+      nav.querySelectorAll('.settings-nav-chip').forEach((c) => c.classList.remove('active'));
+      chipBySection.get((e.target as HTMLElement).id)?.classList.add('active');
+    });
+  }, { rootMargin: '-15% 0px -75% 0px', threshold: 0 });
+  sections.forEach((s) => settingsNavObserver!.observe(s));
+}
+
+// 养号周期设置：list_nurture_strategies 回填，update_nurture_strategy 保存。
+// session_duration / active_hours 不在 UI 暴露，回填后原样带回，避免被清零。
+let nurtureStrategyCache: Record<string, any> = {};
+
+async function loadNurtureStrategies() {
+  try {
+    const list = await invoke<any[]>('list_nurture_strategies');
+    nurtureStrategyCache = {};
+    for (const s of list || []) nurtureStrategyCache[s.platform] = s;
+  } catch { /* 表可能尚未播种，留空 */ }
+  populateNurtureForm();
+}
+
+function populateNurtureForm() {
+  const platform = (document.getElementById('nurturePlatform') as HTMLSelectElement)?.value || 'twitter';
+  const warmupEl = document.getElementById('nurtureWarmupDays') as HTMLInputElement;
+  const growthEl = document.getElementById('nurtureGrowthDays') as HTMLInputElement;
+  const minEl = document.getElementById('nurtureSessionsMin') as HTMLInputElement;
+  const maxEl = document.getElementById('nurtureSessionsMax') as HTMLInputElement;
+  const enEl = document.getElementById('nurtureEnabled') as HTMLInputElement;
+  if (!warmupEl) return;
+  const fallbackWarmup = platform === 'github' ? 3 : 5;
+  const s = nurtureStrategyCache[platform];
+  if (s) {
+    warmupEl.value = String(s.warmup_days ?? fallbackWarmup);
+    // growth_days 为空时后端用 COALESCE 兜底成 warmup，这里也对齐
+    growthEl.value = String(s.growth_days ?? s.warmup_days ?? fallbackWarmup);
+    minEl.value = String(s.daily_sessions_min ?? 2);
+    maxEl.value = String(s.daily_sessions_max ?? 4);
+    enEl.checked = s.enabled !== false;
+  } else {
+    // 没有该平台的策略行：给中等默认（GitHub 几乎无需养，3 天；成长时长默认 = 预热）
+    warmupEl.value = String(fallbackWarmup);
+    growthEl.value = String(fallbackWarmup);
+    minEl.value = '2';
+    maxEl.value = '4';
+    enEl.checked = true;
+  }
+}
+
+async function saveNurtureStrategy() {
+  const platform = (document.getElementById('nurturePlatform') as HTMLSelectElement)?.value || 'twitter';
+  const warmupDays = parseInt((document.getElementById('nurtureWarmupDays') as HTMLInputElement)?.value || '10', 10);
+  const growthDays = parseInt((document.getElementById('nurtureGrowthDays') as HTMLInputElement)?.value || '10', 10);
+  const min = parseInt((document.getElementById('nurtureSessionsMin') as HTMLInputElement)?.value || '2', 10);
+  const max = parseInt((document.getElementById('nurtureSessionsMax') as HTMLInputElement)?.value || '4', 10);
+  const enabled = (document.getElementById('nurtureEnabled') as HTMLInputElement)?.checked ?? true;
+  if (!Number.isFinite(warmupDays) || warmupDays < 1) {
+    showToast(`${t('settings.nurtureWarmupDays')} ≥ 1`, 'error');
+    return;
+  }
+  if (!Number.isFinite(growthDays) || growthDays < 0) {
+    showToast(`${t('settings.nurtureGrowthDays')} ≥ 0`, 'error');
+    return;
+  }
+  const sessMin = Math.max(1, Math.min(min, max));
+  const sessMax = Math.max(sessMin, max);
+  // 保留 UI 未暴露的时段/时长配置；无历史值则用合理默认。
+  const prev = nurtureStrategyCache[platform] || {};
+  try {
+    await invoke('update_nurture_strategy', {
+      platform,
+      warmupDays,
+      growthDays,
+      dailySessionsMin: sessMin,
+      dailySessionsMax: sessMax,
+      sessionDurationMin: prev.session_duration_min ?? 60,
+      sessionDurationMax: prev.session_duration_max ?? 300,
+      activeHoursStart: prev.active_hours_start ?? 8,
+      activeHoursEnd: prev.active_hours_end ?? 22,
+      enabled,
+    });
+    showToast(t('settings.saveNurture'), 'success');
+    await loadNurtureStrategies();
+  } catch (error) {
+    showToast(String(error), 'error');
   }
 }
 

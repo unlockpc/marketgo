@@ -382,6 +382,14 @@
       "settings.interval": "\u95F4\u9694 (\u5206\u949F)",
       "settings.maxDailyPosts": "\u6BCF\u65E5\u6700\u5927\u53D1\u5E03\u6570",
       "settings.saveScheduler": "\u4FDD\u5B58\u8C03\u5EA6\u5668\u8BBE\u7F6E",
+      "settings.nurtureCycle": "\u517B\u53F7\u5468\u671F",
+      "settings.nurtureCycleDesc": "\u81EA\u5B9A\u4E49\u65B0\u53F7\u7684\u517B\u53F7\u8282\u594F\uFF1A\u9884\u70ED\u65F6\u957F + \u6210\u957F\u65F6\u957F\u4E24\u6BB5\u72EC\u7ACB\u914D\u7F6E\u3002\u9884\u70ED\u671F\u53EA\u70B9\u8D5E\uFF1B\u6210\u957F\u671F\u5F00\u653E\u5173\u6CE8+\u4E92\u52A8\uFF1B\u4E4B\u540E\u8FDB\u5165\u6210\u719F\u671F\uFF08\u5168\u91CF\uFF0C\u65E0\u65F6\u957F\uFF09\u3002\u53D1\u539F\u521B\u5728\u8D70\u5B8C\u9884\u70ED\u671F\u540E\u89E3\u9501\u3002\u4E0D\u4FEE\u6539\u5219\u7528\u9ED8\u8BA4\u503C\uFF08X \u4E3A\u9884\u70ED 5 / \u6210\u957F 5\uFF0C\u6210\u719F\u4ECE\u7B2C 10 \u5929\u8D77\uFF09\u3002",
+      "settings.nurturePlatform": "\u5E73\u53F0",
+      "settings.nurtureWarmupDays": "\u9884\u70ED\u65F6\u957F\uFF08\u5929\uFF09",
+      "settings.nurtureGrowthDays": "\u6210\u957F\u65F6\u957F\uFF08\u5929\uFF09",
+      "settings.nurtureSessions": "\u6BCF\u65E5\u517B\u53F7\u6B21\u6570 (\u6700\u5C11 \u2013 \u6700\u591A)",
+      "settings.nurtureEnabled": "\u542F\u7528\u8BE5\u5E73\u53F0\u517B\u53F7",
+      "settings.saveNurture": "\u4FDD\u5B58\u517B\u53F7\u5468\u671F",
       "settings.proxyPool": "\u4EE3\u7406\u6C60",
       "settings.addProxy": "+ \u6DFB\u52A0\u4EE3\u7406",
       "settings.proxyDesc": "\u7BA1\u7406\u591A\u8D26\u53F7\u64CD\u4F5C\u7684\u4EE3\u7406\u3002\u6BCF\u4E2A\u8D26\u53F7\u53EF\u4EE5\u4F7F\u7528\u4E0D\u540C\u7684\u4EE3\u7406\u3002",
@@ -836,6 +844,14 @@
       "settings.interval": "Interval (minutes)",
       "settings.maxDailyPosts": "Max Daily Posts",
       "settings.saveScheduler": "Save Scheduler Settings",
+      "settings.nurtureCycle": "Nurture Cycle",
+      "settings.nurtureCycleDesc": "Customize the nurture pace for new accounts with two independent durations: warmup + growth. Warmup likes only; growth opens follows + engagement; after that the account is mature (full pace, no duration). Original posting unlocks once warmup is over. Leave unchanged to use the default (warmup 5 / growth 5 for X, mature from day 10).",
+      "settings.nurturePlatform": "Platform",
+      "settings.nurtureWarmupDays": "Warmup duration (days)",
+      "settings.nurtureGrowthDays": "Growth duration (days)",
+      "settings.nurtureSessions": "Daily sessions (min \u2013 max)",
+      "settings.nurtureEnabled": "Enable nurture for this platform",
+      "settings.saveNurture": "Save Nurture Cycle",
       "settings.proxyPool": "Proxy Pool",
       "settings.addProxy": "+ Add Proxy",
       "settings.proxyDesc": "Manage proxies for multi-account operations. Each account can use a different proxy.",
@@ -1370,6 +1386,8 @@
     document.getElementById("btnSaveAI")?.addEventListener("click", saveAISettings);
     document.getElementById("btnTestAI")?.addEventListener("click", testAIConnection);
     document.getElementById("btnSaveScheduler")?.addEventListener("click", saveSchedulerSettings);
+    document.getElementById("btnSaveNurture")?.addEventListener("click", saveNurtureStrategy);
+    document.getElementById("nurturePlatform")?.addEventListener("change", populateNurtureForm);
     document.getElementById("aiProvider")?.addEventListener("change", () => {
       populateDefaultModels();
       updateAIKeyVisibility();
@@ -4645,6 +4663,7 @@
     if (langSelector) {
       langSelector.value = currentLanguage;
     }
+    buildSettingsNav();
     try {
       try {
         const providers = await invoke2("get_ai_providers");
@@ -4667,6 +4686,7 @@
       await loadAIConfig();
       await loadScheduledJobs();
       await loadProxies();
+      await loadNurtureStrategies();
       await loadSettingsProfiles();
       setupProfileHandlers();
     } catch (error) {
@@ -5068,6 +5088,107 @@
       showToast("Scheduler settings saved", "success");
     } catch (error) {
       showToast("Failed to save scheduler settings", "error");
+    }
+  }
+  var settingsNavObserver = null;
+  function buildSettingsNav() {
+    const nav = document.getElementById("settingsNav");
+    const container = document.querySelector("#page-settings .settings-container");
+    if (!nav || !container) return;
+    const sections = Array.from(container.querySelectorAll(".settings-section"));
+    nav.innerHTML = "";
+    const chipBySection = /* @__PURE__ */ new Map();
+    sections.forEach((sec, i) => {
+      if (!sec.id) sec.id = `settings-sec-${i}`;
+      const h3 = sec.querySelector("h3");
+      const label = (h3?.textContent || `Section ${i + 1}`).trim();
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "settings-nav-chip";
+      chip.textContent = label;
+      chip.addEventListener("click", () => sec.scrollIntoView({ behavior: "smooth", block: "start" }));
+      nav.appendChild(chip);
+      chipBySection.set(sec.id, chip);
+    });
+    if (settingsNavObserver) settingsNavObserver.disconnect();
+    settingsNavObserver = new IntersectionObserver((entries) => {
+      entries.forEach((e) => {
+        if (!e.isIntersecting) return;
+        nav.querySelectorAll(".settings-nav-chip").forEach((c) => c.classList.remove("active"));
+        chipBySection.get(e.target.id)?.classList.add("active");
+      });
+    }, { rootMargin: "-15% 0px -75% 0px", threshold: 0 });
+    sections.forEach((s) => settingsNavObserver.observe(s));
+  }
+  var nurtureStrategyCache = {};
+  async function loadNurtureStrategies() {
+    try {
+      const list = await invoke2("list_nurture_strategies");
+      nurtureStrategyCache = {};
+      for (const s of list || []) nurtureStrategyCache[s.platform] = s;
+    } catch {
+    }
+    populateNurtureForm();
+  }
+  function populateNurtureForm() {
+    const platform = document.getElementById("nurturePlatform")?.value || "twitter";
+    const warmupEl = document.getElementById("nurtureWarmupDays");
+    const growthEl = document.getElementById("nurtureGrowthDays");
+    const minEl = document.getElementById("nurtureSessionsMin");
+    const maxEl = document.getElementById("nurtureSessionsMax");
+    const enEl = document.getElementById("nurtureEnabled");
+    if (!warmupEl) return;
+    const fallbackWarmup = platform === "github" ? 3 : 5;
+    const s = nurtureStrategyCache[platform];
+    if (s) {
+      warmupEl.value = String(s.warmup_days ?? fallbackWarmup);
+      growthEl.value = String(s.growth_days ?? s.warmup_days ?? fallbackWarmup);
+      minEl.value = String(s.daily_sessions_min ?? 2);
+      maxEl.value = String(s.daily_sessions_max ?? 4);
+      enEl.checked = s.enabled !== false;
+    } else {
+      warmupEl.value = String(fallbackWarmup);
+      growthEl.value = String(fallbackWarmup);
+      minEl.value = "2";
+      maxEl.value = "4";
+      enEl.checked = true;
+    }
+  }
+  async function saveNurtureStrategy() {
+    const platform = document.getElementById("nurturePlatform")?.value || "twitter";
+    const warmupDays = parseInt(document.getElementById("nurtureWarmupDays")?.value || "10", 10);
+    const growthDays = parseInt(document.getElementById("nurtureGrowthDays")?.value || "10", 10);
+    const min = parseInt(document.getElementById("nurtureSessionsMin")?.value || "2", 10);
+    const max = parseInt(document.getElementById("nurtureSessionsMax")?.value || "4", 10);
+    const enabled = document.getElementById("nurtureEnabled")?.checked ?? true;
+    if (!Number.isFinite(warmupDays) || warmupDays < 1) {
+      showToast(`${t("settings.nurtureWarmupDays")} \u2265 1`, "error");
+      return;
+    }
+    if (!Number.isFinite(growthDays) || growthDays < 0) {
+      showToast(`${t("settings.nurtureGrowthDays")} \u2265 0`, "error");
+      return;
+    }
+    const sessMin = Math.max(1, Math.min(min, max));
+    const sessMax = Math.max(sessMin, max);
+    const prev = nurtureStrategyCache[platform] || {};
+    try {
+      await invoke2("update_nurture_strategy", {
+        platform,
+        warmupDays,
+        growthDays,
+        dailySessionsMin: sessMin,
+        dailySessionsMax: sessMax,
+        sessionDurationMin: prev.session_duration_min ?? 60,
+        sessionDurationMax: prev.session_duration_max ?? 300,
+        activeHoursStart: prev.active_hours_start ?? 8,
+        activeHoursEnd: prev.active_hours_end ?? 22,
+        enabled
+      });
+      showToast(t("settings.saveNurture"), "success");
+      await loadNurtureStrategies();
+    } catch (error) {
+      showToast(String(error), "error");
     }
   }
   async function checkBrowserStatus() {

@@ -990,9 +990,10 @@ fn x_daily_quota(phase: &str) -> (i64, i64, i64) {
     }
 }
 
-/// 极少量原创是否解锁：号龄 ≥ 14 天且已有 L1 历史（点赞/关注）。频率上限由调用方按周限。
-fn x_l3_allowed(age_days: i64, l1_action_count: i64) -> bool {
-    age_days >= 14 && l1_action_count > 0
+/// 极少量原创是否解锁：号龄走完预热期（≥ warmup_days）且已有 L1 历史（点赞/关注）。
+/// 跟随养号周期缩放——用户把周期调短，发原创门槛同步前移。频率上限由调用方按周限。
+fn x_l3_allowed(age_days: i64, warmup_days: i64, l1_action_count: i64) -> bool {
+    age_days >= warmup_days && l1_action_count > 0
 }
 
 /// 良性、不带推广意图的短推文（仅填充时间线、绝不带链接/产品）。
@@ -1362,7 +1363,7 @@ const NURTURE_WARMUP_DAYS: &[(&str, i64)] = &[
     ("xiaohongshu", 30),   // 极严，需慢养拟真
     ("v2ex", 30),          // 部分节点要金币/账号年龄才能发
     // —— 较严（21 天）——
-    ("twitter", 21), ("x", 21),
+    ("twitter", 5), ("x", 5),       // 默认预热 5 天（成长时长 NULL→兜底 = 5，成熟从第 10 天起）；用户可在设置里自定义
     ("linkedin", 21),      // 职场，限制新号
     ("tiktok", 21),
     ("weibo", 21),         // 较严
@@ -3503,6 +3504,7 @@ fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         CREATE TABLE IF NOT EXISTS nurture_strategies (
             platform TEXT PRIMARY KEY,
             warmup_days INTEGER DEFAULT 14,
+            growth_days INTEGER,                    -- 成长期时长；NULL 时按 warmup_days 兜底（= 旧的 2×warmup 行为）
             daily_sessions_min INTEGER DEFAULT 2,
             daily_sessions_max INTEGER DEFAULT 5,
             session_duration_min INTEGER DEFAULT 60,
@@ -3601,6 +3603,8 @@ fn run_migrations(conn: &Connection) -> rusqlite::Result<()> {
     let _ = conn.execute("ALTER TABLE accounts ADD COLUMN gh_domains TEXT", []);
     // X 养号：所选方向（JSON 数组）
     let _ = conn.execute("ALTER TABLE accounts ADD COLUMN x_niches TEXT", []);
+    // 养号「成长期时长」独立可配；老库补列，NULL 时各查询用 COALESCE(growth_days, warmup_days) 兜底
+    let _ = conn.execute("ALTER TABLE nurture_strategies ADD COLUMN growth_days INTEGER", []);
 
     // Check if nurture_strategies table exists and add default strategies
     let has_nurture_strategies: bool = conn
@@ -3637,7 +3641,7 @@ fn run_migrations(conn: &Connection) -> rusqlite::Result<()> {
 
         // 一次性：按平台差异化 warmup_days（替代原来一刀切 14）。flag 守护，只跑一次，
         // 不覆盖用户后续在设置里手改的值。已有行只更 warmup_days；缺的平台补一条（其余列走表默认）。
-        if engine_cfg_get(&conn, "nurture_warmup_v2_seeded").is_none() {
+        if engine_cfg_get(&conn, "nurture_warmup_v4_seeded").is_none() {
             for (platform, days) in NURTURE_WARMUP_DAYS {
                 let updated = conn.execute(
                     "UPDATE nurture_strategies SET warmup_days=?2 WHERE platform=?1",
@@ -3648,7 +3652,7 @@ fn run_migrations(conn: &Connection) -> rusqlite::Result<()> {
                         params![platform, days]);
                 }
             }
-            engine_cfg_set(&conn, "nurture_warmup_v2_seeded", "1");
+            engine_cfg_set(&conn, "nurture_warmup_v4_seeded", "1");
         }
     }
 
@@ -10605,10 +10609,10 @@ async fn github_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -
         let domains = account_gh_domains(&conn, account_id);
         let created: Option<String> = conn.query_row("SELECT created_at FROM accounts WHERE id=?1", params![account_id], |r| r.get(0)).ok().flatten();
         let age = created.as_deref().and_then(parse_dt).map(|c| (Utc::now() - c).num_days()).unwrap_or(0);
-        let strat = conn.query_row("SELECT warmup_days, daily_sessions_min, daily_sessions_max FROM nurture_strategies WHERE platform='github'",
-            [], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,i64>(1)?, r.get::<_,i64>(2)?))).ok();
-        let (warmup, smin, smax) = strat.unwrap_or((3, 2, 5));
-        let (phase, _t) = nurture_phase_and_target(age, warmup, smin, smax);
+        let strat = conn.query_row("SELECT warmup_days, COALESCE(growth_days, warmup_days), daily_sessions_min, daily_sessions_max FROM nurture_strategies WHERE platform='github'",
+            [], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,i64>(1)?, r.get::<_,i64>(2)?, r.get::<_,i64>(3)?))).ok();
+        let (warmup, growth, smin, smax) = strat.unwrap_or((3, 3, 2, 5));
+        let (phase, _t) = nurture_phase_and_target(age, warmup, growth, smin, smax);
         (domains, phase.to_string())
     };
     if domains.is_empty() {
@@ -10793,17 +10797,17 @@ async fn github_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -
 async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Result<String, String> {
     let session_start = std::time::Instant::now();
     // 1) 读方向 + 分期
-    let (niches, phase) = {
+    let (niches, phase, warmup) = {
         let st = app.state::<AppState>();
         let conn = st.db.lock().map_err(|e| e.to_string())?;
         let niches = account_x_niches(&conn, account_id);
         let created: Option<String> = conn.query_row("SELECT created_at FROM accounts WHERE id=?1", params![account_id], |r| r.get(0)).ok().flatten();
         let age = created.as_deref().and_then(parse_dt).map(|c| (Utc::now() - c).num_days()).unwrap_or(0);
-        let strat = conn.query_row("SELECT warmup_days, daily_sessions_min, daily_sessions_max FROM nurture_strategies WHERE platform='twitter'",
-            [], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,i64>(1)?, r.get::<_,i64>(2)?))).ok();
-        let (warmup, smin, smax) = strat.unwrap_or((21, 2, 4));
-        let (phase, _t) = nurture_phase_and_target(age, warmup, smin, smax);
-        (niches, phase.to_string())
+        let strat = conn.query_row("SELECT warmup_days, COALESCE(growth_days, warmup_days), daily_sessions_min, daily_sessions_max FROM nurture_strategies WHERE platform='twitter'",
+            [], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,i64>(1)?, r.get::<_,i64>(2)?, r.get::<_,i64>(3)?))).ok();
+        let (warmup, growth, smin, smax) = strat.unwrap_or((5, 5, 2, 4));
+        let (phase, _t) = nurture_phase_and_target(age, warmup, growth, smin, smax);
+        (niches, phase.to_string(), warmup)
     };
     if niches.is_empty() {
         return Ok("账号未选方向，跳过 X 养号".to_string());
@@ -10984,7 +10988,7 @@ async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Res
             let weekly: i64 = conn.query_row("SELECT COUNT(*) FROM x_actions_log WHERE account_id=?1 AND action_type='tweet' AND date >= date('now','-7 day')", params![account_id], |r| r.get(0)).unwrap_or(0);
             (age, l1, weekly)
         };
-        if x_l3_allowed(age, l1) && weekly < 1 {
+        if x_l3_allowed(age, warmup, l1) && weekly < 1 {
             let text = x_benign_tweet(seed.wrapping_mul(7));
             let txt = text.clone();
             let r = tauri::async_runtime::spawn_blocking(move || x_post_tweet_blocking(&txt)).await.map_err(|e| e.to_string())?;
@@ -11476,7 +11480,7 @@ fn list_nurture_strategies(state: State<AppState>) -> Result<Vec<serde_json::Val
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
-            "SELECT platform, warmup_days, daily_sessions_min, daily_sessions_max,
+            "SELECT platform, warmup_days, COALESCE(growth_days, warmup_days), daily_sessions_min, daily_sessions_max,
                     session_duration_min, session_duration_max, active_hours_start,
                     active_hours_end, enabled, updated_at
              FROM nurture_strategies ORDER BY platform",
@@ -11488,14 +11492,15 @@ fn list_nurture_strategies(state: State<AppState>) -> Result<Vec<serde_json::Val
             Ok(serde_json::json!({
                 "platform": row.get::<_, String>(0)?,
                 "warmup_days": row.get::<_, i32>(1)?,
-                "daily_sessions_min": row.get::<_, i32>(2)?,
-                "daily_sessions_max": row.get::<_, i32>(3)?,
-                "session_duration_min": row.get::<_, i32>(4)?,
-                "session_duration_max": row.get::<_, i32>(5)?,
-                "active_hours_start": row.get::<_, i32>(6)?,
-                "active_hours_end": row.get::<_, i32>(7)?,
-                "enabled": row.get::<_, i32>(8)? == 1,
-                "updated_at": row.get::<_, String>(9)?
+                "growth_days": row.get::<_, i32>(2)?,
+                "daily_sessions_min": row.get::<_, i32>(3)?,
+                "daily_sessions_max": row.get::<_, i32>(4)?,
+                "session_duration_min": row.get::<_, i32>(5)?,
+                "session_duration_max": row.get::<_, i32>(6)?,
+                "active_hours_start": row.get::<_, i32>(7)?,
+                "active_hours_end": row.get::<_, i32>(8)?,
+                "enabled": row.get::<_, i32>(9)? == 1,
+                "updated_at": row.get::<_, String>(10)?
             }))
         })
         .map_err(|e| e.to_string())?;
@@ -11509,6 +11514,7 @@ fn update_nurture_strategy(
     state: State<AppState>,
     platform: String,
     warmup_days: i32,
+    growth_days: i32,
     daily_sessions_min: i32,
     daily_sessions_max: i32,
     session_duration_min: i32,
@@ -11521,13 +11527,13 @@ fn update_nurture_strategy(
     let now = Utc::now().to_rfc3339();
 
     conn.execute(
-        "INSERT INTO nurture_strategies (platform, warmup_days, daily_sessions_min, daily_sessions_max, session_duration_min, session_duration_max, active_hours_start, active_hours_end, enabled, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+        "INSERT INTO nurture_strategies (platform, warmup_days, growth_days, daily_sessions_min, daily_sessions_max, session_duration_min, session_duration_max, active_hours_start, active_hours_end, enabled, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
          ON CONFLICT(platform) DO UPDATE SET
-             warmup_days = ?2, daily_sessions_min = ?3, daily_sessions_max = ?4,
-             session_duration_min = ?5, session_duration_max = ?6,
-             active_hours_start = ?7, active_hours_end = ?8, enabled = ?9, updated_at = ?10",
-        params![platform, warmup_days, daily_sessions_min, daily_sessions_max,
+             warmup_days = ?2, growth_days = ?3, daily_sessions_min = ?4, daily_sessions_max = ?5,
+             session_duration_min = ?6, session_duration_max = ?7,
+             active_hours_start = ?8, active_hours_end = ?9, enabled = ?10, updated_at = ?11",
+        params![platform, warmup_days, growth_days, daily_sessions_min, daily_sessions_max,
                 session_duration_min, session_duration_max, active_hours_start,
                 active_hours_end, if enabled { 1 } else { 0 }, now],
     )
@@ -12385,9 +12391,12 @@ fn parse_dt(s: &str) -> Option<chrono::DateTime<Utc>> {
 
 /// 平台首页（养号/体检导航用）。
 /// 按号龄分期定当日养号目标场次：新号轻、成长期重、成熟期维持。
-fn nurture_phase_and_target(age_days: i64, warmup: i64, s_min: i64, s_max: i64) -> (&'static str, i64) {
+/// 按「预热时长 + 成长时长」两段独立配置判定阶段：
+///   预热 [0, warmup) → 成长 [warmup, warmup+growth) → 成熟 [warmup+growth, ∞)。
+/// 成熟是终态、无时长。growth<=0 视为成长期长度为 0（预热完直接进成熟）。
+fn nurture_phase_and_target(age_days: i64, warmup: i64, growth: i64, s_min: i64, s_max: i64) -> (&'static str, i64) {
     if age_days < warmup { ("warmup", s_min.max(1)) }
-    else if age_days < warmup * 2 { ("growth", s_max.max(s_min)) }
+    else if age_days < warmup + growth.max(0) { ("growth", s_max.max(s_min)) }
     else { ("mature", ((s_min + s_max + 1) / 2).max(1)) }
 }
 
@@ -14188,21 +14197,21 @@ fn nurture_schedule_tick(conn: &Connection) {
     for (aid, platform, created_at, health, last_nurture) in accounts {
         if matches!(health.as_str(), "banned" | "logged_out" | "shadowbanned" | "locked" | "restricted") { continue; }
         let strat = conn.query_row(
-            "SELECT warmup_days, daily_sessions_min, daily_sessions_max, session_duration_min, \
+            "SELECT warmup_days, COALESCE(growth_days, warmup_days), daily_sessions_min, daily_sessions_max, session_duration_min, \
                     session_duration_max, active_hours_start, active_hours_end, enabled \
              FROM nurture_strategies WHERE platform=?1",
             params![platform.to_lowercase()],
             |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?,
-                    r.get::<_, i64>(4)?, r.get::<_, i64>(5)?, r.get::<_, i64>(6)?, r.get::<_, i64>(7)?)),
+                    r.get::<_, i64>(4)?, r.get::<_, i64>(5)?, r.get::<_, i64>(6)?, r.get::<_, i64>(7)?, r.get::<_, i64>(8)?)),
         ).ok();
-        let (warmup, smin, smax, dmin, dmax, ah_s, ah_e, enabled) = match strat { Some(v) => v, None => continue };
+        let (warmup, growth, smin, smax, dmin, dmax, ah_s, ah_e, enabled) = match strat { Some(v) => v, None => continue };
         if enabled == 0 { continue; }
 
         let in_hours = if ah_s < ah_e { hour >= ah_s && hour < ah_e } else { hour >= ah_s || hour < ah_e };
         if !in_hours { continue; }
 
         let age_days = created_at.as_deref().and_then(parse_dt).map(|c| (now - c).num_days()).unwrap_or(0);
-        let (phase, target) = nurture_phase_and_target(age_days, warmup, smin, smax);
+        let (phase, target) = nurture_phase_and_target(age_days, warmup, growth, smin, smax);
 
         let done: i64 = conn.query_row(
             "SELECT sessions_completed FROM nurture_daily_logs WHERE account_id=?1 AND date=?2",
@@ -15654,14 +15663,14 @@ fn get_nurture_overview(state: State<'_, AppState>) -> Result<Vec<NurtureOvervie
         // 有自身绑定，或有全局默认 profile 可继承，都算"可用"
         let bound = profile.as_deref().map(|s| !s.is_empty()).unwrap_or(false) || has_global;
         let strat = conn.query_row(
-            "SELECT warmup_days, daily_sessions_min, daily_sessions_max, enabled FROM nurture_strategies WHERE platform=?1",
+            "SELECT warmup_days, COALESCE(growth_days, warmup_days), daily_sessions_min, daily_sessions_max, enabled FROM nurture_strategies WHERE platform=?1",
             params![platform.to_lowercase()],
-            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?)),
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?, r.get::<_, i64>(4)?)),
         ).ok();
         let age_days = created.as_deref().and_then(parse_dt).map(|c| (now - c).num_days()).unwrap_or(0);
         let (phase, target) = match strat {
-            Some((w, smin, smax, en)) if en != 0 => {
-                let (p, t) = nurture_phase_and_target(age_days, w, smin, smax);
+            Some((w, g, smin, smax, en)) if en != 0 => {
+                let (p, t) = nurture_phase_and_target(age_days, w, g, smin, smax);
                 (p.to_string(), t)
             }
             _ => ("—".to_string(), 0),
@@ -17181,11 +17190,32 @@ mod platform_meta_tests {
     }
 
     #[test]
+    fn nurture_phase_two_durations() {
+        // 预热10 + 成长10：成熟从第 20 天起（= 旧的 2×warmup 行为）
+        assert_eq!(nurture_phase_and_target(0, 10, 10, 2, 4).0, "warmup");
+        assert_eq!(nurture_phase_and_target(9, 10, 10, 2, 4).0, "warmup");
+        assert_eq!(nurture_phase_and_target(10, 10, 10, 2, 4).0, "growth");
+        assert_eq!(nurture_phase_and_target(19, 10, 10, 2, 4).0, "growth");
+        assert_eq!(nurture_phase_and_target(20, 10, 10, 2, 4).0, "mature");
+        // 两段独立：预热7 + 成长30 → 成熟从第 37 天起
+        assert_eq!(nurture_phase_and_target(6, 7, 30, 2, 4).0, "warmup");
+        assert_eq!(nurture_phase_and_target(7, 7, 30, 2, 4).0, "growth");
+        assert_eq!(nurture_phase_and_target(36, 7, 30, 2, 4).0, "growth");
+        assert_eq!(nurture_phase_and_target(37, 7, 30, 2, 4).0, "mature");
+        // 成长时长为 0：预热完直接进成熟
+        assert_eq!(nurture_phase_and_target(5, 5, 0, 2, 4).0, "mature");
+    }
+
+    #[test]
     fn x_l3_gate() {
-        assert!(!x_l3_allowed(6, 50));
-        assert!(!x_l3_allowed(20, 0));
-        assert!(x_l3_allowed(14, 1));
-        assert!(x_l3_allowed(40, 100));
+        // 闸门跟随 warmup：号龄未到预热期末或无 L1 历史都不解锁
+        assert!(!x_l3_allowed(6, 10, 50));    // 号龄 < warmup
+        assert!(!x_l3_allowed(20, 10, 0));    // 无 L1 历史
+        assert!(x_l3_allowed(10, 10, 1));     // 恰好走完预热期 + 有 L1
+        assert!(x_l3_allowed(40, 10, 100));
+        // 周期调长后门槛同步后移
+        assert!(!x_l3_allowed(14, 21, 1));
+        assert!(x_l3_allowed(21, 21, 1));
     }
 
     #[test]
