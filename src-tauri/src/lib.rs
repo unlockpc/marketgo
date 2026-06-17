@@ -10801,13 +10801,12 @@ async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Res
     let seed = get_random_delay(1, 100_000);
     let kw = kws[(seed as usize) % kws.len()];
 
-    // 3) 浏览器：用 X 高级搜索运算符取该领域「热门+实时」原创推（而非傻搜领域词）：
-    //    min_faves:N=点赞≥N(热门)；-filter:replies/retweets=只要原创主推；f=live=最新(实时)。
-    const X_MIN_FAVES: i64 = 30; // 热度阈值，可调（太高没结果、太低不够热）
-    let query = format!("{} min_faves:{} -filter:replies -filter:retweets", kw, X_MIN_FAVES);
-    let q_enc = query.replace(' ', "%20");
+    // 3) 浏览器：搜领域词，用「热门(Top)」标签——X 按互动热度排序，直接给该领域当下热门推。
+    //    注意：高级运算符 min_faves 在 X 网页端已失效（会被当字面文本→0 结果），故不用运算符；
+    //    不带 f=live → 默认 Top(热门)；Top 本身偏向近期高互动，兼顾热度+新鲜。
+    let q_enc = kw.replace(' ', "%20");
     let probe: (Option<String>, Vec<String>) = tauri::async_runtime::spawn_blocking(move || {
-        let url = format!("https://x.com/search?q={}&f=live", q_enc);
+        let url = format!("https://x.com/search?q={}", q_enc);
         unzoo_navigate(&url)?;
         std::thread::sleep(std::time::Duration::from_secs(4));
         // A：体检——抓页面文本判封禁/锁定（suspended/locked 会重定向到对应页）
