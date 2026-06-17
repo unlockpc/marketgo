@@ -1125,6 +1125,20 @@ const defaultAiProviders: Record<string, any> = {
 let aiProviders: Record<string, any> = { ...defaultAiProviders };
 
 // Initialize
+// 跨天自动刷新：页面长期开着、跨过零点后，「今日养号进度」「今日统计」等按天数据会过期。
+// 当「上次刷新（=app 启动）的日期 ≠ 今天」时，自动刷新一次页面。
+const APP_BOOT_DAY = new Date().toDateString();
+function autoRefreshIfStale() {
+  if (new Date().toDateString() === APP_BOOT_DAY) return;
+  const m = document.getElementById('modalNurture');
+  if (m && m.classList.contains('active')) return; // 养号弹窗进行中，别打断
+  console.log('[auto-refresh] 上次刷新不是今天，自动刷新页面');
+  location.reload();
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) autoRefreshIfStale(); });
+window.addEventListener('focus', autoRefreshIfStale);
+window.setInterval(autoRefreshIfStale, 60_000); // 一直开着跨零点也能触发
+
 document.addEventListener('DOMContentLoaded', async () => {
   console.log('Tauri app initializing...');
 

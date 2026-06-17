@@ -1123,6 +1123,19 @@
     qwen: { name: "\u963F\u91CC\u5343\u95EE", models: ["qwen-turbo", "qwen-plus", "qwen-max"] }
   };
   var aiProviders = { ...defaultAiProviders };
+  var APP_BOOT_DAY = (/* @__PURE__ */ new Date()).toDateString();
+  function autoRefreshIfStale() {
+    if ((/* @__PURE__ */ new Date()).toDateString() === APP_BOOT_DAY) return;
+    const m = document.getElementById("modalNurture");
+    if (m && m.classList.contains("active")) return;
+    console.log("[auto-refresh] \u4E0A\u6B21\u5237\u65B0\u4E0D\u662F\u4ECA\u5929\uFF0C\u81EA\u52A8\u5237\u65B0\u9875\u9762");
+    location.reload();
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) autoRefreshIfStale();
+  });
+  window.addEventListener("focus", autoRefreshIfStale);
+  window.setInterval(autoRefreshIfStale, 6e4);
   document.addEventListener("DOMContentLoaded", async () => {
     console.log("Tauri app initializing...");
     loadSavedLanguage();
