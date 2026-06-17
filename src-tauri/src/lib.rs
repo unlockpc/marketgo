@@ -948,22 +948,22 @@ pub struct XNiche {
 }
 
 const X_NICHES: &[XNiche] = &[
-    XNiche { key: "technology",       label: "Technology(科技)",            keywords: &["technology","tech","AI","software"] },
-    XNiche { key: "business_finance", label: "Business & finance(商业财经)", keywords: &["business","finance","investing"] },
-    XNiche { key: "science",          label: "Science(科学)",               keywords: &["science","research"] },
-    XNiche { key: "careers",          label: "Careers(职业)",               keywords: &["careers","jobs","hiring"] },
-    XNiche { key: "gaming",           label: "Gaming(游戏)",                keywords: &["gaming","games"] },
-    XNiche { key: "news",             label: "News(新闻)",                  keywords: &["news","breaking news"] },
-    XNiche { key: "entertainment",    label: "Entertainment(娱乐)",         keywords: &["entertainment"] },
-    XNiche { key: "arts_culture",     label: "Arts & culture(艺术文化)",    keywords: &["art","culture"] },
-    XNiche { key: "music",            label: "Music(音乐)",                 keywords: &["music"] },
-    XNiche { key: "movies_tv",        label: "Movies & TV(影视)",           keywords: &["movies","film","TV"] },
-    XNiche { key: "sports",           label: "Sports(体育)",                keywords: &["sports"] },
-    XNiche { key: "fashion_beauty",   label: "Fashion & beauty(时尚美妆)",  keywords: &["fashion","beauty"] },
-    XNiche { key: "food",             label: "Food(美食)",                  keywords: &["food","cooking"] },
-    XNiche { key: "travel",           label: "Travel(旅行)",                keywords: &["travel"] },
-    XNiche { key: "outdoors",         label: "Outdoors(户外)",              keywords: &["outdoors","hiking"] },
-    XNiche { key: "hobbies",          label: "Hobbies & interests(兴趣爱好)", keywords: &["hobbies","DIY"] },
+    XNiche { key: "technology",       label: "Technology(科技)",            keywords: &["technology","tech","AI","software","gadgets","innovation","programming","coding","open source","cybersecurity","cloud computing","machine learning","robotics","#tech","#AI","#technology","semiconductors","developer tools","#coding"] },
+    XNiche { key: "business_finance", label: "Business & finance(商业财经)", keywords: &["business","finance","investing","stocks","markets","economy","entrepreneurship","venture capital","crypto","trading","fintech","#investing","#finance","#business","startup funding","earnings","real estate","personal finance"] },
+    XNiche { key: "science",          label: "Science(科学)",               keywords: &["science","research","physics","biology","space","astronomy","climate","neuroscience","chemistry","#science","genetics","biotech","NASA","quantum physics","scientific discovery","#space","evolution"] },
+    XNiche { key: "careers",          label: "Careers(职业)",               keywords: &["careers","jobs","hiring","remote work","job search","career advice","#hiring","leadership","productivity","networking","resume tips","interview tips","future of work","upskilling","#careers","layoffs","work culture"] },
+    XNiche { key: "gaming",           label: "Gaming(游戏)",                keywords: &["gaming","games","#gaming","esports","indie games","game dev","PC gaming","console gaming","Nintendo","PlayStation","Xbox","Steam","RPG","FPS","game release","#gamedev","retro gaming","#indiedev"] },
+    XNiche { key: "news",             label: "News(新闻)",                  keywords: &["news","breaking news","world news","politics","current events","headlines","#news","journalism","geopolitics","elections","#breakingnews","top stories","analysis"] },
+    XNiche { key: "entertainment",    label: "Entertainment(娱乐)",         keywords: &["entertainment","celebrity","pop culture","#entertainment","awards","streaming","viral","trending","showbiz","red carpet","reality tv","#celebrity"] },
+    XNiche { key: "arts_culture",     label: "Arts & culture(艺术文化)",    keywords: &["art","culture","design","photography","painting","museums","#art","creativity","digital art","illustration","architecture","contemporary art","#design","AI art","sculpture","graphic design"] },
+    XNiche { key: "music",            label: "Music(音乐)",                 keywords: &["music","#music","new music","hip hop","pop music","rock","indie music","music production","vinyl","concerts","album","#newmusic","EDM","k-pop","songwriting","live music"] },
+    XNiche { key: "movies_tv",        label: "Movies & TV(影视)",           keywords: &["movies","film","TV","cinema","#movies","streaming","trailers","box office","series","documentary","#film","TV shows","Oscars","film review","#cinema"] },
+    XNiche { key: "sports",           label: "Sports(体育)",                keywords: &["sports","#sports","football","soccer","basketball","NBA","NFL","tennis","baseball","F1","olympics","#football","athletics","transfer news","match highlights","#NBA"] },
+    XNiche { key: "fashion_beauty",   label: "Fashion & beauty(时尚美妆)",  keywords: &["fashion","beauty","style","makeup","skincare","#fashion","streetwear","outfit","beauty tips","fashion week","#beauty","trends","cosmetics","#OOTD","haircare"] },
+    XNiche { key: "food",             label: "Food(美食)",                  keywords: &["food","cooking","recipes","foodie","#food","restaurant","baking","chef","#foodie","home cooking","cuisine","street food","dessert","healthy eating","#recipe"] },
+    XNiche { key: "travel",           label: "Travel(旅行)",                keywords: &["travel","#travel","wanderlust","travel tips","destinations","backpacking","#travelphotography","vacation","adventure","solo travel","road trip","hidden gems","#travelgram","digital nomad"] },
+    XNiche { key: "outdoors",         label: "Outdoors(户外)",              keywords: &["outdoors","hiking","camping","nature","#outdoors","backpacking","climbing","national parks","wildlife","#hiking","fishing","mountains","trail running","kayaking","#nature"] },
+    XNiche { key: "hobbies",          label: "Hobbies & interests(兴趣爱好)", keywords: &["hobbies","DIY","crafts","woodworking","gardening","#DIY","collecting","model building","knitting","photography","#crafts","maker","3D printing","calligraphy","origami"] },
 ];
 
 /// 收集所选方向 key 对应的全部关键词（按出现顺序去重，未知 key 跳过）。
