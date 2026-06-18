@@ -1618,6 +1618,44 @@ interface XNicheItem { key: string; label: string; keywords: string[] }
   });
 };
 
+interface SfDomainItem { key: string; label: string; keywords: string[] }
+
+// SegmentFault 养号领域多选（按账号）。养号时按所选领域搜索→浏览→读文章/问题。复用 .modal.active。
+(window as any).pickSegmentfaultDomains = async function(accountId: string): Promise<void> {
+  let cat: SfDomainItem[] = [];
+  let current: string[] = [];
+  try {
+    cat = await invoke<SfDomainItem[]>('sf_domains_catalog');
+    current = await invoke<string[]>('get_account_sf_domains', { accountId });
+  } catch (e) { showToast('加载领域失败: ' + e, 'error'); return; }
+  const overlay = document.createElement('div');
+  overlay.className = 'modal active';
+  overlay.innerHTML = `
+    <div class="modal-content">
+      <div class="modal-header"><h3>选择 SegmentFault 养号领域（可多选）</h3></div>
+      <div class="modal-body">
+        ${cat.map(d => `<label style="display:block;margin:6px 0;">
+          <input type="checkbox" value="${d.key}"${current.includes(d.key) ? ' checked' : ''}> ${d.label}
+          <span style="color:var(--text-muted);font-size:12px;">(${d.keywords.slice(0,4).join('、')}…)</span>
+        </label>`).join('')}
+      </div>
+      <div class="modal-footer">
+        <button class="btn" id="sfDomCancel">取消</button>
+        <button class="btn btn-success" id="sfDomSave">保存</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#sfDomCancel')!.addEventListener('click', () => overlay.remove());
+  overlay.querySelector('#sfDomSave')!.addEventListener('click', async () => {
+    const keys = Array.from(overlay.querySelectorAll<HTMLInputElement>('input:checked')).map(i => i.value);
+    try {
+      await invoke('set_account_sf_domains', { accountId, domains: keys });
+      showToast('SegmentFault 领域已保存', 'success');
+      overlay.remove();
+    } catch (e) { showToast('保存失败: ' + e, 'error'); }
+  });
+};
+
 // ===== #4 加账号：手机号 / 账号密码 分区录入凭据 =====
 interface AddAcctEntry { platform: string; username: string; password: string; }
 
@@ -2418,7 +2456,10 @@ let platformSceneMap: Record<string, string> = {};
 // 养号方向/领域：key→label（静态，缓存一次）+ account_id→已选 key 列表（每次刷新）
 let ghDomainLabels: Record<string, string> = {};
 let xNicheLabels: Record<string, string> = {};
+let sfDomainLabels: Record<string, string> = {};
 let accountNichesMap: Record<string, string[]> = {};
+// 平台 → 是否需要手工登录（设置页可维护，segmentfault 默认 true）。供账号卡片展示「手工登录」徽章。
+let platformManualLoginCache: Record<string, boolean> = {};
 
 async function loadAccounts() {
   try {
@@ -2426,9 +2467,12 @@ async function loadAccounts() {
     if (Object.keys(platformSceneMap).length === 0) {
       try { platformSceneMap = (await invoke<Record<string, string>>('platform_scenes')) || {}; } catch { /* */ }
     }
+    // 平台手工登录配置：每次刷新（轻量），保证设置改动后卡片徽章同步
+    try { platformManualLoginCache = (await invoke<Record<string, boolean>>('get_platform_manual_login')) || {}; } catch { /* */ }
     if (Object.keys(ghDomainLabels).length === 0) {
       try { (await invoke<any[]>('gh_domains_catalog')).forEach(d => { ghDomainLabels[d.key] = d.label; }); } catch { /* */ }
       try { (await invoke<any[]>('x_niches_catalog')).forEach(n => { xNicheLabels[n.key] = n.label; }); } catch { /* */ }
+      try { (await invoke<any[]>('sf_domains_catalog')).forEach(d => { sfDomainLabels[d.key] = d.label; }); } catch { /* */ }
     }
     try { accountNichesMap = (await invoke<Record<string, string[]>>('account_niches')) || {}; } catch { /* */ }
     // 加载身份(persona)列表，用于按 Gmail 分组 + 归属下拉
@@ -3037,6 +3081,7 @@ function renderAccountCard(account: any): string {
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
           <span class="account-platform" style="font-weight:700;">${escapeHtml(account.platform)}</span>
           ${platformSceneMap[account.platform] ? `<span class="stage-badge" style="background:var(--bg-secondary);color:var(--text-muted);" title="平台场景类别">${t('scene.' + platformSceneMap[account.platform])}</span>` : ''}
+          ${platformManualLoginCache[(account.platform || '').toLowerCase()] ? `<span class="stage-badge" style="background:rgba(168,85,247,0.12);color:#a855f7;" title="该平台需手工登录（自动登录走不通，请在弹出的浏览器窗口里手动登录一次）">✋ 手工登录</span>` : ''}
           ${healthBadge}
           ${stageBadge}
           ${nurtureDaysProgress}
@@ -3048,7 +3093,7 @@ function renderAccountCard(account: any): string {
         ${(() => {
           const keys = accountNichesMap[account.id] || [];
           if (!keys.length) return '';
-          const lm = account.platform === 'github' ? ghDomainLabels : ((account.platform === 'twitter' || account.platform === 'x') ? xNicheLabels : {});
+          const lm = account.platform === 'github' ? ghDomainLabels : ((account.platform === 'twitter' || account.platform === 'x') ? xNicheLabels : (account.platform === 'segmentfault' ? sfDomainLabels : {}));
           const chip = (k: string, hidden: boolean) => `<span class="stage-badge" style="background:var(--bg-secondary);color:var(--primary);${hidden ? 'display:none;' : ''}" data-extra="${hidden ? '1' : '0'}" title="养号方向">🎯 ${escapeHtml(lm[k] || k)}</span>`;
           const chips = keys.map((k, i) => chip(k, i >= 2)).join('');
           const more = keys.length > 2
@@ -3065,10 +3110,13 @@ function renderAccountCard(account: any): string {
         </div>
         ${todayProgress}
         <div class="account-actions">
-          <button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="自动登录：查登录→Google登录→否则注册">🔑 自动登录</button>
+          ${platformManualLoginCache[(account.platform || '').toLowerCase()]
+            ? `<button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="该平台自动登录走不通，点此直接打开登录页，在浏览器里手动登录一次">✋ 手工登录</button>`
+            : `<button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="自动登录：查登录→Google登录→否则注册">🔑 自动登录</button>`}
           <button class="btn btn-small btn-success" data-nurture-account="${account.id}" onclick="openNurtureModal('${account.id}', '${escapeHtml(account.platform)}', '${escapeHtml(account.username || account.email || 'N/A')}')" title="${t('nurture.quickNurture')}">🌱 ${t('nurture.quickNurture')}</button>
           ${account.platform === 'github' ? `<button class="btn btn-small btn-secondary" onclick="pickGithubDomains('${account.id}')" title="选择 GitHub 养号领域">🎯 领域</button>` : ''}
           ${(account.platform === 'twitter' || account.platform === 'x') ? `<button class="btn btn-small btn-secondary" onclick="pickXNiches('${account.id}')" title="选择 X 养号方向">🎯 方向</button>` : ''}
+          ${account.platform === 'segmentfault' ? `<button class="btn btn-small btn-secondary" onclick="pickSegmentfaultDomains('${account.id}')" title="选择 SegmentFault 养号领域（养号时按领域搜索→浏览→读文章）">🎯 领域</button>` : ''}
           ${stage !== 'active' ? `<button class="btn btn-small btn-secondary" onclick="finishAccountNurture('${account.id}')" title="老账号无需养号，直接标为正常">✅ ${t('nurture.finishBtn')}</button>` : ''}
         </div>
       </div>
@@ -5408,6 +5456,8 @@ async function loadSettings() {
     await loadProxies();
     // Load nurture cycle strategies
     await loadNurtureStrategies();
+    // Load per-platform 手工登录 config
+    await loadPlatformManualLogin();
     // Load browser profiles for settings page
     await loadSettingsProfiles();
     // Setup profile event handlers
@@ -5416,6 +5466,52 @@ async function loadSettings() {
     console.error('Settings error:', error);
   }
 }
+
+// ===== 平台手工登录配置（设置页） =====
+// 列出全部平台，逐个开关「需要手工登录」。开关即存（config 表 platform_manual_login.<id>）。
+async function loadPlatformManualLogin() {
+  const container = document.getElementById('platformManualLoginList');
+  if (!container) return;
+  try {
+    const [grouped, current] = await Promise.all([
+      invoke<Record<string, any[]>>('get_register_platforms'),
+      invoke<Record<string, boolean>>('get_platform_manual_login'),
+    ]);
+    platformManualLoginCache = current || {};
+    // 平铺所有平台（去重，保留分类信息用于分组标题）
+    const catTitles: Record<string, string> = {
+      international: '🌍 国际', developer: '👨‍💻 开发者', chinese: '🇨🇳 国内',
+      japanese: '🇯🇵 日本', korean: '🇰🇷 韩国', russian: '🇷🇺 俄语', messaging: '💬 即时通讯',
+    };
+    let html = '';
+    for (const [cat, list] of Object.entries(grouped || {})) {
+      if (!Array.isArray(list) || !list.length) continue;
+      html += `<div class="platform-category" style="margin-bottom:8px;"><h4 style="margin:6px 0;color:var(--text-muted);font-size:12px;">${catTitles[cat] || cat}</h4><div style="display:flex;flex-wrap:wrap;gap:6px 14px;">`;
+      for (const p of list) {
+        const id = (p.id || '').toLowerCase();
+        const checked = platformManualLoginCache[id] ? 'checked' : '';
+        html += `<label class="checkbox" style="display:inline-flex;align-items:center;gap:6px;font-size:13px;"><input type="checkbox" value="${escapeHtml(id)}" ${checked} onchange="togglePlatformManualLogin(this)"> ${escapeHtml(p.name || p.id)}</label>`;
+      }
+      html += '</div></div>';
+    }
+    container.innerHTML = html || '<span class="text-muted" style="font-size:12px;">无可配置平台</span>';
+  } catch (e) {
+    container.innerHTML = '<span class="text-muted" style="font-size:12px;">加载失败</span>';
+  }
+}
+
+(window as any).togglePlatformManualLogin = async function(el: HTMLInputElement) {
+  const platform = (el.value || '').toLowerCase();
+  const on = el.checked;
+  try {
+    await invoke('set_config', { key: `platform_manual_login.${platform}`, value: on ? 'true' : 'false' });
+    platformManualLoginCache[platform] = on;
+    showToast(`${platform}：${on ? '已标记为手工登录' : '已取消手工登录'}`, 'success');
+  } catch (e) {
+    el.checked = !on; // 回滚
+    showToast('保存失败', 'error');
+  }
+};
 
 // ===== Browser Profile Selection (Settings Page) =====
 async function loadSettingsProfiles() {

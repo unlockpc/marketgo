@@ -979,6 +979,43 @@ fn x_niche_keywords(keys: &[&str]) -> Vec<&'static str> {
     out
 }
 
+/// SegmentFault（思否）养号领域：key 唯一，keywords 为思否站内搜索用的中文/技术词。
+/// 养号时按所选领域随机取词，走 https://segmentfault.com/search?q=<词> 搜索→浏览→读文章/问题。
+/// 与 GH_DOMAINS 同构（前端经 sf_domains_catalog 渲染多选框，存 accounts.sf_domains）。
+pub struct SfDomain {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub keywords: &'static [&'static str],
+}
+
+const SF_DOMAINS: &[SfDomain] = &[
+    SfDomain { key: "frontend",  label: "前端",            keywords: &["前端","React","Vue","TypeScript","Webpack","Vite","CSS","浏览器渲染","前端性能优化","Next.js"] },
+    SfDomain { key: "backend",   label: "后端",            keywords: &["后端","Java","Spring Boot","Node.js","Go","微服务","API 设计","高并发","分布式系统"] },
+    SfDomain { key: "ml",        label: "AI/机器学习",     keywords: &["机器学习","深度学习","PyTorch","TensorFlow","大模型","NLP","计算机视觉"] },
+    SfDomain { key: "ai_coding", label: "AI 编程/Agent",   keywords: &["大模型应用","LangChain","RAG","AI Agent","Prompt 工程","Copilot","Cursor"] },
+    SfDomain { key: "data",      label: "数据工程",        keywords: &["数据分析","数据仓库","Spark","Flink","ETL","Pandas","数据可视化"] },
+    SfDomain { key: "devops",    label: "DevOps/云原生",   keywords: &["Docker","Kubernetes","CI/CD","云原生","Linux","Nginx","运维","可观测性"] },
+    SfDomain { key: "mobile",    label: "移动开发",        keywords: &["Android","iOS","Flutter","React Native","Kotlin","Swift","小程序"] },
+    SfDomain { key: "security",  label: "安全",            keywords: &["网络安全","渗透测试","加密算法","漏洞","JWT","OAuth","XSS","SQL 注入"] },
+    SfDomain { key: "web3",      label: "区块链/Web3",     keywords: &["区块链","以太坊","智能合约","Solidity","Web3"] },
+    SfDomain { key: "database",  label: "数据库",          keywords: &["MySQL","PostgreSQL","Redis","MongoDB","数据库优化","索引优化","SQL"] },
+    SfDomain { key: "devtools",  label: "开发工具/效率",   keywords: &["Git","VSCode","命令行","自动化脚本","效率工具","正则表达式"] },
+    SfDomain { key: "language",  label: "编程语言/基础",   keywords: &["算法","设计模式","数据结构","Rust","Python","JavaScript","并发编程"] },
+];
+
+/// 收集所选领域 key 对应的全部关键词（按出现顺序去重，未知 key 跳过）。
+fn sf_domain_keywords(keys: &[&str]) -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = Vec::new();
+    for k in keys {
+        if let Some(d) = SF_DOMAINS.iter().find(|d| d.key == *k) {
+            for w in d.keywords {
+                if !out.contains(w) { out.push(w); }
+            }
+        }
+    }
+    out
+}
+
 /// 按号龄分期返回当日 X 配额：(likes, follows, engages)。engages = 转推+回复预算。
 /// X 反自动化最严 → 量级极保守、关注最克制。
 fn x_daily_quota(phase: &str) -> (i64, i64, i64) {
@@ -1148,6 +1185,14 @@ fn account_x_niches(conn: &Connection, account_id: &str) -> Vec<String> {
     raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok()).unwrap_or_default()
 }
 
+/// 读账号所选 SegmentFault 领域（sf_domains JSON 数组），解析失败/空 → 空 vec。
+fn account_sf_domains(conn: &Connection, account_id: &str) -> Vec<String> {
+    let raw: Option<String> = conn.query_row(
+        "SELECT sf_domains FROM accounts WHERE id=?1",
+        params![account_id], |r| r.get(0)).ok().flatten();
+    raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok()).unwrap_or_default()
+}
+
 #[derive(serde::Serialize)]
 pub struct GhDomainItem { pub key: String, pub label: String, pub topics: Vec<String> }
 
@@ -1214,6 +1259,39 @@ fn set_account_x_niches(state: State<AppState>, account_id: String, niches: Vec<
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+pub struct SfDomainItem { pub key: String, pub label: String, pub keywords: Vec<String> }
+
+/// 给前端渲染 SegmentFault 领域多选框。
+#[tauri::command]
+fn sf_domains_catalog() -> Vec<SfDomainItem> {
+    SF_DOMAINS.iter().map(|d| SfDomainItem {
+        key: d.key.to_string(),
+        label: d.label.to_string(),
+        keywords: d.keywords.iter().map(|w| w.to_string()).collect(),
+    }).collect()
+}
+
+/// 读取某账号已选 SegmentFault 领域（供前端回勾）。
+#[tauri::command]
+fn get_account_sf_domains(state: State<AppState>, account_id: String) -> Result<Vec<String>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    Ok(account_sf_domains(&conn, &account_id))
+}
+
+/// 保存某账号所选 SegmentFault 领域（仅保留合法 key）。
+#[tauri::command]
+fn set_account_sf_domains(state: State<AppState>, account_id: String, domains: Vec<String>) -> Result<(), String> {
+    let valid: Vec<String> = domains.into_iter()
+        .filter(|k| SF_DOMAINS.iter().any(|d| d.key == k))
+        .collect();
+    let json = serde_json::to_string(&valid).map_err(|e| e.to_string())?;
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    conn.execute("UPDATE accounts SET sf_domains=?1 WHERE id=?2", params![json, account_id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// 平台 → 场景类别 key（research/product/social/content/career/lifestyle）。
 /// 供前端在已开通账号卡片上展示场景类别徽章（与开通选择器同一套分类）。
 #[tauri::command]
@@ -1228,17 +1306,19 @@ fn platform_scenes() -> std::collections::HashMap<String, String> {
 #[tauri::command]
 fn account_niches(state: State<AppState>) -> Result<std::collections::HashMap<String, Vec<String>>, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    let mut stmt = conn.prepare("SELECT id, platform, gh_domains, x_niches FROM accounts").map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare("SELECT id, platform, gh_domains, x_niches, sf_domains FROM accounts").map_err(|e| e.to_string())?;
     let rows = stmt.query_map([], |r| Ok((
         r.get::<_, String>(0)?, r.get::<_, String>(1)?,
         r.get::<_, Option<String>>(2)?, r.get::<_, Option<String>>(3)?,
+        r.get::<_, Option<String>>(4)?,
     ))).map_err(|e| e.to_string())?;
     let mut out = std::collections::HashMap::new();
     for row in rows.flatten() {
-        let (id, platform, gh, x) = row;
+        let (id, platform, gh, x, sf) = row;
         let raw = match platform.to_lowercase().as_str() {
             "github" => gh,
             "twitter" | "x" => x,
+            "segmentfault" => sf,
             _ => None,
         };
         if let Some(keys) = raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok()) {
@@ -1255,9 +1335,9 @@ struct PlatformMeta {
     mode: &'static str,    // auto(🟢 Google自动) | manual(🟡 开登录页手动)
 }
 
-/// 可在「开通账号」里分类展示的全部平台 key（29 个）。
+/// 可在「开通账号」里分类展示的全部平台 key（28 个）。
 const PLATFORM_KEYS: &[&str] = &[
-    "github", "devto", "hashnode", "hackernews", "qiita", "zenn", "habr", "v2ex", "segmentfault", "csdn", "oschina",
+    "github", "devto", "hashnode", "hackernews", "qiita", "zenn", "habr", "segmentfault", "csdn", "oschina",
     "producthunt", "betalist", "alternativeto", "indiehackers",
     "twitter", "reddit", "facebook", "telegram", "weibo", "jike", "vk",
     "medium", "note", "zhihu", "naver_blog",
@@ -1377,7 +1457,10 @@ const NURTURE_WARMUP_DAYS: &[(&str, i64)] = &[
     // —— 宽松内容/产品社区（7 天）——
     ("medium", 7), ("producthunt", 7), ("qiita", 7), ("zenn", 7),
     ("note", 7), ("note_japan", 7), ("betalist", 7), ("alternativeto", 7),
-    ("indiehackers", 7), ("segmentfault", 7), ("sspai", 7),
+    ("indiehackers", 7), ("sspai", 7),
+    // SegmentFault：预热 3 天 + 成长 7 天（成长期 growth_days 见下方一次性 seed），总周期 10 天。
+    // 思否风控偏内容质量/声望而非账号年龄，不需长预热；攒声望靠成长期持续高质量回答。
+    ("segmentfault", 3),
     // —— 几乎无需养（3 天）：代码托管 / 消息 / 宽松技术站 ——
     ("github", 3), ("devto", 3), ("hashnode", 3),
     ("telegram", 3), ("csdn", 3), ("oschina", 3),
@@ -3603,6 +3686,8 @@ fn run_migrations(conn: &Connection) -> rusqlite::Result<()> {
     let _ = conn.execute("ALTER TABLE accounts ADD COLUMN gh_domains TEXT", []);
     // X 养号：所选方向（JSON 数组）
     let _ = conn.execute("ALTER TABLE accounts ADD COLUMN x_niches TEXT", []);
+    // SegmentFault 养号：所选领域（JSON 数组）
+    let _ = conn.execute("ALTER TABLE accounts ADD COLUMN sf_domains TEXT", []);
     // 养号「成长期时长」独立可配；老库补列，NULL 时各查询用 COALESCE(growth_days, warmup_days) 兜底
     let _ = conn.execute("ALTER TABLE nurture_strategies ADD COLUMN growth_days INTEGER", []);
 
@@ -3653,6 +3738,20 @@ fn run_migrations(conn: &Connection) -> rusqlite::Result<()> {
                 }
             }
             engine_cfg_set(&conn, "nurture_warmup_v4_seeded", "1");
+        }
+
+        // 一次性：SegmentFault 养号节奏定为「预热 3 天 + 成长 7 天」（总周期 10 天）。
+        // flag 守护只跑一次，不覆盖用户后续手改；缺行则补一条。
+        if engine_cfg_get(&conn, "nurture_segmentfault_cadence_seeded").is_none() {
+            let updated = conn.execute(
+                "UPDATE nurture_strategies SET warmup_days=3, growth_days=7 WHERE platform='segmentfault'",
+                []).unwrap_or(0);
+            if updated == 0 {
+                let _ = conn.execute(
+                    "INSERT OR IGNORE INTO nurture_strategies (platform, warmup_days, growth_days) VALUES ('segmentfault', 3, 7)",
+                    []);
+            }
+            engine_cfg_set(&conn, "nurture_segmentfault_cadence_seeded", "1");
         }
     }
 
@@ -4601,7 +4700,6 @@ fn get_register_platforms() -> HashMap<String, Vec<PlatformInfo>> {
     platforms.insert("chinese".to_string(), vec![
         PlatformInfo { id: "weibo".to_string(), name: "微博".to_string(), phone: true, google_oauth: false },
         PlatformInfo { id: "zhihu".to_string(), name: "知乎".to_string(), phone: true, google_oauth: false },
-        PlatformInfo { id: "v2ex".to_string(), name: "V2EX".to_string(), phone: false, google_oauth: true },
         PlatformInfo { id: "sspai".to_string(), name: "少数派".to_string(), phone: false, google_oauth: false },
         PlatformInfo { id: "jike".to_string(), name: "即刻".to_string(), phone: true, google_oauth: false },
         PlatformInfo { id: "xiaohongshu".to_string(), name: "小红书".to_string(), phone: true, google_oauth: false },
@@ -4915,7 +5013,30 @@ fn accept_cookies_best_effort() {
 }
 
 #[tauri::command]
-async fn register_platform(state: State<'_, AppState>, platform: String) -> Result<RegistrationResult, String> {
+async fn register_platform(app: AppHandle, platform: String) -> Result<RegistrationResult, String> {
+    // Gmail/Unzoo 连接检查：纯文件系统访问，async 安全，留在异步上下文
+    let gmail_status = check_unzoo_gmail_cookies().await;
+    if gmail_status.is_err() {
+        return Ok(RegistrationResult {
+            success: false,
+            platform: platform.clone(),
+            username: None,
+            error: Some("Gmail not connected. Please login to Gmail in Unzoo browser first.".to_string()),
+            needs_manual_verification: true,
+            verification_reason: Some("Gmail required for OAuth login".to_string()),
+        });
+    }
+    let gmail_email = gmail_status.ok();
+    // 整段注册/登录是同步阻塞的浏览器流程（unzoo_* 走阻塞 reqwest + std::thread::sleep）。
+    // 必须丢进 spawn_blocking，否则会阻塞/panic 异步运行时——表现为「浏览器标签弹出但动作 stall、
+    // 命令永不返回」，调用方拿不到结果（例如开通后账号列表不刷新）。
+    tauri::async_runtime::spawn_blocking(move || register_platform_blocking(app, platform, gmail_email))
+        .await
+        .map_err(|e| format!("注册任务执行失败: {}", e))?
+}
+
+// 阻塞版注册/登录流程：全程同步 unzoo_* 浏览器操作 + thread::sleep，只能在 spawn_blocking 里跑。
+fn register_platform_blocking(app: AppHandle, platform: String, gmail_email: Option<String>) -> Result<RegistrationResult, String> {
     let config = match get_platform_config(&platform) {
         Some(c) => c,
         None => return Ok(RegistrationResult {
@@ -4930,26 +5051,14 @@ async fn register_platform(state: State<'_, AppState>, platform: String) -> Resu
 
     // Check if account already exists in database
     let existing_account: Option<(String, String)> = {
-        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        let st = app.state::<AppState>();
+        let conn = st.db.lock().map_err(|e| e.to_string())?;
         conn.query_row(
             "SELECT id, username FROM accounts WHERE platform = ? AND status = 'active'",
             params![platform],
             |row| Ok((row.get(0)?, row.get::<_, Option<String>>(1)?.unwrap_or_default()))
         ).ok()
     };
-
-    // Check Gmail/Unzoo connection first
-    let gmail_status = check_unzoo_gmail_cookies().await;
-    if gmail_status.is_err() {
-        return Ok(RegistrationResult {
-            success: false,
-            platform: platform.clone(),
-            username: None,
-            error: Some("Gmail not connected. Please login to Gmail in Unzoo browser first.".to_string()),
-            needs_manual_verification: true,
-            verification_reason: Some("Gmail required for OAuth login".to_string()),
-        });
-    }
 
     log::info!("=== Starting registration flow for {} ===", config.name);
 
@@ -4975,7 +5084,7 @@ async fn register_platform(state: State<'_, AppState>, platform: String) -> Resu
     if let Ok(page_text) = unzoo_get_text() {
         if check_login_status(&page_text, &platform) {
             log::info!("✓ Already logged in to {}", platform);
-            return save_account_and_return_success(&state, &platform, &existing_account, &gmail_status.ok());
+            return save_account_and_return_success(&app, &platform, &existing_account, &gmail_email);
         }
         log::info!("✗ Not logged in to {}", platform);
     }
@@ -5073,7 +5182,7 @@ async fn register_platform(state: State<'_, AppState>, platform: String) -> Resu
                 if let Ok(page_text) = unzoo_get_text() {
                     if check_login_status(&page_text, &platform) {
                         log::info!("✓ OAuth login successful for {}", platform);
-                        return save_account_and_return_success(&state, &platform, &existing_account, &gmail_status.ok());
+                        return save_account_and_return_success(&app, &platform, &existing_account, &gmail_email);
                     }
                 }
             } else {
@@ -5153,7 +5262,7 @@ async fn register_platform(state: State<'_, AppState>, platform: String) -> Resu
                 if let Ok(page_text) = unzoo_get_text() {
                     if check_login_status(&page_text, &platform) {
                         log::info!("✓ Registration successful for {}", platform);
-                        return save_account_and_return_success(&state, &platform, &existing_account, &gmail_status.ok());
+                        return save_account_and_return_success(&app, &platform, &existing_account, &gmail_email);
                     }
                 }
                 break;
@@ -5178,7 +5287,7 @@ async fn register_platform(state: State<'_, AppState>, platform: String) -> Resu
 
 // Helper function to save account and return success
 fn save_account_and_return_success(
-    state: &State<'_, AppState>,
+    app: &AppHandle,
     platform: &str,
     existing_account: &Option<(String, String)>,
     email: &Option<String>,
@@ -5189,7 +5298,8 @@ fn save_account_and_return_success(
         email.as_ref().map(|e| e.split('@').next().unwrap_or("user").to_string())
     };
 
-    if let Ok(conn) = state.db.lock() {
+    let st = app.state::<AppState>();
+    if let Ok(conn) = st.db.lock() {
         if existing_account.is_some() {
             let _ = conn.execute(
                 "UPDATE accounts SET status = 'active' WHERE platform = ?",
@@ -5248,12 +5358,24 @@ async fn account_auto_login(app: AppHandle, account_id: String) -> Result<String
         if let Ok(conn) = guard { let _ = conn.execute("UPDATE accounts SET health_status='healthy', last_health_check=datetime('now') WHERE id=?1", params![account_id]); }
         return Ok(format!("{}：已登录 ✓", platform));
     }
+    // 设置页标记为「需手工登录」的平台：自动登录走不通（如 segmentfault 的 Google OAuth 服务端失效），
+    // 不浪费时间硬试自动注册/登录，直接打开登录页让用户手动登录一次。
+    let manual_required = {
+        let st = app.state::<AppState>();
+        let guard = st.db.lock();
+        let key = format!("platform_manual_login.{}", platform.to_lowercase());
+        let mut v = guard.ok().and_then(|conn| {
+            conn.query_row("SELECT value FROM config WHERE key=?1", params![key], |r| r.get::<_, String>(0)).ok()
+        }).map(|s| s == "true" || s == "1");
+        // 未显式配置时的默认：segmentfault 需手工登录
+        if v.is_none() && platform.eq_ignore_ascii_case("segmentfault") { v = Some(true); }
+        v.unwrap_or(false)
+    };
     // 敌意平台（X/Reddit）：自动登录有锁号风险/技术上进不去 → 不硬试，直接打开登录页让用户点最后一下
     let hostile = matches!(platform.to_lowercase().as_str(), "twitter" | "x" | "reddit");
-    if !hostile {
+    if !hostile && !manual_required {
         // 友好平台：先全自动（Google 登录 → 否则注册）
-        let st = app.state::<AppState>();
-        let res = register_platform(st, platform.clone()).await?;
+        let res = register_platform(app.clone(), platform.clone()).await?;
         if res.success {
             let st2 = app.state::<AppState>();
             let guard = st2.db.lock();
@@ -7381,7 +7503,7 @@ fn check_can_reply(conn: &Connection, platform: &str, config: &ReplyConfig) -> R
 fn get_reply_strategies(state: State<AppState>) -> Result<Vec<ReplyStrategy>, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
 
-    let platforms = ["reddit", "twitter", "hackernews", "linkedin", "v2ex", "zhihu"];
+    let platforms = ["reddit", "twitter", "hackernews", "linkedin", "zhihu"];
     let mut strategies = Vec::new();
 
     for platform in platforms {
@@ -8937,6 +9059,35 @@ fn set_config(state: State<AppState>, key: String, value: String) -> Result<(), 
         params![key, value],
     ).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// 读取「平台是否需要手工登录」配置（config 表内 `platform_manual_login.<platform>` = "true"/"false"）。
+/// 默认：segmentfault = true（其 Google OAuth 服务端回调失效，自动/手动 OAuth 都走不通，只能手动登录）。
+/// 写入复用 set_config(key="platform_manual_login.<platform>", value="true"|"false")。
+#[tauri::command]
+fn get_platform_manual_login(state: State<AppState>) -> Result<HashMap<String, bool>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let mut map: HashMap<String, bool> = HashMap::new();
+    {
+        let mut stmt = conn
+            .prepare("SELECT key, value FROM config WHERE key LIKE 'platform_manual_login.%'")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                let k: String = row.get(0)?;
+                let v: String = row.get(1)?;
+                Ok((k, v))
+            })
+            .map_err(|e| e.to_string())?;
+        for r in rows.flatten() {
+            if let Some(platform) = r.0.strip_prefix("platform_manual_login.") {
+                map.insert(platform.to_string(), r.1 == "true" || r.1 == "1");
+            }
+        }
+    }
+    // 未显式配置时的默认：segmentfault 需手工登录
+    map.entry("segmentfault".to_string()).or_insert(true);
+    Ok(map)
 }
 
 #[derive(Serialize)]
@@ -10793,6 +10944,152 @@ async fn github_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -
     Ok(format!("GitHub 养号完成：topic={} star={} 用时{}s", topic, done, elapsed_secs))
 }
 
+/// SegmentFault 登录检测（DOM 法，思否专用）。通用文本检测对思否失效（中文站 + 首页常停 loading）。
+/// 可靠信号（见 site-patterns/segmentfault.com.md）：有「登录」入口 = 未登录；导航已渲染且无登录入口 = 已登录。
+/// 在 spawn_blocking 中同步调用。
+fn sf_logged_in_blocking() -> bool {
+    use std::time::Duration;
+    let _ = unzoo_navigate("https://segmentfault.com/");
+    let mut waited = 0;
+    while waited < 18 {
+        std::thread::sleep(Duration::from_secs(3));
+        waited += 3;
+        // 已登录确证：写文章 / 草稿 / 通知 等登录后入口出现
+        if unzoo_element_exists("a[href^=\"/write\"]")
+            || unzoo_element_exists("a[href*=\"/user/draft\"]")
+            || unzoo_element_exists("a[href*=\"/user/notifications\"]")
+            || unzoo_element_exists("a[href^=\"/u/\"]") {
+            return true;
+        }
+        // 未登录确证：登录入口存在
+        if unzoo_element_exists("a[href*=\"/user/login\"]") {
+            return false;
+        }
+        // 都没命中 → 首屏还没渲染好，继续等
+    }
+    false
+}
+
+/// SegmentFault 养号（搜索驱动，全程只读）：按所选领域取关键词 → 站内搜索 → 拟人浏览结果
+/// → 随机点进文章/问题阅读。预热/成长期都安全（不点赞/不发帖，只读不触发风控计数）。
+/// 成长期搜索次数与阅读篇数更多；阅读到的问题正好供后续人工/回复流去回答。
+/// 一次 spawn_blocking 跑完整轮（阻塞 reqwest 不能在 async 直接调，见项目约定）。
+fn sf_nurture_browse_blocking(keywords: Vec<String>, n_search: i64, read_per_search: i64, duration_secs: i64, seed0: u64) -> Result<(i64, i64), String> {
+    use std::time::{Duration, Instant};
+    let start = Instant::now();
+    if keywords.is_empty() { return Ok((0, 0)); }
+    // 先确认登录（思否需手工登录，未登录直接报错让用户先登一次）。
+    // 通用 verify_login_blocking 走英文文本匹配，对思否（中文站 + 首页常停在 loading）失效，
+    // 故用 DOM 检测：见 sf_logged_in_blocking。
+    if !sf_logged_in_blocking() {
+        return Err("未登录 SegmentFault！请先点卡片上「✋ 手工登录」在浏览器里登一次，再养号。".to_string());
+    }
+    let mut searched = 0i64;
+    let mut read = 0i64;
+    let mut seed = seed0 | 1;
+    for _ in 0..n_search.max(1) {
+        if start.elapsed().as_secs() as i64 >= duration_secs { break; }
+        // xorshift 推进选词
+        seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17;
+        let kw = &keywords[(seed as usize) % keywords.len()];
+        let q_enc = kw.replace(' ', "%20");
+        let url = format!("https://segmentfault.com/search?q={}", q_enc);
+        if unzoo_navigate(&url).is_err() { continue; }
+        std::thread::sleep(Duration::from_millis(get_human_delay(2500, 4500)));
+        searched += 1;
+        // 拟人滚动结果页
+        for _ in 0..get_human_delay(2, 4) {
+            let _ = unzoo_scroll("down", get_human_delay(200, 500) as i32);
+            std::thread::sleep(Duration::from_millis(get_human_delay(1500, 3500)));
+            random_mouse_movement();
+        }
+        // 采结果链接（思否文章 /a/、问题 /q/），规范化为绝对 URL 去重
+        let links = unzoo_get_links("a[href*=\"/a/\"], a[href*=\"/q/\"]").unwrap_or_default();
+        let mut posts: Vec<String> = links.into_iter().filter_map(|h| {
+            let h = h.trim();
+            let abs = if h.starts_with("http") { h.to_string() }
+                      else if h.starts_with('/') { format!("https://segmentfault.com{}", h) }
+                      else { return None; };
+            if abs.contains("/a/") || abs.contains("/q/") { Some(abs) } else { None }
+        }).collect();
+        posts.dedup();
+        // 点进 read_per_search 篇阅读（拟人滚动到底，stay 一会）
+        let mut opened = 0i64;
+        for p in posts {
+            if opened >= read_per_search { break; }
+            if start.elapsed().as_secs() as i64 >= duration_secs { break; }
+            if unzoo_navigate(&p).is_err() { continue; }
+            std::thread::sleep(Duration::from_millis(get_human_delay(2500, 4000)));
+            for _ in 0..get_human_delay(3, 6) {
+                let _ = unzoo_scroll("down", get_human_delay(250, 600) as i32);
+                std::thread::sleep(Duration::from_millis(get_human_delay(1800, 4000)));
+                random_mouse_movement();
+            }
+            read += 1;
+            opened += 1;
+        }
+        // 下一次搜索前停顿
+        std::thread::sleep(Duration::from_millis(get_human_delay(2000, 4000)));
+    }
+    Ok((searched, read))
+}
+
+/// SegmentFault 养号入口：读领域 + 分期 → 搜索驱动浏览 → 写养号统计（与通用养号一致）。
+/// 未选领域 → 跳过并提示（不退回纯滚动，避免无领域指纹）。
+async fn segmentfault_nurture_run(app: &AppHandle, account_id: &str, duration: i64) -> Result<String, String> {
+    let session_start = std::time::Instant::now();
+    // 1) 读领域 + 分期
+    let (domains, phase) = {
+        let st = app.state::<AppState>();
+        let conn = st.db.lock().map_err(|e| e.to_string())?;
+        let domains = account_sf_domains(&conn, account_id);
+        let created: Option<String> = conn.query_row("SELECT created_at FROM accounts WHERE id=?1", params![account_id], |r| r.get(0)).ok().flatten();
+        let age = created.as_deref().and_then(parse_dt).map(|c| (Utc::now() - c).num_days()).unwrap_or(0);
+        let strat = conn.query_row("SELECT warmup_days, COALESCE(growth_days, warmup_days), daily_sessions_min, daily_sessions_max FROM nurture_strategies WHERE platform='segmentfault'",
+            [], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,i64>(1)?, r.get::<_,i64>(2)?, r.get::<_,i64>(3)?))).ok();
+        let (warmup, growth, smin, smax) = strat.unwrap_or((3, 7, 1, 2));
+        let (phase, _t) = nurture_phase_and_target(age, warmup, growth, smin, smax);
+        (domains, phase.to_string())
+    };
+    if domains.is_empty() {
+        return Ok("账号未选领域，跳过 SegmentFault 养号（点卡片上「🎯 领域」选一下方向）".to_string());
+    }
+    let keys: Vec<&str> = domains.iter().map(|s| s.as_str()).collect();
+    let kws: Vec<String> = sf_domain_keywords(&keys).iter().map(|s| s.to_string()).collect();
+    if kws.is_empty() { return Ok("领域无可用关键词".to_string()); }
+    // 分期定强度：预热轻、成长重、成熟维持
+    let (n_search, read_per_search) = match phase.as_str() {
+        "growth" => (3i64, 2i64),
+        "mature" => (2, 1),
+        _ => (2, 1), // warmup
+    };
+    let dur = duration.max(30);
+    let seed0 = get_random_delay(1, 100_000);
+    let (searched, read) = tauri::async_runtime::spawn_blocking(move || sf_nurture_browse_blocking(kws, n_search, read_per_search, dur, seed0))
+        .await.map_err(|e| format!("养号任务异常: {}", e))??;
+
+    // 写养号统计（如实记录耗时 + 累加，与通用/GH 养号一致）
+    let elapsed_secs = session_start.elapsed().as_secs() as i64;
+    {
+        let st = app.state::<AppState>();
+        let locked = st.db.lock();
+        if let Ok(conn) = locked {
+            let now = Utc::now().to_rfc3339();
+            let today = Local::now().format("%Y-%m-%d").to_string();
+            let _ = conn.execute(
+                "UPDATE accounts SET nurture_started_at=COALESCE(nurture_started_at,?1), last_nurture_at=?1, \
+                 total_nurture_seconds=COALESCE(total_nurture_seconds,0)+?2, health_status='healthy', last_health_check=?1 WHERE id=?3",
+                params![now, elapsed_secs, account_id]);
+            let _ = conn.execute(
+                "INSERT INTO nurture_daily_logs (id, account_id, date, sessions_completed, total_seconds) VALUES (?1,?2,?3,1,?4) \
+                 ON CONFLICT(account_id,date) DO UPDATE SET sessions_completed=sessions_completed+1, total_seconds=total_seconds+?4",
+                params![Uuid::new_v4().to_string(), account_id, today, elapsed_secs]);
+        }
+    }
+    log::info!("[SF-NURTURE] account={} phase={} 搜索={} 阅读={} 耗时={}s", account_id, phase, searched, read, elapsed_secs);
+    Ok(format!("SegmentFault 养号完成（{}）：搜索 {} 次 · 阅读 {} 篇 · 用时 {}s", phase, searched, read, elapsed_secs))
+}
+
 /// X 养号：按方向取关键词→搜索采推文/用户→去重选取→点赞/关注/转推/回复 + 极少原创。
 async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Result<String, String> {
     let session_start = std::time::Instant::now();
@@ -11444,6 +11741,10 @@ async fn quick_nurture(
     }
     if platform.eq_ignore_ascii_case("twitter") || platform.eq_ignore_ascii_case("x") {
         return x_nurture_run(&app, &account_id, seconds).await;
+    }
+    // SegmentFault 走专属搜索驱动养号（按领域搜索→浏览→读文章/问题），不走纯滚动。
+    if platform.eq_ignore_ascii_case("segmentfault") {
+        return segmentfault_nurture_run(&app, &account_id, seconds).await;
     }
 
     // Simulate browsing for specified duration.
@@ -16813,6 +17114,7 @@ pub fn run() {
             get_detailed_stats,
             get_config,
             set_config,
+            get_platform_manual_login,
             configure_ai,
             get_ai_config,
             test_ai_connection,
@@ -16934,6 +17236,9 @@ pub fn run() {
             x_niches_catalog,
             get_account_x_niches,
             set_account_x_niches,
+            sf_domains_catalog,
+            get_account_sf_domains,
+            set_account_sf_domains,
             platform_scenes,
             account_niches,
             set_unzoo_input_mode,

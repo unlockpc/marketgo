@@ -1645,6 +1645,45 @@
       }
     });
   };
+  window.pickSegmentfaultDomains = async function(accountId) {
+    let cat = [];
+    let current = [];
+    try {
+      cat = await invoke2("sf_domains_catalog");
+      current = await invoke2("get_account_sf_domains", { accountId });
+    } catch (e) {
+      showToast("\u52A0\u8F7D\u9886\u57DF\u5931\u8D25: " + e, "error");
+      return;
+    }
+    const overlay = document.createElement("div");
+    overlay.className = "modal active";
+    overlay.innerHTML = `
+    <div class="modal-content">
+      <div class="modal-header"><h3>\u9009\u62E9 SegmentFault \u517B\u53F7\u9886\u57DF\uFF08\u53EF\u591A\u9009\uFF09</h3></div>
+      <div class="modal-body">
+        ${cat.map((d) => `<label style="display:block;margin:6px 0;">
+          <input type="checkbox" value="${d.key}"${current.includes(d.key) ? " checked" : ""}> ${d.label}
+          <span style="color:var(--text-muted);font-size:12px;">(${d.keywords.slice(0, 4).join("\u3001")}\u2026)</span>
+        </label>`).join("")}
+      </div>
+      <div class="modal-footer">
+        <button class="btn" id="sfDomCancel">\u53D6\u6D88</button>
+        <button class="btn btn-success" id="sfDomSave">\u4FDD\u5B58</button>
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector("#sfDomCancel").addEventListener("click", () => overlay.remove());
+    overlay.querySelector("#sfDomSave").addEventListener("click", async () => {
+      const keys = Array.from(overlay.querySelectorAll("input:checked")).map((i) => i.value);
+      try {
+        await invoke2("set_account_sf_domains", { accountId, domains: keys });
+        showToast("SegmentFault \u9886\u57DF\u5DF2\u4FDD\u5B58", "success");
+        overlay.remove();
+      } catch (e) {
+        showToast("\u4FDD\u5B58\u5931\u8D25: " + e, "error");
+      }
+    });
+  };
   function pickAddAccounts(email, candidates) {
     return new Promise((resolve) => {
       const overlay = document.createElement("div");
@@ -2276,7 +2315,9 @@
   var platformSceneMap = {};
   var ghDomainLabels = {};
   var xNicheLabels = {};
+  var sfDomainLabels = {};
   var accountNichesMap = {};
+  var platformManualLoginCache = {};
   async function loadAccounts() {
     try {
       accounts = await invoke2("list_accounts");
@@ -2285,6 +2326,10 @@
           platformSceneMap = await invoke2("platform_scenes") || {};
         } catch {
         }
+      }
+      try {
+        platformManualLoginCache = await invoke2("get_platform_manual_login") || {};
+      } catch {
       }
       if (Object.keys(ghDomainLabels).length === 0) {
         try {
@@ -2296,6 +2341,12 @@
         try {
           (await invoke2("x_niches_catalog")).forEach((n) => {
             xNicheLabels[n.key] = n.label;
+          });
+        } catch {
+        }
+        try {
+          (await invoke2("sf_domains_catalog")).forEach((d) => {
+            sfDomainLabels[d.key] = d.label;
           });
         } catch {
         }
@@ -2852,6 +2903,7 @@
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
           <span class="account-platform" style="font-weight:700;">${escapeHtml(account.platform)}</span>
           ${platformSceneMap[account.platform] ? `<span class="stage-badge" style="background:var(--bg-secondary);color:var(--text-muted);" title="\u5E73\u53F0\u573A\u666F\u7C7B\u522B">${t("scene." + platformSceneMap[account.platform])}</span>` : ""}
+          ${platformManualLoginCache[(account.platform || "").toLowerCase()] ? `<span class="stage-badge" style="background:rgba(168,85,247,0.12);color:#a855f7;" title="\u8BE5\u5E73\u53F0\u9700\u624B\u5DE5\u767B\u5F55\uFF08\u81EA\u52A8\u767B\u5F55\u8D70\u4E0D\u901A\uFF0C\u8BF7\u5728\u5F39\u51FA\u7684\u6D4F\u89C8\u5668\u7A97\u53E3\u91CC\u624B\u52A8\u767B\u5F55\u4E00\u6B21\uFF09">\u270B \u624B\u5DE5\u767B\u5F55</span>` : ""}
           ${healthBadge}
           ${stageBadge}
           ${nurtureDaysProgress}
@@ -2863,7 +2915,7 @@
         ${(() => {
         const keys = accountNichesMap[account.id] || [];
         if (!keys.length) return "";
-        const lm = account.platform === "github" ? ghDomainLabels : account.platform === "twitter" || account.platform === "x" ? xNicheLabels : {};
+        const lm = account.platform === "github" ? ghDomainLabels : account.platform === "twitter" || account.platform === "x" ? xNicheLabels : account.platform === "segmentfault" ? sfDomainLabels : {};
         const chip = (k, hidden) => `<span class="stage-badge" style="background:var(--bg-secondary);color:var(--primary);${hidden ? "display:none;" : ""}" data-extra="${hidden ? "1" : "0"}" title="\u517B\u53F7\u65B9\u5411">\u{1F3AF} ${escapeHtml(lm[k] || k)}</span>`;
         const chips = keys.map((k, i) => chip(k, i >= 2)).join("");
         const more = keys.length > 2 ? `<button class="btn btn-small btn-secondary" style="padding:0 8px;font-size:11px;" onclick="toggleNicheRow(this)" data-more="${keys.length - 2}">\u5C55\u5F00 +${keys.length - 2}</button>` : "";
@@ -2876,10 +2928,11 @@
         </div>
         ${todayProgress}
         <div class="account-actions">
-          <button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="\u81EA\u52A8\u767B\u5F55\uFF1A\u67E5\u767B\u5F55\u2192Google\u767B\u5F55\u2192\u5426\u5219\u6CE8\u518C">\u{1F511} \u81EA\u52A8\u767B\u5F55</button>
+          ${platformManualLoginCache[(account.platform || "").toLowerCase()] ? `<button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="\u8BE5\u5E73\u53F0\u81EA\u52A8\u767B\u5F55\u8D70\u4E0D\u901A\uFF0C\u70B9\u6B64\u76F4\u63A5\u6253\u5F00\u767B\u5F55\u9875\uFF0C\u5728\u6D4F\u89C8\u5668\u91CC\u624B\u52A8\u767B\u5F55\u4E00\u6B21">\u270B \u624B\u5DE5\u767B\u5F55</button>` : `<button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="\u81EA\u52A8\u767B\u5F55\uFF1A\u67E5\u767B\u5F55\u2192Google\u767B\u5F55\u2192\u5426\u5219\u6CE8\u518C">\u{1F511} \u81EA\u52A8\u767B\u5F55</button>`}
           <button class="btn btn-small btn-success" data-nurture-account="${account.id}" onclick="openNurtureModal('${account.id}', '${escapeHtml(account.platform)}', '${escapeHtml(account.username || account.email || "N/A")}')" title="${t("nurture.quickNurture")}">\u{1F331} ${t("nurture.quickNurture")}</button>
           ${account.platform === "github" ? `<button class="btn btn-small btn-secondary" onclick="pickGithubDomains('${account.id}')" title="\u9009\u62E9 GitHub \u517B\u53F7\u9886\u57DF">\u{1F3AF} \u9886\u57DF</button>` : ""}
           ${account.platform === "twitter" || account.platform === "x" ? `<button class="btn btn-small btn-secondary" onclick="pickXNiches('${account.id}')" title="\u9009\u62E9 X \u517B\u53F7\u65B9\u5411">\u{1F3AF} \u65B9\u5411</button>` : ""}
+          ${account.platform === "segmentfault" ? `<button class="btn btn-small btn-secondary" onclick="pickSegmentfaultDomains('${account.id}')" title="\u9009\u62E9 SegmentFault \u517B\u53F7\u9886\u57DF\uFF08\u517B\u53F7\u65F6\u6309\u9886\u57DF\u641C\u7D22\u2192\u6D4F\u89C8\u2192\u8BFB\u6587\u7AE0\uFF09">\u{1F3AF} \u9886\u57DF</button>` : ""}
           ${stage !== "active" ? `<button class="btn btn-small btn-secondary" onclick="finishAccountNurture('${account.id}')" title="\u8001\u8D26\u53F7\u65E0\u9700\u517B\u53F7\uFF0C\u76F4\u63A5\u6807\u4E3A\u6B63\u5E38">\u2705 ${t("nurture.finishBtn")}</button>` : ""}
         </div>
       </div>
@@ -4692,12 +4745,59 @@
       await loadScheduledJobs();
       await loadProxies();
       await loadNurtureStrategies();
+      await loadPlatformManualLogin();
       await loadSettingsProfiles();
       setupProfileHandlers();
     } catch (error) {
       console.error("Settings error:", error);
     }
   }
+  async function loadPlatformManualLogin() {
+    const container = document.getElementById("platformManualLoginList");
+    if (!container) return;
+    try {
+      const [grouped, current] = await Promise.all([
+        invoke2("get_register_platforms"),
+        invoke2("get_platform_manual_login")
+      ]);
+      platformManualLoginCache = current || {};
+      const catTitles = {
+        international: "\u{1F30D} \u56FD\u9645",
+        developer: "\u{1F468}\u200D\u{1F4BB} \u5F00\u53D1\u8005",
+        chinese: "\u{1F1E8}\u{1F1F3} \u56FD\u5185",
+        japanese: "\u{1F1EF}\u{1F1F5} \u65E5\u672C",
+        korean: "\u{1F1F0}\u{1F1F7} \u97E9\u56FD",
+        russian: "\u{1F1F7}\u{1F1FA} \u4FC4\u8BED",
+        messaging: "\u{1F4AC} \u5373\u65F6\u901A\u8BAF"
+      };
+      let html = "";
+      for (const [cat, list] of Object.entries(grouped || {})) {
+        if (!Array.isArray(list) || !list.length) continue;
+        html += `<div class="platform-category" style="margin-bottom:8px;"><h4 style="margin:6px 0;color:var(--text-muted);font-size:12px;">${catTitles[cat] || cat}</h4><div style="display:flex;flex-wrap:wrap;gap:6px 14px;">`;
+        for (const p of list) {
+          const id = (p.id || "").toLowerCase();
+          const checked = platformManualLoginCache[id] ? "checked" : "";
+          html += `<label class="checkbox" style="display:inline-flex;align-items:center;gap:6px;font-size:13px;"><input type="checkbox" value="${escapeHtml(id)}" ${checked} onchange="togglePlatformManualLogin(this)"> ${escapeHtml(p.name || p.id)}</label>`;
+        }
+        html += "</div></div>";
+      }
+      container.innerHTML = html || '<span class="text-muted" style="font-size:12px;">\u65E0\u53EF\u914D\u7F6E\u5E73\u53F0</span>';
+    } catch (e) {
+      container.innerHTML = '<span class="text-muted" style="font-size:12px;">\u52A0\u8F7D\u5931\u8D25</span>';
+    }
+  }
+  window.togglePlatformManualLogin = async function(el) {
+    const platform = (el.value || "").toLowerCase();
+    const on = el.checked;
+    try {
+      await invoke2("set_config", { key: `platform_manual_login.${platform}`, value: on ? "true" : "false" });
+      platformManualLoginCache[platform] = on;
+      showToast(`${platform}\uFF1A${on ? "\u5DF2\u6807\u8BB0\u4E3A\u624B\u5DE5\u767B\u5F55" : "\u5DF2\u53D6\u6D88\u624B\u5DE5\u767B\u5F55"}`, "success");
+    } catch (e) {
+      el.checked = !on;
+      showToast("\u4FDD\u5B58\u5931\u8D25", "error");
+    }
+  };
   async function loadSettingsProfiles() {
     const select = document.getElementById("browserProfile");
     const statusDiv = document.getElementById("profileStatus");
