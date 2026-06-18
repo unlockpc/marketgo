@@ -803,7 +803,7 @@
         <header class="page-header">
           <h2 data-i18n="accounts.pageTitle">👤 身份管理</h2>
           <span style="margin-left:auto;display:flex;align-items:center;gap:8px;">
-            <button class="btn btn-success" id="btnNurtureAll" title="对所有账号立即养一轮（今日已养≥2次的自动跳过）">🌱 一键养号 / Nurture All</button>
+            <button class="btn btn-success" id="btnNurtureAll" title="对所有账号立即养一轮（今日已养>5次的自动跳过）">🌱 一键养号 / Nurture All</button>
             <button class="btn btn-primary" id="btnAddAccount" style="display:none;">
               <span data-i18n="accounts.addAccount">+ Add Account</span>
             </button>
@@ -1991,8 +1991,8 @@
         <!-- 设置界面 -->
         <div id="nurtureAllSetup">
           <p class="text-muted" style="font-size: 13px; margin-bottom: 15px;">
-            对所有账号养一轮（今日已养 ≥2 次的自动跳过）。默认一个一个养；可在「设置 → 一键养号」调并发数。同一身份/浏览器下的账号不会同时跑（共用一个浏览器+IP）。<br>
-            Nurture all accounts (serial by default; set concurrency in Settings → Nurture All; accounts sharing one browser never run together; already nurtured ≥2× today are skipped).
+            对所有账号养一轮（今日已养 >5 次的自动跳过）。默认一个一个养；可在「设置 → 一键养号」调并发数。同一身份/浏览器下的账号不会同时跑（共用一个浏览器+IP）。<br>
+            Nurture all accounts (serial by default; set concurrency in Settings → Nurture All; accounts sharing one browser never run together; already nurtured >5× today are skipped).
           </p>
           <p id="nurtureAllPlan" style="font-size: 13px; margin-bottom: 15px; font-weight: bold;"></p>
           <div class="form-group">

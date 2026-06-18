@@ -3798,7 +3798,7 @@ function resetNurtureModal() {
 }
 // ---- 一键养号（Nurture All）----
 // 对所有账号逐个串行跑一轮 quick_nurture，今日养号次数 ≥ 阈值的自动跳过。
-const NURTURE_ALL_SKIP_THRESHOLD = 2;
+const NURTURE_ALL_SKIP_THRESHOLD = 5; // 今日养号次数「大于」此值的账号跳过（>5 即 6 次及以上）
 // 一键养号并发数：用户在设置页配置，存 localStorage，默认 1（串行）。
 const NURTURE_ALL_CONCURRENCY_KEY = 'unmarket_nurture_all_concurrency';
 const NURTURE_ALL_CONCURRENCY_MAX = 5;
@@ -3819,7 +3819,7 @@ function computeNurtureAllPlan() {
     let skipped = 0;
     for (const account of accounts) {
         const today = accountLifecycles.get(account.id)?.today?.sessions_completed || 0;
-        if (today >= NURTURE_ALL_SKIP_THRESHOLD)
+        if (today > NURTURE_ALL_SKIP_THRESHOLD)
             skipped++;
         else
             todo.push(account);
@@ -3894,7 +3894,7 @@ function openNurtureAllModal() {
     const { todo, skipped } = computeNurtureAllPlan();
     const planEl = document.getElementById('nurtureAllPlan');
     if (planEl) {
-        planEl.textContent = `共 ${accounts.length} 个账号：本轮养 ${todo.length} 个，跳过 ${skipped} 个（今日已养 ≥${NURTURE_ALL_SKIP_THRESHOLD} 次）`;
+        planEl.textContent = `共 ${accounts.length} 个账号：本轮养 ${todo.length} 个，跳过 ${skipped} 个（今日已养 >${NURTURE_ALL_SKIP_THRESHOLD} 次）`;
     }
     const btnStart = document.getElementById('btnNurtureAllStart');
     if (btnStart)
@@ -3904,7 +3904,7 @@ function openNurtureAllModal() {
 async function startNurtureAll() {
     const { todo } = computeNurtureAllPlan();
     if (!todo.length) {
-        showToast('没有需要养号的账号（今日均已养 ≥2 次）', 'info');
+        showToast('没有需要养号的账号（今日均已养 >5 次）', 'info');
         return;
     }
     const seconds = parseInt(document.getElementById('nurtureAllDuration')?.value || '60');
