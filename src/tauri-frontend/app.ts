@@ -3129,7 +3129,9 @@ function renderAccountCard(account: any): string {
           ${platformManualLoginCache[(account.platform || '').toLowerCase()]
             ? `<button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="该平台自动登录走不通，点此直接打开登录页，在浏览器里手动登录一次">✋ 手工登录</button>`
             : `<button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="自动登录：查登录→Google登录→否则注册">🔑 自动登录</button>`}
-          <button class="btn btn-small btn-success" data-nurture-account="${account.id}" onclick="openNurtureModal('${account.id}', '${escapeHtml(account.platform)}', '${escapeHtml(account.username || account.email || 'N/A')}')" title="${t('nurture.quickNurture')}">🌱 ${t('nurture.quickNurture')}</button>
+          ${(nurtureAllRunning && nurtureAllProfileKeys.has(nurtureProfileKeyOf(account)))
+            ? `<button class="btn btn-small btn-success" data-nurture-account="${account.id}" disabled style="opacity:.5;cursor:not-allowed;" title="一键养号进行中，完成后才可单独养号">🌱 ${t('nurture.quickNurture')}</button>`
+            : `<button class="btn btn-small btn-success" data-nurture-account="${account.id}" onclick="openNurtureModal('${account.id}', '${escapeHtml(account.platform)}', '${escapeHtml(account.username || account.email || 'N/A')}')" title="${t('nurture.quickNurture')}">🌱 ${t('nurture.quickNurture')}</button>`}
           ${account.platform === 'github' ? `<button class="btn btn-small btn-secondary" onclick="pickGithubDomains('${account.id}')" title="选择 GitHub 养号领域">🎯 领域</button>` : ''}
           ${(account.platform === 'twitter' || account.platform === 'x') ? `<button class="btn btn-small btn-secondary" onclick="pickXNiches('${account.id}')" title="选择 X 养号方向">🎯 方向</button>` : ''}
           ${account.platform === 'segmentfault' ? `<button class="btn btn-small btn-secondary" onclick="pickSegmentfaultDomains('${account.id}')" title="选择 SegmentFault 养号领域（养号时按领域搜索→浏览→读文章）">🎯 领域</button>` : ''}
@@ -3840,6 +3842,15 @@ let nurtureAllAborted = false;
 let nurtureAllTimer: number | null = null;
 // 账号 id -> 后端推来的最新逐动作进度（如「⭐ Star 2/3：owner/repo」），由 nurture-progress 事件更新。
 const nurtureStepByAccount = new Map<string, string>();
+// 一键养号本轮覆盖的 unzoo profile 分组键集合：这些 profile 上的账号卡片「快速养号」按钮置灰，跑完清空。
+let nurtureAllProfileKeys: Set<string> = new Set();
+
+/** 账号所用的 unzoo profile 分组键：同一 persona 共用一个浏览器+IP（最高优先级），其次账号自身 profile_id。 */
+function nurtureProfileKeyOf(a: any): string {
+  return (a.persona_id && String(a.persona_id)) ||
+         (a.profile_id && String(a.profile_id)) ||
+         '__unbound__';
+}
 
 /** 计算本轮养号清单：跳过今日已养 ≥ 阈值次的账号。 */
 function computeNurtureAllPlan(): { todo: any[]; skipped: number } {
@@ -3937,6 +3948,9 @@ async function startNurtureAll() {
   nurtureAllRunning = true;
   nurtureAllAborted = false;
   nurtureInProgress = '__nurture_all__'; // 与单账号养号互斥
+  // 本轮覆盖的 profile → 这些 profile 上账号卡片的「快速养号」按钮置灰，跑完恢复。
+  nurtureAllProfileKeys = new Set(todo.map(nurtureProfileKeyOf));
+  renderAccounts();
 
   const concurrency = getNurtureAllConcurrency();
   const total = todo.length;
@@ -3949,12 +3963,8 @@ async function startNurtureAll() {
   const barEl = document.getElementById('nurtureAllProgressBar');
   const statusEl = document.getElementById('nurtureAllStatusText');
 
-  // 账号所用的 unzoo profile 分组键：同一身份(persona)下账号共用一个浏览器+IP，必须串行；
-  // 没归属身份的看账号自身绑定的 profile_id；都没有的归到 __unbound__（共用全局默认 profile，也串行）。
-  const profileKeyOf = (a: any): string =>
-    (a.persona_id && String(a.persona_id)) ||
-    (a.profile_id && String(a.profile_id)) ||
-    '__unbound__';
+  // 同一身份(persona)/同一 profile 下账号共用一个浏览器，必须串行调度（见 nurtureProfileKeyOf）。
+  const profileKeyOf = nurtureProfileKeyOf;
 
   // 每秒刷新：把在跑账号「已用时间」折算成子进度，让进度条/状态在单个账号养号期间也持续走动，
   // 而不是停在 0/N 看着像卡死。动作驱动养号常超过设定时长，超时后切到不确定态条纹（仍在后台跑）。
@@ -4032,6 +4042,7 @@ async function startNurtureAll() {
 
   nurtureAllRunning = false;
   nurtureInProgress = null;
+  nurtureAllProfileKeys = new Set(); // 恢复快速养号按钮（下面 loadAccounts→renderAccounts 会重绘）
 
   // 完成态（弹框可能已被关掉，元素仍在 DOM 里，照常更新；用户下次打开会是新的一轮）
   const progressDiv = document.getElementById('nurtureAllProgress');

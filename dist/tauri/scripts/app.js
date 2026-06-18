@@ -2943,7 +2943,7 @@
         ${todayProgress}
         <div class="account-actions">
           ${platformManualLoginCache[(account.platform || "").toLowerCase()] ? `<button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="\u8BE5\u5E73\u53F0\u81EA\u52A8\u767B\u5F55\u8D70\u4E0D\u901A\uFF0C\u70B9\u6B64\u76F4\u63A5\u6253\u5F00\u767B\u5F55\u9875\uFF0C\u5728\u6D4F\u89C8\u5668\u91CC\u624B\u52A8\u767B\u5F55\u4E00\u6B21">\u270B \u624B\u5DE5\u767B\u5F55</button>` : `<button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="\u81EA\u52A8\u767B\u5F55\uFF1A\u67E5\u767B\u5F55\u2192Google\u767B\u5F55\u2192\u5426\u5219\u6CE8\u518C">\u{1F511} \u81EA\u52A8\u767B\u5F55</button>`}
-          <button class="btn btn-small btn-success" data-nurture-account="${account.id}" onclick="openNurtureModal('${account.id}', '${escapeHtml(account.platform)}', '${escapeHtml(account.username || account.email || "N/A")}')" title="${t("nurture.quickNurture")}">\u{1F331} ${t("nurture.quickNurture")}</button>
+          ${nurtureAllRunning && nurtureAllProfileKeys.has(nurtureProfileKeyOf(account)) ? `<button class="btn btn-small btn-success" data-nurture-account="${account.id}" disabled style="opacity:.5;cursor:not-allowed;" title="\u4E00\u952E\u517B\u53F7\u8FDB\u884C\u4E2D\uFF0C\u5B8C\u6210\u540E\u624D\u53EF\u5355\u72EC\u517B\u53F7">\u{1F331} ${t("nurture.quickNurture")}</button>` : `<button class="btn btn-small btn-success" data-nurture-account="${account.id}" onclick="openNurtureModal('${account.id}', '${escapeHtml(account.platform)}', '${escapeHtml(account.username || account.email || "N/A")}')" title="${t("nurture.quickNurture")}">\u{1F331} ${t("nurture.quickNurture")}</button>`}
           ${account.platform === "github" ? `<button class="btn btn-small btn-secondary" onclick="pickGithubDomains('${account.id}')" title="\u9009\u62E9 GitHub \u517B\u53F7\u9886\u57DF">\u{1F3AF} \u9886\u57DF</button>` : ""}
           ${account.platform === "twitter" || account.platform === "x" ? `<button class="btn btn-small btn-secondary" onclick="pickXNiches('${account.id}')" title="\u9009\u62E9 X \u517B\u53F7\u65B9\u5411">\u{1F3AF} \u65B9\u5411</button>` : ""}
           ${account.platform === "segmentfault" ? `<button class="btn btn-small btn-secondary" onclick="pickSegmentfaultDomains('${account.id}')" title="\u9009\u62E9 SegmentFault \u517B\u53F7\u9886\u57DF\uFF08\u517B\u53F7\u65F6\u6309\u9886\u57DF\u641C\u7D22\u2192\u6D4F\u89C8\u2192\u8BFB\u6587\u7AE0\uFF09">\u{1F3AF} \u9886\u57DF</button>` : ""}
@@ -3553,6 +3553,10 @@
   var nurtureAllAborted = false;
   var nurtureAllTimer = null;
   var nurtureStepByAccount = /* @__PURE__ */ new Map();
+  var nurtureAllProfileKeys = /* @__PURE__ */ new Set();
+  function nurtureProfileKeyOf(a) {
+    return a.persona_id && String(a.persona_id) || a.profile_id && String(a.profile_id) || "__unbound__";
+  }
   function computeNurtureAllPlan() {
     const todo = [];
     const seen = /* @__PURE__ */ new Set();
@@ -3639,6 +3643,8 @@
     nurtureAllRunning = true;
     nurtureAllAborted = false;
     nurtureInProgress = "__nurture_all__";
+    nurtureAllProfileKeys = new Set(todo.map(nurtureProfileKeyOf));
+    renderAccounts();
     const concurrency = getNurtureAllConcurrency();
     const total = todo.length;
     let ok = 0, fail = 0, done = 0, activeCount = 0;
@@ -3649,7 +3655,7 @@
     const textEl = document.getElementById("nurtureAllProgressText");
     const barEl = document.getElementById("nurtureAllProgressBar");
     const statusEl = document.getElementById("nurtureAllStatusText");
-    const profileKeyOf = (a) => a.persona_id && String(a.persona_id) || a.profile_id && String(a.profile_id) || "__unbound__";
+    const profileKeyOf = nurtureProfileKeyOf;
     const tick = () => {
       let frac = 0;
       let anyOverrun = false;
@@ -3726,6 +3732,7 @@
     }
     nurtureAllRunning = false;
     nurtureInProgress = null;
+    nurtureAllProfileKeys = /* @__PURE__ */ new Set();
     const progressDiv = document.getElementById("nurtureAllProgress");
     const completeDiv = document.getElementById("nurtureAllComplete");
     const summaryEl = document.getElementById("nurtureAllSummary");
