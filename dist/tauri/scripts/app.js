@@ -3599,29 +3599,25 @@
     nurtureAllAborted = false;
     nurtureInProgress = "__nurture_all__";
     const total = todo.length;
-    let ok = 0, fail = 0, done = 0, nextIndex = 0;
-    const inFlight = /* @__PURE__ */ new Set();
+    let ok = 0, fail = 0, done = 0, activeCount = 0;
+    const taken = new Array(total).fill(false);
+    const inFlightKeys = /* @__PURE__ */ new Set();
+    const inFlightNames = /* @__PURE__ */ new Set();
     const textEl = document.getElementById("nurtureAllProgressText");
     const barEl = document.getElementById("nurtureAllProgressBar");
     const statusEl = document.getElementById("nurtureAllStatusText");
+    const profileKeyOf = (a) => a.persona_id && String(a.persona_id) || a.profile_id && String(a.profile_id) || "__unbound__";
     const renderProgress = () => {
-      if (textEl) textEl.textContent = `\u517B\u53F7\u4E2D ${done}/${total}\uFF08\u5E76\u53D1 ${NURTURE_ALL_CONCURRENCY}\uFF09`;
+      if (textEl) textEl.textContent = `\u517B\u53F7\u4E2D ${done}/${total}\uFF08\u6700\u591A ${NURTURE_ALL_CONCURRENCY} \u5E76\u53D1\uFF0C\u540C\u4E00\u6D4F\u89C8\u5668\u4E0D\u5E76\u53D1\uFF09`;
       if (barEl) barEl.style.width = `${Math.round(done / total * 100)}%`;
       if (statusEl) {
-        const running = inFlight.size ? ` \xB7 \u8FDB\u884C\u4E2D\uFF1A${[...inFlight].join("\u3001")}` : "";
+        const running = inFlightNames.size ? ` \xB7 \u8FDB\u884C\u4E2D\uFF1A${[...inFlightNames].join("\u3001")}` : "";
         statusEl.textContent = `\u2705 \u6210\u529F ${ok} \xB7 \u274C \u5931\u8D25 ${fail}${running}`;
       }
     };
     renderProgress();
-    const worker = async () => {
-      for (; ; ) {
-        if (nurtureAllAborted) return;
-        const i = nextIndex++;
-        if (i >= total) return;
-        const account = todo[i];
-        const name = account.username || account.email || account.platform || account.id;
-        inFlight.add(name);
-        renderProgress();
+    await new Promise((resolve) => {
+      const runOne = async (account, key, name) => {
         try {
           await invoke2("quick_nurture", { accountId: account.id, seconds });
           ok++;
@@ -3629,15 +3625,36 @@
           fail++;
           console.error("Nurture failed for", account.id, e);
         } finally {
-          inFlight.delete(name);
+          inFlightKeys.delete(key);
+          inFlightNames.delete(name);
+          activeCount--;
           done++;
           renderProgress();
+          pump();
         }
-      }
-    };
-    await Promise.all(
-      Array.from({ length: Math.min(NURTURE_ALL_CONCURRENCY, total) }, () => worker())
-    );
+      };
+      const pump = () => {
+        if (activeCount === 0 && (nurtureAllAborted || done >= total)) {
+          resolve();
+          return;
+        }
+        if (nurtureAllAborted) return;
+        while (activeCount < NURTURE_ALL_CONCURRENCY) {
+          const idx = todo.findIndex((a, i) => !taken[i] && !inFlightKeys.has(profileKeyOf(a)));
+          if (idx === -1) break;
+          const account = todo[idx];
+          const key = profileKeyOf(account);
+          const name = account.username || account.email || account.platform || account.id;
+          taken[idx] = true;
+          inFlightKeys.add(key);
+          inFlightNames.add(name);
+          activeCount++;
+          renderProgress();
+          void runOne(account, key, name);
+        }
+      };
+      pump();
+    });
     if (barEl) barEl.style.width = "100%";
     nurtureAllRunning = false;
     nurtureInProgress = null;

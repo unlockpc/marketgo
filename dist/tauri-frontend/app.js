@@ -3873,34 +3873,33 @@ async function startNurtureAll() {
     nurtureAllAborted = false;
     nurtureInProgress = '__nurture_all__'; // 与单账号养号互斥
     const total = todo.length;
-    let ok = 0, fail = 0, done = 0, nextIndex = 0;
-    const inFlight = new Set();
+    let ok = 0, fail = 0, done = 0, activeCount = 0;
+    const taken = new Array(total).fill(false);
+    const inFlightKeys = new Set(); // 正在跑的 unzoo profile —— 同 profile 不并发
+    const inFlightNames = new Set(); // 仅用于进度展示
     const textEl = document.getElementById('nurtureAllProgressText');
     const barEl = document.getElementById('nurtureAllProgressBar');
     const statusEl = document.getElementById('nurtureAllStatusText');
+    // 账号所用的 unzoo profile 分组键：同一身份(persona)下账号共用一个浏览器+IP，必须串行；
+    // 没归属身份的看账号自身绑定的 profile_id；都没有的归到 __unbound__（共用全局默认 profile，也串行）。
+    const profileKeyOf = (a) => (a.persona_id && String(a.persona_id)) ||
+        (a.profile_id && String(a.profile_id)) ||
+        '__unbound__';
     const renderProgress = () => {
         if (textEl)
-            textEl.textContent = `养号中 ${done}/${total}（并发 ${NURTURE_ALL_CONCURRENCY}）`;
+            textEl.textContent = `养号中 ${done}/${total}（最多 ${NURTURE_ALL_CONCURRENCY} 并发，同一浏览器不并发）`;
         if (barEl)
             barEl.style.width = `${Math.round((done / total) * 100)}%`;
         if (statusEl) {
-            const running = inFlight.size ? ` · 进行中：${[...inFlight].join('、')}` : '';
+            const running = inFlightNames.size ? ` · 进行中：${[...inFlightNames].join('、')}` : '';
             statusEl.textContent = `✅ 成功 ${ok} · ❌ 失败 ${fail}${running}`;
         }
     };
     renderProgress();
-    // 并发工作池：固定数量的 worker 各自从清单里取下一个账号，取完即止。
-    const worker = async () => {
-        for (;;) {
-            if (nurtureAllAborted)
-                return;
-            const i = nextIndex++;
-            if (i >= total)
-                return;
-            const account = todo[i];
-            const name = account.username || account.email || account.platform || account.id;
-            inFlight.add(name);
-            renderProgress();
+    // 事件驱动调度：全局最多 NURTURE_ALL_CONCURRENCY 个并发，且同一 profile 同时只跑一个。
+    // 每当一个名额或某 profile 释放，就尝试再启动可运行的账号。
+    await new Promise((resolve) => {
+        const runOne = async (account, key, name) => {
             try {
                 await invoke('quick_nurture', { accountId: account.id, seconds });
                 ok++;
@@ -3910,13 +3909,39 @@ async function startNurtureAll() {
                 console.error('Nurture failed for', account.id, e);
             }
             finally {
-                inFlight.delete(name);
+                inFlightKeys.delete(key);
+                inFlightNames.delete(name);
+                activeCount--;
                 done++;
                 renderProgress();
+                pump();
             }
-        }
-    };
-    await Promise.all(Array.from({ length: Math.min(NURTURE_ALL_CONCURRENCY, total) }, () => worker()));
+        };
+        const pump = () => {
+            if (activeCount === 0 && (nurtureAllAborted || done >= total)) {
+                resolve();
+                return;
+            }
+            if (nurtureAllAborted)
+                return; // 不再启动新的，等在跑的收尾
+            while (activeCount < NURTURE_ALL_CONCURRENCY) {
+                // 下一个：还没领、且其 profile 当前没人在跑
+                const idx = todo.findIndex((a, i) => !taken[i] && !inFlightKeys.has(profileKeyOf(a)));
+                if (idx === -1)
+                    break; // 剩下的都被同 profile 占着，等它们跑完
+                const account = todo[idx];
+                const key = profileKeyOf(account);
+                const name = account.username || account.email || account.platform || account.id;
+                taken[idx] = true;
+                inFlightKeys.add(key);
+                inFlightNames.add(name);
+                activeCount++;
+                renderProgress();
+                void runOne(account, key, name);
+            }
+        };
+        pump();
+    });
     if (barEl)
         barEl.style.width = '100%';
     nurtureAllRunning = false;
