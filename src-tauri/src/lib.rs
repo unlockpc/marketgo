@@ -1083,17 +1083,23 @@ fn x_classify_health(text: &str) -> Option<&'static str> {
 /// 从形如 "1,234 Followers" / "1.2K Followers" / "3.4M" 解析粉丝数。读不出返回 None。
 fn x_parse_count(s: &str) -> Option<i64> {
     let start = s.find(|c: char| c.is_ascii_digit())?;
-    let token: String = s[start..].chars()
-        .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == ',' || matches!(c, 'K'|'M'|'B'|'k'|'m'|'b'))
+    let rest = &s[start..];
+    // 数字部分（含千分位逗号/小数点），全是 ASCII，token.len() 即字节数。
+    let token: String = rest.chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == ',')
         .collect();
-    let mult = match token.chars().last() {
+    let num: String = token.chars().filter(|c| c.is_ascii_digit() || *c == '.').collect();
+    let base = num.parse::<f64>().ok()?;
+    // 紧跟数字的倍率后缀：K/M/B 或 中文 万/亿（X 中文环境显示如「11.8万」）。
+    let mult = match rest[token.len()..].trim_start().chars().next() {
         Some('K') | Some('k') => 1_000.0,
         Some('M') | Some('m') => 1_000_000.0,
         Some('B') | Some('b') => 1_000_000_000.0,
+        Some('万') => 10_000.0,
+        Some('亿') => 100_000_000.0,
         _ => 1.0,
     };
-    let num: String = token.chars().filter(|c| c.is_ascii_digit() || *c == '.').collect();
-    num.parse::<f64>().ok().map(|n| (n * mult) as i64)
+    Some((base * mult) as i64)
 }
 
 /// 按号龄分期返回当日 GitHub L1 配额：(stars, follows, watches)。
@@ -11480,11 +11486,11 @@ fn x_follow_quality_blocking(profile_url: &str) -> Result<bool, String> {
     let fol_raw = unzoo_evaluate("(() => { const a = document.querySelector('a[href$=\"/verified_followers\"], a[href$=\"/followers\"]'); return a ? a.innerText : ''; })()").unwrap_or_default();
     let fol = serde_json::from_str::<String>(&fol_raw).unwrap_or(fol_raw);
     let followers = x_parse_count(&fol);
-    // 质量门：有简介 且 (粉丝≥500，或粉丝读不出时放行靠 People 排序兜底)
+    // 质量门：有简介 且 (粉丝≥300，或粉丝读不出时放行靠 People 排序兜底)
     let has_bio = !bio.trim().is_empty();
-    let followers_ok = followers.map(|n| n >= 500).unwrap_or(true);
+    let followers_ok = followers.map(|n| n >= 300).unwrap_or(true);
     if !(has_bio && followers_ok) {
-        log::info!("[X-ACTION] follow 跳过(质量不达标) bio={} followers={:?} {}", has_bio, followers, profile_url);
+        log::info!("[X-ACTION] follow 跳过(质量不达标) bio={} followers={:?}(原文「{}」) {}", has_bio, followers, fol.trim(), profile_url);
         return Ok(false);
     }
     unzoo_click("[data-testid$=\"-follow\"]").map_err(|e| x_fail_health(&format!("follow 点击失败: {}", e)))?;
