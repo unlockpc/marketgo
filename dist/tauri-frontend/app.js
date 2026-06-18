@@ -3848,7 +3848,6 @@ function resetNurtureAllModal() {
     const btnStop = document.getElementById('btnNurtureAllStop');
     const btnCancel = document.getElementById('btnNurtureAllCancel');
     const btnClose = document.getElementById('btnNurtureAllClose');
-    const bar = document.getElementById('nurtureAllProgressBar');
     if (setup)
         setup.style.display = 'block';
     if (progress)
@@ -3863,10 +3862,6 @@ function resetNurtureAllModal() {
         btnCancel.style.display = 'inline-block';
     if (btnClose)
         btnClose.style.display = 'none';
-    if (bar) {
-        bar.classList.remove('nurture-indeterminate');
-        bar.style.width = '0%';
-    }
 }
 /** 切到「进度」视图（开跑时、以及跑的过程中重新打开弹框时复用）。 */
 function setNurtureAllProgressView() {
@@ -3945,19 +3940,16 @@ async function startNurtureAll() {
     const startTimes = new Map(); // 在跑账号 id -> 起始时间戳（实时进度用）
     const nameById = new Map(); // 在跑账号 id -> 展示名
     const textEl = document.getElementById('nurtureAllProgressText');
-    const barEl = document.getElementById('nurtureAllProgressBar');
     const statusEl = document.getElementById('nurtureAllStatusText');
     // 同一身份(persona)/同一 profile 下账号共用一个浏览器，必须串行调度（见 nurtureProfileKeyOf）。
     const profileKeyOf = nurtureProfileKeyOf;
-    // 每秒刷新：把在跑账号「已用时间」折算成子进度，让进度条/状态在单个账号养号期间也持续走动，
-    // 而不是停在 0/N 看着像卡死。动作驱动养号常超过设定时长，超时后切到不确定态条纹（仍在后台跑）。
+    // 每秒刷新：显示「养了几个/共几个」+ 当前账号已用时间和最新动作。养号动作慢（单个 2-3 分钟），
+    // 靠「已 Ns」秒数持续走动 + 后端推来的逐动作进度说明它在干活；超过设定时长标「后台执行中」。
     const tick = () => {
-        let frac = 0;
         let anyOverrun = false;
         const parts = [];
         for (const [id, ts] of startTimes) {
             const elapsed = Math.floor((Date.now() - ts) / 1000);
-            frac += seconds > 0 ? Math.min(1, elapsed / seconds) : 1;
             if (elapsed >= seconds)
                 anyOverrun = true;
             const step = nurtureStepByAccount.get(id);
@@ -3967,11 +3959,6 @@ async function startNurtureAll() {
             textEl.textContent = concurrency > 1
                 ? `养号中 ${done}/${total}（最多 ${concurrency} 并发，同一浏览器不并发）`
                 : `养号中 ${done}/${total}（逐个进行）`;
-        if (barEl) {
-            const shown = Math.min(total, done + frac);
-            barEl.style.width = `${Math.round((shown / total) * 100)}%`;
-            barEl.classList.toggle('nurture-indeterminate', anyOverrun);
-        }
         if (statusEl) {
             const running = parts.length ? ` · 进行中：${parts.join('、')}${anyOverrun ? '（后台执行中…）' : ''}` : '';
             statusEl.textContent = `✅ 成功 ${ok} · ❌ 失败 ${fail}${running}`;
@@ -4031,10 +4018,6 @@ async function startNurtureAll() {
     if (nurtureAllTimer) {
         clearInterval(nurtureAllTimer);
         nurtureAllTimer = null;
-    }
-    if (barEl) {
-        barEl.classList.remove('nurture-indeterminate');
-        barEl.style.width = '100%';
     }
     nurtureAllRunning = false;
     nurtureInProgress = null;

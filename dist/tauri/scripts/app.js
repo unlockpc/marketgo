@@ -3578,7 +3578,6 @@
     const btnStop = document.getElementById("btnNurtureAllStop");
     const btnCancel = document.getElementById("btnNurtureAllCancel");
     const btnClose = document.getElementById("btnNurtureAllClose");
-    const bar = document.getElementById("nurtureAllProgressBar");
     if (setup) setup.style.display = "block";
     if (progress) progress.style.display = "none";
     if (complete) complete.style.display = "none";
@@ -3586,10 +3585,6 @@
     if (btnStop) btnStop.style.display = "none";
     if (btnCancel) btnCancel.style.display = "inline-block";
     if (btnClose) btnClose.style.display = "none";
-    if (bar) {
-      bar.classList.remove("nurture-indeterminate");
-      bar.style.width = "0%";
-    }
   }
   function setNurtureAllProgressView() {
     const setup = document.getElementById("nurtureAllSetup");
@@ -3653,26 +3648,18 @@
     const startTimes = /* @__PURE__ */ new Map();
     const nameById = /* @__PURE__ */ new Map();
     const textEl = document.getElementById("nurtureAllProgressText");
-    const barEl = document.getElementById("nurtureAllProgressBar");
     const statusEl = document.getElementById("nurtureAllStatusText");
     const profileKeyOf = nurtureProfileKeyOf;
     const tick = () => {
-      let frac = 0;
       let anyOverrun = false;
       const parts = [];
       for (const [id, ts] of startTimes) {
         const elapsed = Math.floor((Date.now() - ts) / 1e3);
-        frac += seconds > 0 ? Math.min(1, elapsed / seconds) : 1;
         if (elapsed >= seconds) anyOverrun = true;
         const step = nurtureStepByAccount.get(id);
         parts.push(`${nameById.get(id) || id}\uFF08\u5DF2 ${elapsed}s${step ? " \xB7 " + step : ""}\uFF09`);
       }
       if (textEl) textEl.textContent = concurrency > 1 ? `\u517B\u53F7\u4E2D ${done}/${total}\uFF08\u6700\u591A ${concurrency} \u5E76\u53D1\uFF0C\u540C\u4E00\u6D4F\u89C8\u5668\u4E0D\u5E76\u53D1\uFF09` : `\u517B\u53F7\u4E2D ${done}/${total}\uFF08\u9010\u4E2A\u8FDB\u884C\uFF09`;
-      if (barEl) {
-        const shown = Math.min(total, done + frac);
-        barEl.style.width = `${Math.round(shown / total * 100)}%`;
-        barEl.classList.toggle("nurture-indeterminate", anyOverrun);
-      }
       if (statusEl) {
         const running = parts.length ? ` \xB7 \u8FDB\u884C\u4E2D\uFF1A${parts.join("\u3001")}${anyOverrun ? "\uFF08\u540E\u53F0\u6267\u884C\u4E2D\u2026\uFF09" : ""}` : "";
         statusEl.textContent = `\u2705 \u6210\u529F ${ok} \xB7 \u274C \u5931\u8D25 ${fail}${running}`;
@@ -3725,10 +3712,6 @@
     if (nurtureAllTimer) {
       clearInterval(nurtureAllTimer);
       nurtureAllTimer = null;
-    }
-    if (barEl) {
-      barEl.classList.remove("nurture-indeterminate");
-      barEl.style.width = "100%";
     }
     nurtureAllRunning = false;
     nurtureInProgress = null;

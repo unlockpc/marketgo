@@ -11210,7 +11210,7 @@ async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Res
     let mut aborted_health: Option<String> = None;
     emit_nurture_step(app, account_id, &format!("开始 X 养号 · 准备点赞 {} 条推文", chosen.len()));
     for (i, t) in chosen.iter().enumerate() {
-        emit_nurture_step(app, account_id, &format!("❤️ 点赞 {}/{}", i + 1, chosen.len()));
+        emit_nurture_step(app, account_id, &format!("❤️ 点赞中 {}/{}（每个约 1-2 分钟）", i + 1, chosen.len()));
         let tc = t.clone();
         let r = tauri::async_runtime::spawn_blocking(move || x_like_blocking(&tc)).await.map_err(|e| e.to_string())?;
         match r {
@@ -11230,6 +11230,7 @@ async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Res
     let mut follows = 0i64;
     if aborted_health.is_none() && n_follow > 0 {
         let ukw = kws[((seed >> 3) as usize) % kws.len()].to_string(); // 换一个子话题搜人
+        emit_nurture_step(app, account_id, &format!("👤 搜索领域优质用户中…（{}）", ukw));
         let candidates: Vec<String> = match tauri::async_runtime::spawn_blocking(move || x_search_users_blocking(&ukw)).await {
             Ok(Ok(v)) => v,
             _ => Vec::new(), // people 搜索失败就不关注，不影响其它动作
