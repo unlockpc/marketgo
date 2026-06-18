@@ -3844,8 +3844,11 @@ const nurtureStepByAccount = new Map<string, string>();
 /** 计算本轮养号清单：跳过今日已养 ≥ 阈值次的账号。 */
 function computeNurtureAllPlan(): { todo: any[]; skipped: number } {
   const todo: any[] = [];
+  const seen = new Set<string>(); // 按账号 id 去重，防止同一账号被列两次
   let skipped = 0;
   for (const account of accounts) {
+    if (seen.has(account.id)) continue;
+    seen.add(account.id);
     const today = accountLifecycles.get(account.id)?.today?.sessions_completed || 0;
     if (today > NURTURE_ALL_SKIP_THRESHOLD) skipped++;
     else todo.push(account);
@@ -3914,6 +3917,12 @@ function openNurtureAllModal() {
 }
 
 async function startNurtureAll() {
+  // 防重入：已有一键养号在跑时不再起第二轮（避免同一账号被两轮重复养）。
+  if (nurtureAllRunning) {
+    showToast('一键养号正在进行中', 'warning');
+    setNurtureAllProgressView();
+    return;
+  }
   const { todo } = computeNurtureAllPlan();
   if (!todo.length) {
     showToast('没有需要养号的账号（今日均已养 >5 次）', 'info');

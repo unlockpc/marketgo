@@ -3555,8 +3555,11 @@
   var nurtureStepByAccount = /* @__PURE__ */ new Map();
   function computeNurtureAllPlan() {
     const todo = [];
+    const seen = /* @__PURE__ */ new Set();
     let skipped = 0;
     for (const account of accounts) {
+      if (seen.has(account.id)) continue;
+      seen.add(account.id);
       const today = accountLifecycles.get(account.id)?.today?.sessions_completed || 0;
       if (today > NURTURE_ALL_SKIP_THRESHOLD) skipped++;
       else todo.push(account);
@@ -3621,6 +3624,11 @@
     openModal("modalNurtureAll");
   }
   async function startNurtureAll() {
+    if (nurtureAllRunning) {
+      showToast("\u4E00\u952E\u517B\u53F7\u6B63\u5728\u8FDB\u884C\u4E2D", "warning");
+      setNurtureAllProgressView();
+      return;
+    }
     const { todo } = computeNurtureAllPlan();
     if (!todo.length) {
       showToast("\u6CA1\u6709\u9700\u8981\u517B\u53F7\u7684\u8D26\u53F7\uFF08\u4ECA\u65E5\u5747\u5DF2\u517B >5 \u6B21\uFF09", "info");
