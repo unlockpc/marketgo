@@ -1369,6 +1369,12 @@ function initModals() {
   document.getElementById('btnTestAI')?.addEventListener('click', testAIConnection);
   document.getElementById('btnSaveScheduler')?.addEventListener('click', saveSchedulerSettings);
   document.getElementById('btnSaveNurture')?.addEventListener('click', saveNurtureStrategy);
+  document.getElementById('nurtureAllConcurrency')?.addEventListener('change', (ev) => {
+    const n = Math.min(NURTURE_ALL_CONCURRENCY_MAX, Math.max(1, parseInt((ev.target as HTMLInputElement).value || '1', 10) || 1));
+    localStorage.setItem(NURTURE_ALL_CONCURRENCY_KEY, String(n));
+    (ev.target as HTMLInputElement).value = String(n); // 回写夹紧后的值
+    showToast(n > 1 ? `一键养号并发数已设为 ${n}` : '一键养号已设为逐个进行', 'success');
+  });
   document.getElementById('nurturePlatform')?.addEventListener('change', populateNurtureForm);
   document.getElementById('aiProvider')?.addEventListener('change', () => { populateDefaultModels(); updateAIKeyVisibility(); });
   document.getElementById('btnRefreshModels')?.addEventListener('click', refreshModels);
@@ -3813,7 +3819,14 @@ function resetNurtureModal() {
 // ---- 一键养号（Nurture All）----
 // 对所有账号逐个串行跑一轮 quick_nurture，今日养号次数 ≥ 阈值的自动跳过。
 const NURTURE_ALL_SKIP_THRESHOLD = 2;
-const NURTURE_ALL_CONCURRENCY = 2; // 同时最多养几个账号（每个要开一个真实浏览器，别开太多）
+// 一键养号并发数：用户在设置页配置，存 localStorage，默认 1（串行）。
+const NURTURE_ALL_CONCURRENCY_KEY = 'unmarket_nurture_all_concurrency';
+const NURTURE_ALL_CONCURRENCY_MAX = 5;
+function getNurtureAllConcurrency(): number {
+  const raw = parseInt(localStorage.getItem(NURTURE_ALL_CONCURRENCY_KEY) || '1', 10);
+  if (!Number.isFinite(raw)) return 1;
+  return Math.min(NURTURE_ALL_CONCURRENCY_MAX, Math.max(1, raw));
+}
 let nurtureAllRunning = false;
 let nurtureAllAborted = false;
 
@@ -3891,6 +3904,7 @@ async function startNurtureAll() {
   nurtureAllAborted = false;
   nurtureInProgress = '__nurture_all__'; // 与单账号养号互斥
 
+  const concurrency = getNurtureAllConcurrency();
   const total = todo.length;
   let ok = 0, fail = 0, done = 0, activeCount = 0;
   const taken: boolean[] = new Array(total).fill(false);
@@ -3908,7 +3922,9 @@ async function startNurtureAll() {
     '__unbound__';
 
   const renderProgress = () => {
-    if (textEl) textEl.textContent = `养号中 ${done}/${total}（最多 ${NURTURE_ALL_CONCURRENCY} 并发，同一浏览器不并发）`;
+    if (textEl) textEl.textContent = concurrency > 1
+      ? `养号中 ${done}/${total}（最多 ${concurrency} 并发，同一浏览器不并发）`
+      : `养号中 ${done}/${total}（逐个进行）`;
     if (barEl) barEl.style.width = `${Math.round((done / total) * 100)}%`;
     if (statusEl) {
       const running = inFlightNames.size ? ` · 进行中：${[...inFlightNames].join('、')}` : '';
@@ -3939,7 +3955,7 @@ async function startNurtureAll() {
     const pump = () => {
       if (activeCount === 0 && (nurtureAllAborted || done >= total)) { resolve(); return; }
       if (nurtureAllAborted) return; // 不再启动新的，等在跑的收尾
-      while (activeCount < NURTURE_ALL_CONCURRENCY) {
+      while (activeCount < concurrency) {
         // 下一个：还没领、且其 profile 当前没人在跑
         const idx = todo.findIndex((a, i) => !taken[i] && !inFlightKeys.has(profileKeyOf(a)));
         if (idx === -1) break; // 剩下的都被同 profile 占着，等它们跑完
@@ -5601,6 +5617,10 @@ async function loadSettings() {
   if (langSelector) {
     langSelector.value = currentLanguage;
   }
+
+  // 一键养号并发数（纯前端设置，存 localStorage）
+  const concInput = document.getElementById('nurtureAllConcurrency') as HTMLInputElement | null;
+  if (concInput) concInput.value = String(getNurtureAllConcurrency());
 
   // 区段导航不依赖后端，先建好（即使后续后端调用失败也有导航）
   buildSettingsNav();

@@ -1392,6 +1392,12 @@
     document.getElementById("btnTestAI")?.addEventListener("click", testAIConnection);
     document.getElementById("btnSaveScheduler")?.addEventListener("click", saveSchedulerSettings);
     document.getElementById("btnSaveNurture")?.addEventListener("click", saveNurtureStrategy);
+    document.getElementById("nurtureAllConcurrency")?.addEventListener("change", (ev) => {
+      const n = Math.min(NURTURE_ALL_CONCURRENCY_MAX, Math.max(1, parseInt(ev.target.value || "1", 10) || 1));
+      localStorage.setItem(NURTURE_ALL_CONCURRENCY_KEY, String(n));
+      ev.target.value = String(n);
+      showToast(n > 1 ? `\u4E00\u952E\u517B\u53F7\u5E76\u53D1\u6570\u5DF2\u8BBE\u4E3A ${n}` : "\u4E00\u952E\u517B\u53F7\u5DF2\u8BBE\u4E3A\u9010\u4E2A\u8FDB\u884C", "success");
+    });
     document.getElementById("nurturePlatform")?.addEventListener("change", populateNurtureForm);
     document.getElementById("aiProvider")?.addEventListener("change", () => {
       populateDefaultModels();
@@ -3530,7 +3536,13 @@
     if (progressBar) progressBar.style.width = "0%";
   }
   var NURTURE_ALL_SKIP_THRESHOLD = 2;
-  var NURTURE_ALL_CONCURRENCY = 2;
+  var NURTURE_ALL_CONCURRENCY_KEY = "unmarket_nurture_all_concurrency";
+  var NURTURE_ALL_CONCURRENCY_MAX = 5;
+  function getNurtureAllConcurrency() {
+    const raw = parseInt(localStorage.getItem(NURTURE_ALL_CONCURRENCY_KEY) || "1", 10);
+    if (!Number.isFinite(raw)) return 1;
+    return Math.min(NURTURE_ALL_CONCURRENCY_MAX, Math.max(1, raw));
+  }
   var nurtureAllRunning = false;
   var nurtureAllAborted = false;
   function computeNurtureAllPlan() {
@@ -3598,6 +3610,7 @@
     nurtureAllRunning = true;
     nurtureAllAborted = false;
     nurtureInProgress = "__nurture_all__";
+    const concurrency = getNurtureAllConcurrency();
     const total = todo.length;
     let ok = 0, fail = 0, done = 0, activeCount = 0;
     const taken = new Array(total).fill(false);
@@ -3608,7 +3621,7 @@
     const statusEl = document.getElementById("nurtureAllStatusText");
     const profileKeyOf = (a) => a.persona_id && String(a.persona_id) || a.profile_id && String(a.profile_id) || "__unbound__";
     const renderProgress = () => {
-      if (textEl) textEl.textContent = `\u517B\u53F7\u4E2D ${done}/${total}\uFF08\u6700\u591A ${NURTURE_ALL_CONCURRENCY} \u5E76\u53D1\uFF0C\u540C\u4E00\u6D4F\u89C8\u5668\u4E0D\u5E76\u53D1\uFF09`;
+      if (textEl) textEl.textContent = concurrency > 1 ? `\u517B\u53F7\u4E2D ${done}/${total}\uFF08\u6700\u591A ${concurrency} \u5E76\u53D1\uFF0C\u540C\u4E00\u6D4F\u89C8\u5668\u4E0D\u5E76\u53D1\uFF09` : `\u517B\u53F7\u4E2D ${done}/${total}\uFF08\u9010\u4E2A\u8FDB\u884C\uFF09`;
       if (barEl) barEl.style.width = `${Math.round(done / total * 100)}%`;
       if (statusEl) {
         const running = inFlightNames.size ? ` \xB7 \u8FDB\u884C\u4E2D\uFF1A${[...inFlightNames].join("\u3001")}` : "";
@@ -3639,7 +3652,7 @@
           return;
         }
         if (nurtureAllAborted) return;
-        while (activeCount < NURTURE_ALL_CONCURRENCY) {
+        while (activeCount < concurrency) {
           const idx = todo.findIndex((a, i) => !taken[i] && !inFlightKeys.has(profileKeyOf(a)));
           if (idx === -1) break;
           const account = todo[idx];
@@ -4876,6 +4889,8 @@
     if (langSelector) {
       langSelector.value = currentLanguage;
     }
+    const concInput = document.getElementById("nurtureAllConcurrency");
+    if (concInput) concInput.value = String(getNurtureAllConcurrency());
     buildSettingsNav();
     try {
       try {

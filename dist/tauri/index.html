@@ -1582,6 +1582,19 @@
             <button class="btn btn-primary" id="btnSaveNurture" data-i18n="settings.saveNurture">Save Nurture Cycle</button>
           </section>
 
+          <!-- 一键养号并发 -->
+          <section class="settings-section">
+            <h3>🌱 一键养号 / Nurture All</h3>
+            <p class="text-muted" style="font-size:12px;margin-bottom:10px;">
+              账号管理页「一键养号」每次同时养几个账号。默认 1（一个一个养，最稳）。同一身份/浏览器下的账号无论怎么设都不会同时跑。<br>
+              How many accounts the "Nurture All" button runs at once. Default 1 (serial). Accounts sharing one browser never run together.
+            </p>
+            <div class="form-group">
+              <label>并发数 / Concurrency（1–5）</label>
+              <input type="number" id="nurtureAllConcurrency" class="input" value="1" min="1" max="5" style="max-width:120px;">
+            </div>
+          </section>
+
           <!-- 平台登录方式（手工登录标记） -->
           <section class="settings-section">
             <h3>🔐 平台登录方式</h3>
@@ -1978,8 +1991,8 @@
         <!-- 设置界面 -->
         <div id="nurtureAllSetup">
           <p class="text-muted" style="font-size: 13px; margin-bottom: 15px;">
-            对所有账号养一轮（今日已养 ≥2 次的自动跳过）。最多 2 个账号并发，且同一身份/浏览器下的账号不会同时跑（共用一个浏览器+IP）。<br>
-            Nurture all accounts (up to 2 at a time; accounts sharing one browser/identity never run together; already nurtured ≥2× today are skipped).
+            对所有账号养一轮（今日已养 ≥2 次的自动跳过）。默认一个一个养；可在「设置 → 一键养号」调并发数。同一身份/浏览器下的账号不会同时跑（共用一个浏览器+IP）。<br>
+            Nurture all accounts (serial by default; set concurrency in Settings → Nurture All; accounts sharing one browser never run together; already nurtured ≥2× today are skipped).
           </p>
           <p id="nurtureAllPlan" style="font-size: 13px; margin-bottom: 15px; font-weight: bold;"></p>
           <div class="form-group">
