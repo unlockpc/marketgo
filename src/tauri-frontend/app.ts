@@ -1188,6 +1188,13 @@ function initBackendEvents() {
     showToast(tf('airport.nodesReplaced', { n }), 'info');
     if (currentPage === 'accounts') loadAccounts();
   }).catch(() => { /* 监听注册失败忽略 */ });
+
+  // 养号逐动作进度：后端每完成/开始一个动作就发一条，记下每个账号最新在干嘛，
+  // 由养号弹框的进度刷新读取展示（养号动作间隔几十秒，靠这个让进度看着在动）。
+  tauriListen('nurture-progress', (e: any) => {
+    const p = e?.payload || {};
+    if (p.accountId) nurtureStepByAccount.set(String(p.accountId), String(p.note || ''));
+  }).catch(() => { /* 监听注册失败忽略 */ });
 }
 
 // Show warning banner when running in browser instead of Tauri
@@ -3725,7 +3732,8 @@ function updateNurtureTimer() {
   if (statusEl) {
     if (remaining === 0) {
       // 动作驱动养号(GitHub/X)实际时长由动作决定，常超过设定时长 → 倒计时归零后不再显示误导计数
-      statusEl.innerHTML = `<span class="spinner-small"></span> 养号进行中…（后台执行动作，完成后自动关闭）`;
+      const step = nurtureInProgress ? nurtureStepByAccount.get(nurtureInProgress) : '';
+      statusEl.innerHTML = `<span class="spinner-small"></span> 养号进行中…${step ? '：' + escapeHtml(step) : '（后台执行动作，完成后自动关闭）'}`;
     } else {
       const elapsedMins = Math.floor(elapsed / 60);
       const elapsedSecs = elapsed % 60;
@@ -3830,6 +3838,8 @@ function getNurtureAllConcurrency(): number {
 let nurtureAllRunning = false;
 let nurtureAllAborted = false;
 let nurtureAllTimer: number | null = null;
+// 账号 id -> 后端推来的最新逐动作进度（如「⭐ Star 2/3：owner/repo」），由 nurture-progress 事件更新。
+const nurtureStepByAccount = new Map<string, string>();
 
 /** 计算本轮养号清单：跳过今日已养 ≥ 阈值次的账号。 */
 function computeNurtureAllPlan(): { todo: any[]; skipped: number } {
@@ -3947,7 +3957,8 @@ async function startNurtureAll() {
       const elapsed = Math.floor((Date.now() - ts) / 1000);
       frac += seconds > 0 ? Math.min(1, elapsed / seconds) : 1;
       if (elapsed >= seconds) anyOverrun = true;
-      parts.push(`${nameById.get(id) || id}（已 ${elapsed}s）`);
+      const step = nurtureStepByAccount.get(id);
+      parts.push(`${nameById.get(id) || id}（已 ${elapsed}s${step ? ' · ' + step : ''}）`);
     }
     if (textEl) textEl.textContent = concurrency > 1
       ? `养号中 ${done}/${total}（最多 ${concurrency} 并发，同一浏览器不并发）`
@@ -3982,6 +3993,7 @@ async function startNurtureAll() {
         inFlightKeys.delete(key);
         startTimes.delete(account.id);
         nameById.delete(account.id);
+        nurtureStepByAccount.delete(account.id);
         activeCount--;
         done++;
         tick();

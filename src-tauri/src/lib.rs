@@ -10748,6 +10748,16 @@ fn simulate_browsing_blocking(platform: &str, duration_seconds: i64) -> Result<i
     Ok(elapsed)
 }
 
+/// 向前端推送一条养号逐动作进度。前端监听 `nurture-progress` 事件 → 实时显示当前账号在干嘛。
+/// 养号动作之间有几十秒的拟人间隔/重页面加载，逐动作推送能让进度看着「在动」。
+fn emit_nurture_step(app: &AppHandle, account_id: &str, note: &str) {
+    let _ = app.emit("nurture-progress", serde_json::json!({
+        "accountId": account_id,
+        "note": note,
+    }));
+    log::info!("[NURTURE-STEP] {} {}", account_id, note);
+}
+
 /// GitHub L1 养号：按账号领域，从 topic 页采候选 → 去重选取 → star。
 /// 浏览器调用走 spawn_blocking（阻塞 reqwest 不能在 async 直接调，见项目约定）。
 /// follow/watch 见同文件 follow/watch 助手（Task 7b 接入）；L2 评论见末尾（Task 9）。
@@ -10817,7 +10827,10 @@ async fn github_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -
 
     // 5) 浏览器：逐个 star（含拟人间隔）
     let mut done = 0i64;
-    for repo in &chosen {
+    emit_nurture_step(app, account_id, &format!("开始 GitHub 养号 · 准备 Star {} 个仓库", chosen.len()));
+    for (i, repo) in chosen.iter().enumerate() {
+        let short = repo.trim_start_matches("https://github.com/");
+        emit_nurture_step(app, account_id, &format!("⭐ Star {}/{}：{}", i + 1, chosen.len(), short));
         let repo_c = repo.clone();
         let res = tauri::async_runtime::spawn_blocking(move || gh_star_repo_blocking(&repo_c)).await
             .map_err(|e| format!("star 异常: {}", e))?;
@@ -10830,9 +10843,10 @@ async fn github_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -
     }
     // follow：对已 star 的 repo follow 其 owner（owner profile = https://github.com/owner）
     if n_follow > 0 {
-        for repo in chosen.iter().take(n_follow as usize) {
+        for (i, repo) in chosen.iter().take(n_follow as usize).enumerate() {
             let owner_url = repo.rsplitn(2, '/').nth(1).unwrap_or(repo).to_string();
             if owner_url.matches('/').count() != 3 { continue; } // 仅 https://github.com/owner 形态
+            emit_nurture_step(app, account_id, &format!("👤 Follow {}/{}：{}", i + 1, n_follow, owner_url.trim_start_matches("https://github.com/")));
             let acted = {
                 let st = app.state::<AppState>();
                 let locked = st.db.lock().map_err(|e| e.to_string())?;
@@ -10854,6 +10868,7 @@ async fn github_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -
     // watch：对第一个 star 的 repo watch（target 用 "<repo>#watch" 与 star 区分）
     if n_watch > 0 {
         if let Some(repo) = chosen.first() {
+            emit_nurture_step(app, account_id, &format!("👁 Watch：{}", repo.trim_start_matches("https://github.com/")));
             let watch_key = format!("{}#watch", repo);
             let acted = {
                 let st = app.state::<AppState>();
@@ -11065,6 +11080,7 @@ async fn segmentfault_nurture_run(app: &AppHandle, account_id: &str, duration: i
     };
     let dur = duration.max(30);
     let seed0 = get_random_delay(1, 100_000);
+    emit_nurture_step(app, account_id, &format!("开始 SegmentFault 养号 · 按领域搜索 {} 次并阅读（约 {}s）", n_search, dur));
     let (searched, read) = tauri::async_runtime::spawn_blocking(move || sf_nurture_browse_blocking(kws, n_search, read_per_search, dur, seed0))
         .await.map_err(|e| format!("养号任务异常: {}", e))??;
 
@@ -11192,7 +11208,9 @@ async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Res
     // 5) L1 点赞（B：动作命中限流/受限 → 退避，停止本轮剩余动作）
     let mut likes = 0i64;
     let mut aborted_health: Option<String> = None;
-    for t in &chosen {
+    emit_nurture_step(app, account_id, &format!("开始 X 养号 · 准备点赞 {} 条推文", chosen.len()));
+    for (i, t) in chosen.iter().enumerate() {
+        emit_nurture_step(app, account_id, &format!("❤️ 点赞 {}/{}", i + 1, chosen.len()));
         let tc = t.clone();
         let r = tauri::async_runtime::spawn_blocking(move || x_like_blocking(&tc)).await.map_err(|e| e.to_string())?;
         match r {
@@ -11228,8 +11246,10 @@ async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Res
             }
             gh_pick_targets(&candidates, &already, (n_follow * 3).max(3) as usize, seed)
         };
+        emit_nurture_step(app, account_id, &format!("👤 找领域优质用户关注（目标 {} 个）", n_follow));
         for prof in &pool {
             if follows >= n_follow { break; }
+            emit_nurture_step(app, account_id, &format!("👤 关注评估中（已 {}/{}）：{}", follows, n_follow, prof.trim_start_matches("https://x.com/")));
             let p = prof.clone();
             let res = tauri::async_runtime::spawn_blocking(move || x_follow_quality_blocking(&p)).await
                 .map_err(|e| e.to_string())?;
@@ -11254,6 +11274,7 @@ async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Res
             let key = format!("{}#engage", t);
             let acted = { let st = app.state::<AppState>(); let l = st.db.lock().map_err(|e| e.to_string())?; x_already_acted(&l, account_id, &key) };
             if acted { continue; }
+            emit_nurture_step(app, account_id, &format!("{} 互动 {}/{}", if i % 2 == 0 { "🔁 转推" } else { "💬 回复" }, i + 1, n_engage));
             let tc = t.clone();
             let r = if i % 2 == 0 {
                 tauri::async_runtime::spawn_blocking(move || x_retweet_blocking(&tc)).await.map_err(|e| e.to_string())?

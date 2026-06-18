@@ -1178,6 +1178,11 @@
       if (currentPage === "accounts") loadAccounts();
     }).catch(() => {
     });
+    listen("nurture-progress", (e) => {
+      const p = e?.payload || {};
+      if (p.accountId) nurtureStepByAccount.set(String(p.accountId), String(p.note || ""));
+    }).catch(() => {
+    });
   }
   function showBrowserModeWarning() {
     const banner = document.createElement("div");
@@ -3460,7 +3465,8 @@
     const statusEl = document.getElementById("nurtureStatusText");
     if (statusEl) {
       if (remaining === 0) {
-        statusEl.innerHTML = `<span class="spinner-small"></span> \u517B\u53F7\u8FDB\u884C\u4E2D\u2026\uFF08\u540E\u53F0\u6267\u884C\u52A8\u4F5C\uFF0C\u5B8C\u6210\u540E\u81EA\u52A8\u5173\u95ED\uFF09`;
+        const step = nurtureInProgress ? nurtureStepByAccount.get(nurtureInProgress) : "";
+        statusEl.innerHTML = `<span class="spinner-small"></span> \u517B\u53F7\u8FDB\u884C\u4E2D\u2026${step ? "\uFF1A" + escapeHtml(step) : "\uFF08\u540E\u53F0\u6267\u884C\u52A8\u4F5C\uFF0C\u5B8C\u6210\u540E\u81EA\u52A8\u5173\u95ED\uFF09"}`;
       } else {
         const elapsedMins = Math.floor(elapsed / 60);
         const elapsedSecs = elapsed % 60;
@@ -3546,6 +3552,7 @@
   var nurtureAllRunning = false;
   var nurtureAllAborted = false;
   var nurtureAllTimer = null;
+  var nurtureStepByAccount = /* @__PURE__ */ new Map();
   function computeNurtureAllPlan() {
     const todo = [];
     let skipped = 0;
@@ -3643,7 +3650,8 @@
         const elapsed = Math.floor((Date.now() - ts) / 1e3);
         frac += seconds > 0 ? Math.min(1, elapsed / seconds) : 1;
         if (elapsed >= seconds) anyOverrun = true;
-        parts.push(`${nameById.get(id) || id}\uFF08\u5DF2 ${elapsed}s\uFF09`);
+        const step = nurtureStepByAccount.get(id);
+        parts.push(`${nameById.get(id) || id}\uFF08\u5DF2 ${elapsed}s${step ? " \xB7 " + step : ""}\uFF09`);
       }
       if (textEl) textEl.textContent = concurrency > 1 ? `\u517B\u53F7\u4E2D ${done}/${total}\uFF08\u6700\u591A ${concurrency} \u5E76\u53D1\uFF0C\u540C\u4E00\u6D4F\u89C8\u5668\u4E0D\u5E76\u53D1\uFF09` : `\u517B\u53F7\u4E2D ${done}/${total}\uFF08\u9010\u4E2A\u8FDB\u884C\uFF09`;
       if (barEl) {
@@ -3673,6 +3681,7 @@
           inFlightKeys.delete(key);
           startTimes.delete(account.id);
           nameById.delete(account.id);
+          nurtureStepByAccount.delete(account.id);
           activeCount--;
           done++;
           tick();
