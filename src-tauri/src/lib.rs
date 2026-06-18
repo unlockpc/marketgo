@@ -11210,7 +11210,7 @@ async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Res
     let mut aborted_health: Option<String> = None;
     emit_nurture_step(app, account_id, &format!("开始 X 养号 · 准备点赞 {} 条推文", chosen.len()));
     for (i, t) in chosen.iter().enumerate() {
-        emit_nurture_step(app, account_id, &format!("❤️ 点赞中 {}/{}（每个约 1-2 分钟）", i + 1, chosen.len()));
+        emit_nurture_step(app, account_id, &format!("❤️ 点赞中 {}/{}", i + 1, chosen.len()));
         let tc = t.clone();
         let r = tauri::async_runtime::spawn_blocking(move || x_like_blocking(&tc)).await.map_err(|e| e.to_string())?;
         match r {
@@ -11223,7 +11223,8 @@ async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Res
             Err(e) if e.starts_with("HEALTH:") => { aborted_health = Some(e[7..].to_string()); break; }
             Err(_) => {}
         }
-        tokio::time::sleep(std::time::Duration::from_millis(get_random_delay(60, 180))).await;
+        // X 动作间隔：随机 15-40 秒（拟人 + 不过度）
+        tokio::time::sleep(std::time::Duration::from_millis(get_random_delay(15, 40))).await;
     }
 
     // 6) L1 关注：People 搜索找该领域好用户 → 质量门(有简介+粉丝≥500)达标才关注
@@ -11264,7 +11265,7 @@ async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Res
                 Err(e) if e.starts_with("HEALTH:") => { aborted_health = Some(e[7..].to_string()); break; }
                 Err(_) => {}
             }
-            tokio::time::sleep(std::time::Duration::from_millis(get_random_delay(90, 240))).await;
+            tokio::time::sleep(std::time::Duration::from_millis(get_random_delay(15, 40))).await; // X 动作间隔 15-40s
         }
     }
 
@@ -11291,7 +11292,7 @@ async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Res
                 }
                 engages += 1;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(get_random_delay(120, 300))).await;
+            tokio::time::sleep(std::time::Duration::from_millis(get_random_delay(15, 40))).await; // X 动作间隔 15-40s
         }
     }
     let _ = engages;
