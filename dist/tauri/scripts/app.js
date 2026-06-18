@@ -3545,6 +3545,7 @@
   }
   var nurtureAllRunning = false;
   var nurtureAllAborted = false;
+  var nurtureAllTimer = null;
   function computeNurtureAllPlan() {
     const todo = [];
     let skipped = 0;
@@ -3571,7 +3572,10 @@
     if (btnStop) btnStop.style.display = "none";
     if (btnCancel) btnCancel.style.display = "inline-block";
     if (btnClose) btnClose.style.display = "none";
-    if (bar) bar.style.width = "0%";
+    if (bar) {
+      bar.classList.remove("nurture-indeterminate");
+      bar.style.width = "0%";
+    }
   }
   function openNurtureAllModal() {
     if (nurtureInProgress || nurtureAllRunning) {
@@ -3615,22 +3619,40 @@
     let ok = 0, fail = 0, done = 0, activeCount = 0;
     const taken = new Array(total).fill(false);
     const inFlightKeys = /* @__PURE__ */ new Set();
-    const inFlightNames = /* @__PURE__ */ new Set();
+    const startTimes = /* @__PURE__ */ new Map();
+    const nameById = /* @__PURE__ */ new Map();
     const textEl = document.getElementById("nurtureAllProgressText");
     const barEl = document.getElementById("nurtureAllProgressBar");
     const statusEl = document.getElementById("nurtureAllStatusText");
     const profileKeyOf = (a) => a.persona_id && String(a.persona_id) || a.profile_id && String(a.profile_id) || "__unbound__";
-    const renderProgress = () => {
+    const tick = () => {
+      let frac = 0;
+      let anyOverrun = false;
+      const parts = [];
+      for (const [id, ts] of startTimes) {
+        const elapsed = Math.floor((Date.now() - ts) / 1e3);
+        frac += seconds > 0 ? Math.min(1, elapsed / seconds) : 1;
+        if (elapsed >= seconds) anyOverrun = true;
+        parts.push(`${nameById.get(id) || id}\uFF08\u5DF2 ${elapsed}s\uFF09`);
+      }
       if (textEl) textEl.textContent = concurrency > 1 ? `\u517B\u53F7\u4E2D ${done}/${total}\uFF08\u6700\u591A ${concurrency} \u5E76\u53D1\uFF0C\u540C\u4E00\u6D4F\u89C8\u5668\u4E0D\u5E76\u53D1\uFF09` : `\u517B\u53F7\u4E2D ${done}/${total}\uFF08\u9010\u4E2A\u8FDB\u884C\uFF09`;
-      if (barEl) barEl.style.width = `${Math.round(done / total * 100)}%`;
+      if (barEl) {
+        const shown = Math.min(total, done + frac);
+        barEl.style.width = `${Math.round(shown / total * 100)}%`;
+        barEl.classList.toggle("nurture-indeterminate", anyOverrun);
+      }
       if (statusEl) {
-        const running = inFlightNames.size ? ` \xB7 \u8FDB\u884C\u4E2D\uFF1A${[...inFlightNames].join("\u3001")}` : "";
+        const running = parts.length ? ` \xB7 \u8FDB\u884C\u4E2D\uFF1A${parts.join("\u3001")}${anyOverrun ? "\uFF08\u540E\u53F0\u6267\u884C\u4E2D\u2026\uFF09" : ""}` : "";
         statusEl.textContent = `\u2705 \u6210\u529F ${ok} \xB7 \u274C \u5931\u8D25 ${fail}${running}`;
       }
     };
-    renderProgress();
+    tick();
+    nurtureAllTimer = window.setInterval(tick, 1e3);
     await new Promise((resolve) => {
       const runOne = async (account, key, name) => {
+        startTimes.set(account.id, Date.now());
+        nameById.set(account.id, name);
+        tick();
         try {
           await invoke2("quick_nurture", { accountId: account.id, seconds });
           ok++;
@@ -3639,10 +3661,11 @@
           console.error("Nurture failed for", account.id, e);
         } finally {
           inFlightKeys.delete(key);
-          inFlightNames.delete(name);
+          startTimes.delete(account.id);
+          nameById.delete(account.id);
           activeCount--;
           done++;
-          renderProgress();
+          tick();
           pump();
         }
       };
@@ -3660,15 +3683,20 @@
           const name = account.username || account.email || account.platform || account.id;
           taken[idx] = true;
           inFlightKeys.add(key);
-          inFlightNames.add(name);
           activeCount++;
-          renderProgress();
           void runOne(account, key, name);
         }
       };
       pump();
     });
-    if (barEl) barEl.style.width = "100%";
+    if (nurtureAllTimer) {
+      clearInterval(nurtureAllTimer);
+      nurtureAllTimer = null;
+    }
+    if (barEl) {
+      barEl.classList.remove("nurture-indeterminate");
+      barEl.style.width = "100%";
+    }
     nurtureAllRunning = false;
     nurtureInProgress = null;
     if (btnHeader) btnHeader.disabled = false;

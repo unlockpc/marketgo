@@ -3829,6 +3829,7 @@ function getNurtureAllConcurrency(): number {
 }
 let nurtureAllRunning = false;
 let nurtureAllAborted = false;
+let nurtureAllTimer: number | null = null;
 
 /** 计算本轮养号清单：跳过今日已养 ≥ 阈值次的账号。 */
 function computeNurtureAllPlan(): { todo: any[]; skipped: number } {
@@ -3858,7 +3859,7 @@ function resetNurtureAllModal() {
   if (btnStop) btnStop.style.display = 'none';
   if (btnCancel) btnCancel.style.display = 'inline-block';
   if (btnClose) btnClose.style.display = 'none';
-  if (bar) bar.style.width = '0%';
+  if (bar) { bar.classList.remove('nurture-indeterminate'); bar.style.width = '0%'; }
 }
 
 function openNurtureAllModal() {
@@ -3908,8 +3909,9 @@ async function startNurtureAll() {
   const total = todo.length;
   let ok = 0, fail = 0, done = 0, activeCount = 0;
   const taken: boolean[] = new Array(total).fill(false);
-  const inFlightKeys = new Set<string>();   // 正在跑的 unzoo profile —— 同 profile 不并发
-  const inFlightNames = new Set<string>();  // 仅用于进度展示
+  const inFlightKeys = new Set<string>();        // 正在跑的 unzoo profile —— 同 profile 不并发
+  const startTimes = new Map<string, number>();  // 在跑账号 id -> 起始时间戳（实时进度用）
+  const nameById = new Map<string, string>();    // 在跑账号 id -> 展示名
   const textEl = document.getElementById('nurtureAllProgressText');
   const barEl = document.getElementById('nurtureAllProgressBar');
   const statusEl = document.getElementById('nurtureAllStatusText');
@@ -3921,22 +3923,41 @@ async function startNurtureAll() {
     (a.profile_id && String(a.profile_id)) ||
     '__unbound__';
 
-  const renderProgress = () => {
+  // 每秒刷新：把在跑账号「已用时间」折算成子进度，让进度条/状态在单个账号养号期间也持续走动，
+  // 而不是停在 0/N 看着像卡死。动作驱动养号常超过设定时长，超时后切到不确定态条纹（仍在后台跑）。
+  const tick = () => {
+    let frac = 0;
+    let anyOverrun = false;
+    const parts: string[] = [];
+    for (const [id, ts] of startTimes) {
+      const elapsed = Math.floor((Date.now() - ts) / 1000);
+      frac += seconds > 0 ? Math.min(1, elapsed / seconds) : 1;
+      if (elapsed >= seconds) anyOverrun = true;
+      parts.push(`${nameById.get(id) || id}（已 ${elapsed}s）`);
+    }
     if (textEl) textEl.textContent = concurrency > 1
       ? `养号中 ${done}/${total}（最多 ${concurrency} 并发，同一浏览器不并发）`
       : `养号中 ${done}/${total}（逐个进行）`;
-    if (barEl) barEl.style.width = `${Math.round((done / total) * 100)}%`;
+    if (barEl) {
+      const shown = Math.min(total, done + frac);
+      barEl.style.width = `${Math.round((shown / total) * 100)}%`;
+      barEl.classList.toggle('nurture-indeterminate', anyOverrun);
+    }
     if (statusEl) {
-      const running = inFlightNames.size ? ` · 进行中：${[...inFlightNames].join('、')}` : '';
+      const running = parts.length ? ` · 进行中：${parts.join('、')}${anyOverrun ? '（后台执行中…）' : ''}` : '';
       statusEl.textContent = `✅ 成功 ${ok} · ❌ 失败 ${fail}${running}`;
     }
   };
-  renderProgress();
+  tick();
+  nurtureAllTimer = window.setInterval(tick, 1000);
 
-  // 事件驱动调度：全局最多 NURTURE_ALL_CONCURRENCY 个并发，且同一 profile 同时只跑一个。
+  // 事件驱动调度：全局最多 concurrency 个并发，且同一 profile 同时只跑一个。
   // 每当一个名额或某 profile 释放，就尝试再启动可运行的账号。
   await new Promise<void>((resolve) => {
     const runOne = async (account: any, key: string, name: string) => {
+      startTimes.set(account.id, Date.now());
+      nameById.set(account.id, name);
+      tick();
       try {
         await invoke<string>('quick_nurture', { accountId: account.id, seconds });
         ok++;
@@ -3945,10 +3966,11 @@ async function startNurtureAll() {
         console.error('Nurture failed for', account.id, e);
       } finally {
         inFlightKeys.delete(key);
-        inFlightNames.delete(name);
+        startTimes.delete(account.id);
+        nameById.delete(account.id);
         activeCount--;
         done++;
-        renderProgress();
+        tick();
         pump();
       }
     };
@@ -3964,15 +3986,14 @@ async function startNurtureAll() {
         const name = account.username || account.email || account.platform || account.id;
         taken[idx] = true;
         inFlightKeys.add(key);
-        inFlightNames.add(name);
         activeCount++;
-        renderProgress();
         void runOne(account, key, name);
       }
     };
     pump();
   });
-  if (barEl) barEl.style.width = '100%';
+  if (nurtureAllTimer) { clearInterval(nurtureAllTimer); nurtureAllTimer = null; }
+  if (barEl) { barEl.classList.remove('nurture-indeterminate'); barEl.style.width = '100%'; }
 
   nurtureAllRunning = false;
   nurtureInProgress = null;
