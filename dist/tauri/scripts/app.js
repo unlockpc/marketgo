@@ -1362,6 +1362,9 @@
     document.getElementById("btnSelectAllPublish")?.addEventListener("click", selectAllPublishProducts);
     document.getElementById("btnClearPublish")?.addEventListener("click", clearPublishProducts);
     document.getElementById("btnAnalyze")?.addEventListener("click", analyzeUrl);
+    document.getElementById("btnNurtureAll")?.addEventListener("click", openNurtureAllModal);
+    document.getElementById("btnNurtureAllStart")?.addEventListener("click", startNurtureAll);
+    document.getElementById("btnNurtureAllStop")?.addEventListener("click", stopNurtureAll);
     document.getElementById("btnAddAccount")?.addEventListener("click", () => openModal("modalAddAccount"));
     document.getElementById("btnAddAccountEmpty")?.addEventListener("click", () => openModal("modalAddAccount"));
     document.getElementById("btnSaveAccount")?.addEventListener("click", saveAccount);
@@ -3525,6 +3528,121 @@
     if (btnCancel) btnCancel.style.display = "inline-block";
     if (btnClose) btnClose.style.display = "none";
     if (progressBar) progressBar.style.width = "0%";
+  }
+  var NURTURE_ALL_SKIP_THRESHOLD = 2;
+  var nurtureAllRunning = false;
+  var nurtureAllAborted = false;
+  function computeNurtureAllPlan() {
+    const todo = [];
+    let skipped = 0;
+    for (const account of accounts) {
+      const today = accountLifecycles.get(account.id)?.today?.sessions_completed || 0;
+      if (today >= NURTURE_ALL_SKIP_THRESHOLD) skipped++;
+      else todo.push(account);
+    }
+    return { todo, skipped };
+  }
+  function resetNurtureAllModal() {
+    const setup = document.getElementById("nurtureAllSetup");
+    const progress = document.getElementById("nurtureAllProgress");
+    const complete = document.getElementById("nurtureAllComplete");
+    const btnStart = document.getElementById("btnNurtureAllStart");
+    const btnStop = document.getElementById("btnNurtureAllStop");
+    const btnCancel = document.getElementById("btnNurtureAllCancel");
+    const btnClose = document.getElementById("btnNurtureAllClose");
+    const bar = document.getElementById("nurtureAllProgressBar");
+    if (setup) setup.style.display = "block";
+    if (progress) progress.style.display = "none";
+    if (complete) complete.style.display = "none";
+    if (btnStart) btnStart.style.display = "inline-block";
+    if (btnStop) btnStop.style.display = "none";
+    if (btnCancel) btnCancel.style.display = "inline-block";
+    if (btnClose) btnClose.style.display = "none";
+    if (bar) bar.style.width = "0%";
+  }
+  function openNurtureAllModal() {
+    if (nurtureInProgress || nurtureAllRunning) {
+      showToast("\u6709\u517B\u53F7\u4EFB\u52A1\u6B63\u5728\u8FDB\u884C", "warning");
+      return;
+    }
+    resetNurtureAllModal();
+    const { todo, skipped } = computeNurtureAllPlan();
+    const planEl = document.getElementById("nurtureAllPlan");
+    if (planEl) {
+      planEl.textContent = `\u5171 ${accounts.length} \u4E2A\u8D26\u53F7\uFF1A\u672C\u8F6E\u517B ${todo.length} \u4E2A\uFF0C\u8DF3\u8FC7 ${skipped} \u4E2A\uFF08\u4ECA\u65E5\u5DF2\u517B \u2265${NURTURE_ALL_SKIP_THRESHOLD} \u6B21\uFF09`;
+    }
+    const btnStart = document.getElementById("btnNurtureAllStart");
+    if (btnStart) btnStart.disabled = todo.length === 0;
+    openModal("modalNurtureAll");
+  }
+  async function startNurtureAll() {
+    const { todo } = computeNurtureAllPlan();
+    if (!todo.length) {
+      showToast("\u6CA1\u6709\u9700\u8981\u517B\u53F7\u7684\u8D26\u53F7\uFF08\u4ECA\u65E5\u5747\u5DF2\u517B \u22652 \u6B21\uFF09", "info");
+      return;
+    }
+    const seconds = parseInt(document.getElementById("nurtureAllDuration")?.value || "60");
+    const setup = document.getElementById("nurtureAllSetup");
+    const progress = document.getElementById("nurtureAllProgress");
+    const btnStart = document.getElementById("btnNurtureAllStart");
+    const btnStop = document.getElementById("btnNurtureAllStop");
+    const btnCancel = document.getElementById("btnNurtureAllCancel");
+    if (setup) setup.style.display = "none";
+    if (progress) progress.style.display = "block";
+    if (btnStart) btnStart.style.display = "none";
+    if (btnStop) btnStop.style.display = "inline-block";
+    if (btnCancel) btnCancel.style.display = "none";
+    const btnHeader = document.getElementById("btnNurtureAll");
+    if (btnHeader) btnHeader.disabled = true;
+    nurtureAllRunning = true;
+    nurtureAllAborted = false;
+    nurtureInProgress = "__nurture_all__";
+    const total = todo.length;
+    let ok = 0, fail = 0;
+    const textEl = document.getElementById("nurtureAllProgressText");
+    const barEl = document.getElementById("nurtureAllProgressBar");
+    const statusEl = document.getElementById("nurtureAllStatusText");
+    for (let i = 0; i < total; i++) {
+      if (nurtureAllAborted) break;
+      const account = todo[i];
+      const name = account.username || account.email || account.platform || account.id;
+      if (textEl) textEl.textContent = `\u6B63\u5728\u517B\u53F7 ${i + 1}/${total}\uFF1A${name}`;
+      if (barEl) barEl.style.width = `${Math.round(i / total * 100)}%`;
+      try {
+        await invoke2("quick_nurture", { accountId: account.id, seconds });
+        ok++;
+        if (statusEl) statusEl.textContent = `\u2705 \u6210\u529F ${ok} \xB7 \u274C \u5931\u8D25 ${fail}`;
+      } catch (e) {
+        fail++;
+        console.error("Nurture failed for", account.id, e);
+        if (statusEl) statusEl.textContent = `\u2705 \u6210\u529F ${ok} \xB7 \u274C \u5931\u8D25 ${fail}\uFF08\u6700\u8FD1\u5931\u8D25\uFF1A${name}\uFF09`;
+      }
+    }
+    if (barEl) barEl.style.width = "100%";
+    nurtureAllRunning = false;
+    nurtureInProgress = null;
+    if (btnHeader) btnHeader.disabled = false;
+    const completeDiv = document.getElementById("nurtureAllComplete");
+    const summaryEl = document.getElementById("nurtureAllSummary");
+    const btnStopEnd = document.getElementById("btnNurtureAllStop");
+    const btnClose = document.getElementById("btnNurtureAllClose");
+    if (progress) progress.style.display = "none";
+    if (completeDiv) completeDiv.style.display = "block";
+    if (btnStopEnd) btnStopEnd.style.display = "none";
+    if (btnClose) btnClose.style.display = "inline-block";
+    const skippedCount = accounts.length - total;
+    const stoppedNote = nurtureAllAborted ? "\uFF08\u5DF2\u624B\u52A8\u505C\u6B62\uFF09" : "";
+    if (summaryEl) summaryEl.textContent = `\u2705 \u6210\u529F ${ok} \xB7 \u23ED \u8DF3\u8FC7 ${skippedCount} \xB7 \u274C \u5931\u8D25 ${fail}${stoppedNote}`;
+    if (completeDiv) {
+      const title = completeDiv.querySelector("p");
+      if (title) title.textContent = nurtureAllAborted ? "\u4E00\u952E\u517B\u53F7\u5DF2\u505C\u6B62" : "\u4E00\u952E\u517B\u53F7\u5B8C\u6210";
+    }
+    await loadAccounts();
+  }
+  function stopNurtureAll() {
+    nurtureAllAborted = true;
+    const statusEl = document.getElementById("nurtureAllStatusText");
+    if (statusEl) statusEl.textContent = (statusEl.textContent || "") + " \xB7 \u505C\u6B62\u4E2D\uFF0C\u517B\u5B8C\u5F53\u524D\u8D26\u53F7\u540E\u7ED3\u675F\u2026";
   }
   async function openBatchNurtureModal() {
     if (accounts.length === 0) {

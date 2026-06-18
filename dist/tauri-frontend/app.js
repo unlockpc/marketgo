@@ -2,6 +2,7 @@
  * UnMarket Desktop - Tauri Frontend Application
  */
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
+import { listen as tauriListen } from '@tauri-apps/api/event';
 let currentLanguage = 'zh';
 const translations = {
     zh: {
@@ -15,6 +16,9 @@ const translations = {
         'nav.accounts': '账号管理',
         'nav.tasks': '任务队列',
         'nav.statistics': '统计分析',
+        'nav.guide': '使用指南',
+        'nav.guideScenarios': '场景平台推荐',
+        'guide.scenariosTitle': '🎯 场景平台推荐',
         'nav.settings': '设置',
         // Dashboard
         'dashboard.title': '仪表盘',
@@ -35,6 +39,12 @@ const translations = {
         'dashboard.startEngage': '开始互动',
         // Accounts
         'accounts.title': '平台账号',
+        'accounts.pageTitle': '👤 身份管理',
+        // 账号生命周期阶段徽章
+        'stage.new': '新账号',
+        'stage.warming': '预热中 · 剩{n}天',
+        'stage.growing': '成长中 · 剩{n}天',
+        'stage.active': '正常',
         'accounts.addAccount': '+ 添加账号',
         'accounts.overallHealth': '整体健康',
         'accounts.active': '活跃',
@@ -58,6 +68,56 @@ const translations = {
         'accounts.createProfile': '创建 Profile',
         'accounts.noAccounts': '暂无账号',
         'accounts.autoRegisterHint': '使用自动注册或手动添加账号',
+        // 添加账号弹窗
+        'accounts.modalTitle': '添加平台账号',
+        'accounts.platform': '平台',
+        'accounts.usernameEmail': '用户名 / 邮箱',
+        'accounts.usernameEmailPlaceholder': '用户名或邮箱',
+        'accounts.passwordApiKey': '密码 / API Key',
+        'accounts.passwordApiKeyPlaceholder': '密码或 API Key',
+        'accounts.saveAccount': '保存账号',
+        'accounts.requiredFields': '平台和用户名为必填项',
+        'accounts.saveFailed': '保存账号失败',
+        'accounts.deleteConfirm': '删除该账号？',
+        'accounts.deleteFailed': '删除账号失败',
+        // 邮箱中心页布局
+        'accounts.newGmail': '+ 新建 Gmail',
+        'accounts.newIdentity': '+ 新建身份',
+        'accounts.newFixedCn': '+ 新建国内固定身份',
+        'accounts.newFixedOverseas': '+ 新建国外固定身份',
+        // #13 身份分类 tab
+        'idcat.gmail': '📧 Gmail 身份',
+        'idcat.fixedCn': '🇨🇳 国内固定IP',
+        'idcat.fixedOverseas': '🌍 国外固定IP',
+        'idcat.unassigned': '🧩 未归属',
+        'idcat.emptyGmail': '还没有 Gmail 身份 —— 点上面「+ 新建 Gmail」用一个真实 Gmail 建第一个。',
+        'idcat.emptyFixedCn': '还没有国内固定 IP 身份 —— 点「+ 新建国内固定身份」，填标识 + 国内住宅/4G 代理。',
+        'idcat.emptyFixedOverseas': '还没有国外固定 IP 身份 —— 点「+ 新建国外固定身份」，填标识 + 海外静态代理。',
+        'accounts.collapseAll': '收起全部平台',
+        'accounts.expandAll': '展开全部平台',
+        'accounts.collapse': '收起平台',
+        'accounts.expand': '展开平台',
+        'accounts.collapsedHint': '已收起 {n} 个平台账号',
+        'accounts.emailLabel': '📧 邮箱：',
+        'accounts.browser': '浏览器',
+        'accounts.noNode': '🌐 节点未分配',
+        'accounts.accountCount': '{n} 个账号',
+        'accounts.loginGmail': '📧 登录 Gmail',
+        'accounts.provisionBtn': '🚀 检查并开通账号',
+        'accounts.addAccountBtn': '+ 加账号',
+        'accounts.deleteEmail': '删除此邮箱',
+        'accounts.noEmailYet': '还没有邮箱。用一个真实 Gmail 新建第一个 →',
+        'accounts.unassignedTitle': '🧩 未归属邮箱 · {n} 个账号',
+        'accounts.unassignedHint': '这些账号还没挂到某个 Gmail 下。在账号上选「归属身份」归类即可。',
+        'accounts.emptyEmailHint': '这个邮箱还没有账号 —— 点上面「🚀 检查并开通账号」自动开通各平台，或「+ 加账号」手动加。',
+        // #13 身份 IP 类型
+        'accounts.ipAirport': '🛫 机场轮换',
+        'accounts.ipFixedCn': '🇨🇳 国内固定',
+        'accounts.ipFixedOverseas': '🌍 海外固定',
+        'accounts.openBrowser': '🌐 打开浏览器',
+        'accounts.proxy': '代理',
+        'accounts.fixedOneAccount': '固定 IP 身份建议「一身份一号」，这个身份已有账号了',
+        'accounts.fixedEmptyHint': '这个固定 IP 身份还没有账号 —— 点「+ 加账号」加 1 个（建议一身份一号）。',
         // Nurturing (养号)
         'nurture.title': '账号养护',
         'nurture.description': '模拟正常用户浏览行为，提升账号权重',
@@ -80,6 +140,101 @@ const translations = {
         'nurture.failed': '养号失败',
         'nurture.stopped': '养号已停止',
         'nurture.noAccounts': '暂无账号，请先添加账号',
+        'nurture.daysProgressTitle': '养号进度（已养天数 / 需要总天数）',
+        'nurture.finishBtn': '结束养号',
+        'nurture.finishConfirm': '这个账号本来就是正常老账号、无需养号？\n结束养号后会直接标为「正常」，并停止自动养号。',
+        'nurture.finished': '已结束养号，账号标记为正常',
+        'nurture.finishFailed': '结束养号失败：',
+        // Provision (开通账号选择器 / 加账号流程)
+        'provision.title': '用 {email} 开通平台',
+        'provision.hint': '勾选要开通的平台（仅列出可自动开通、且尚未开通的 Google 登录平台）。',
+        'provision.selectAuto': '全选',
+        'provision.cancel': '取消',
+        'provision.apply': '开通 ({n})',
+        'provision.provisioned': '已开通',
+        'provision.auto': '🟢自动',
+        'provision.manual': '🟡需手动',
+        'provision.loadFailed': '加载平台列表失败：',
+        'provision.noChanges': '没有变更',
+        'provision.provisioning': '正在用 {email} 开通 {n} 个平台…（逐个跑，请耐心等）',
+        'provision.removed': '已移除 {n} 个平台账号',
+        'provision.allDone': '该邮箱可自动开通的平台都已开通',
+        // 加账号（手机号 / 账号密码 分区录入）
+        'addacct.title': '给 {email} 加账号',
+        'addacct.hint': '只列出可手动添加、且尚未添加的平台；填了凭据的才会被添加。',
+        'addacct.phoneGroup': '📱 手机号登录',
+        'addacct.passwordGroup': '🔑 账号密码登录',
+        'addacct.phonePlaceholder': '手机号',
+        'addacct.usernamePlaceholder': '账号 / 邮箱',
+        'addacct.passwordPlaceholder': '密码',
+        'addacct.submit': '添加 ({n})',
+        'addacct.none': '该邮箱可手动添加的平台都已添加',
+        'addacct.nothing': '没有填写任何凭据',
+        'addacct.added': '已添加 {n} 个账号',
+        'addacct.addFailed': '加账号失败：',
+        // 转移归属（手工账号才可转移）
+        'transfer.btn': '转移归属',
+        'transfer.title': '转移归属',
+        'transfer.hint': '选择把这个账号挂到哪个 Gmail 身份下（之后共用该身份的浏览器+IP+指纹）。',
+        'transfer.unassigned': '未归属（用全局 Profile）',
+        'transfer.current': '当前',
+        'transfer.done': '已转移归属',
+        'transfer.failed': '转移失败：',
+        // 机场节点定时刷新
+        'airport.nodesReplaced': '检测到机场节点变化，已为 {n} 个身份自动替换出口节点',
+        // 机场订阅（设置 / 刷新）
+        'airport.title': '🌐 机场代理',
+        'airport.poolInfo': '节点池 {total} 个（空闲 {free}）· 每个邮箱分一个独立出口 IP',
+        'airport.notConfigured': '未配置——配了才能给邮箱分配独立 IP',
+        'airport.setSub': '设置订阅',
+        'airport.refreshSub': '刷新订阅',
+        'airport.setTitle': '设置机场订阅',
+        'airport.setLabel': '粘贴你的机场订阅链接（必须是 Clash 订阅，不支持单条 ss/vmess）',
+        'airport.setOk': '保存',
+        'airport.saved': '保存成功（订阅未变化）',
+        'airport.fetching': '正在拉取节点…',
+        'airport.refreshing': '正在刷新订阅…',
+        'airport.subFailed': '订阅失败：',
+        // 登录方式标注
+        'login.method': '登录方式',
+        'login.google': 'Google 登录',
+        'login.phone': '手机号',
+        'login.password': '账号密码',
+        // 场景分组
+        'scene.research': '💻 研发/技术',
+        'scene.product': '🚀 产品/创业',
+        'scene.social': '🌐 通用/大众社交',
+        'scene.content': '📝 知识/内容',
+        'scene.career': '💼 职场/商务',
+        'scene.lifestyle': '🛍️ 生活/种草',
+        // 新建 / 删除身份
+        'persona.createTitle': '新建 Gmail 身份',
+        'persona.createLabel': '输入一个真实 Gmail（这个邮箱会成为一套独立身份：独立浏览器+IP+指纹）',
+        'persona.createOk': '创建',
+        'persona.invalidEmail': '请输入有效的 Gmail 地址',
+        'persona.creating': '正在创建身份…（建浏览器+随机指纹+分配出口节点，约 5-10 秒）',
+        'persona.created': '邮箱已建好 ✓ 已打开 Google 登录页 → 请在弹出的浏览器窗口登录 {email}（基础登录，只需一次；登好后才能自动注册/登录账号）',
+        'persona.createFailed': '创建失败：',
+        'persona.deleteConfirm': '删除身份 {email}？\n会删掉它的独立浏览器并释放出口节点；名下账号会变成「未归属」。',
+        'persona.deleted': '身份已删除',
+        'persona.deleteFailed': '删除失败：',
+        // #13 身份类型 / 固定 IP 身份
+        'persona.newTypeTitle': '新建身份',
+        'persona.newTypeHint': '按平台对出口 IP 的要求选择身份类型：',
+        'persona.newGmail': '📧 Gmail 身份',
+        'persona.newGmailDesc': '海外平台（Reddit/PH/Twitter…）· 机场节点自动轮换',
+        'persona.newFixedCn': '🇨🇳 国内固定 IP 身份',
+        'persona.newFixedCnDesc': '小红书/抖音/微博… · 自备国内住宅/4G 代理 · IP 钉死不轮换',
+        'persona.newFixedOverseas': '🌍 国外固定 IP 身份',
+        'persona.newFixedOverseasDesc': '需稳定海外 IP 的平台 · 自备海外静态代理 · IP 钉死不轮换',
+        'persona.fixedTitle': '新建固定 IP 身份',
+        'persona.fixedLabelLabel': '身份标识（名称或手机号，唯一）',
+        'persona.fixedLabelPlaceholder': '如：小红书-1 或 手机号',
+        'persona.fixedProxyLabel': '固定代理地址（住宅/4G，钉死给这个身份独用）',
+        'persona.fixedProxyPlaceholder': 'socks5://user:pass@host:port',
+        'persona.fixedOk': '创建',
+        'persona.creatingFixed': '正在创建固定 IP 身份…（建浏览器+随机指纹+绑定代理）',
+        'persona.fixedCreated': '固定 IP 身份「{label}」已建好 ✓ 出口 IP 已钉死、不会被自动轮换',
         // Settings
         'settings.title': '设置',
         'settings.aiConfig': 'AI 配置',
@@ -111,6 +266,14 @@ const translations = {
         'settings.interval': '间隔 (分钟)',
         'settings.maxDailyPosts': '每日最大发布数',
         'settings.saveScheduler': '保存调度器设置',
+        'settings.nurtureCycle': '养号周期',
+        'settings.nurtureCycleDesc': '自定义新号的养号节奏：预热时长 + 成长时长两段独立配置。预热期只点赞；成长期开放关注+互动；之后进入成熟期（全量，无时长）。发原创在走完预热期后解锁。不修改则用默认值（X 为预热 5 / 成长 5，成熟从第 10 天起）。',
+        'settings.nurturePlatform': '平台',
+        'settings.nurtureWarmupDays': '预热时长（天）',
+        'settings.nurtureGrowthDays': '成长时长（天）',
+        'settings.nurtureSessions': '每日养号次数 (最少 – 最多)',
+        'settings.nurtureEnabled': '启用该平台养号',
+        'settings.saveNurture': '保存养号周期',
         'settings.proxyPool': '代理池',
         'settings.addProxy': '+ 添加代理',
         'settings.proxyDesc': '管理多账号操作的代理。每个账号可以使用不同的代理。',
@@ -317,6 +480,9 @@ const translations = {
         'nav.accounts': 'Accounts',
         'nav.tasks': 'Tasks',
         'nav.statistics': 'Statistics',
+        'nav.guide': 'Guide',
+        'nav.guideScenarios': 'Platform Recommendations',
+        'guide.scenariosTitle': '🎯 Platform Recommendations',
         'nav.settings': 'Settings',
         // Dashboard
         'dashboard.title': 'Dashboard',
@@ -337,6 +503,12 @@ const translations = {
         'dashboard.startEngage': 'Start Engage',
         // Accounts
         'accounts.title': 'Platform Accounts',
+        'accounts.pageTitle': '👤 Identities',
+        // Account lifecycle stage badges
+        'stage.new': 'New',
+        'stage.warming': 'Warmup · {n}d left',
+        'stage.growing': 'Growth · {n}d left',
+        'stage.active': 'Active',
         'accounts.addAccount': '+ Add Account',
         'accounts.overallHealth': 'Overall Health',
         'accounts.active': 'Active',
@@ -354,6 +526,55 @@ const translations = {
         'accounts.autoLogin': 'Auto-Login/Register Selected',
         'accounts.syncAll': 'Sync All',
         'accounts.syncAllHint': '"Sync All" will check which platforms you\'re already logged into in Unzoo browser',
+        'accounts.modalTitle': 'Add Platform Account',
+        'accounts.platform': 'Platform',
+        'accounts.usernameEmail': 'Username / Email',
+        'accounts.usernameEmailPlaceholder': 'username or email',
+        'accounts.passwordApiKey': 'Password / API Key',
+        'accounts.passwordApiKeyPlaceholder': 'password or API key',
+        'accounts.saveAccount': 'Save Account',
+        'accounts.requiredFields': 'Platform and username are required',
+        'accounts.saveFailed': 'Failed to save account',
+        'accounts.deleteConfirm': 'Delete this account?',
+        'accounts.deleteFailed': 'Failed to delete account',
+        // Email hub layout
+        'accounts.newGmail': '+ New Gmail',
+        'accounts.newIdentity': '+ New identity',
+        'accounts.newFixedCn': '+ New CN fixed-IP identity',
+        'accounts.newFixedOverseas': '+ New overseas fixed-IP identity',
+        // #13 identity category tabs
+        'idcat.gmail': '📧 Gmail identities',
+        'idcat.fixedCn': '🇨🇳 CN fixed-IP',
+        'idcat.fixedOverseas': '🌍 Overseas fixed-IP',
+        'idcat.unassigned': '🧩 Unassigned',
+        'idcat.emptyGmail': 'No Gmail identity yet — click "+ New Gmail" to create one with a real Gmail.',
+        'idcat.emptyFixedCn': 'No CN fixed-IP identity yet — click "+ New CN fixed-IP identity", enter a label + a CN residential/4G proxy.',
+        'idcat.emptyFixedOverseas': 'No overseas fixed-IP identity yet — click "+ New overseas fixed-IP identity", enter a label + a static proxy.',
+        'accounts.collapseAll': 'Collapse all',
+        'accounts.expandAll': 'Expand all',
+        'accounts.collapse': 'Collapse',
+        'accounts.expand': 'Expand',
+        'accounts.collapsedHint': '{n} platform account(s) collapsed',
+        'accounts.emailLabel': '📧 Email:',
+        'accounts.browser': 'Browser',
+        'accounts.noNode': '🌐 No node assigned',
+        'accounts.accountCount': '{n} account(s)',
+        'accounts.loginGmail': '📧 Sign in Gmail',
+        'accounts.provisionBtn': '🚀 Check & provision',
+        'accounts.addAccountBtn': '+ Add account',
+        'accounts.deleteEmail': 'Delete this email',
+        'accounts.noEmailYet': 'No email yet. Create your first one with a real Gmail →',
+        'accounts.unassignedTitle': '🧩 Unassigned · {n} account(s)',
+        'accounts.unassignedHint': 'These accounts are not under any Gmail yet. Set "Identity" on an account to group it.',
+        'accounts.emptyEmailHint': 'No accounts under this email yet — click "🚀 Check & provision" to auto-provision, or "+ Add account" to add manually.',
+        // #13 identity IP type
+        'accounts.ipAirport': '🛫 Airport rotation',
+        'accounts.ipFixedCn': '🇨🇳 CN fixed',
+        'accounts.ipFixedOverseas': '🌍 Overseas fixed',
+        'accounts.openBrowser': '🌐 Open browser',
+        'accounts.proxy': 'Proxy',
+        'accounts.fixedOneAccount': 'Fixed-IP identity is meant to hold one account; this identity already has one',
+        'accounts.fixedEmptyHint': 'No account under this fixed-IP identity yet — click "+ Add account" to add one (one account per identity recommended).',
         'accounts.existingAccounts': 'Existing Accounts',
         'accounts.delete': 'Delete',
         'accounts.useGlobalProfile': '-- Use Global Profile --',
@@ -382,6 +603,101 @@ const translations = {
         'nurture.failed': 'Nurturing failed',
         'nurture.stopped': 'Nurturing stopped',
         'nurture.noAccounts': 'No accounts yet, please add accounts first',
+        'nurture.daysProgressTitle': 'Warmup progress (days done / days required)',
+        'nurture.finishBtn': 'Finish warmup',
+        'nurture.finishConfirm': 'This account is already a mature/normal account and needs no warmup?\nFinishing will mark it "Active" and stop auto-nurturing.',
+        'nurture.finished': 'Warmup finished, account marked Active',
+        'nurture.finishFailed': 'Failed to finish warmup: ',
+        // Provision (platform provisioning selector / add-account flow)
+        'provision.title': 'Provision platforms for {email}',
+        'provision.hint': 'Check platforms to provision (only auto-provisionable, not-yet-added Google-login platforms are listed).',
+        'provision.selectAuto': 'Select all',
+        'provision.cancel': 'Cancel',
+        'provision.apply': 'Provision ({n})',
+        'provision.provisioned': 'Provisioned',
+        'provision.auto': '🟢 Auto',
+        'provision.manual': '🟡 Manual',
+        'provision.loadFailed': 'Failed to load platform list: ',
+        'provision.noChanges': 'No changes',
+        'provision.provisioning': 'Provisioning {n} platform(s) with {email}… (one by one, please wait)',
+        'provision.removed': 'Removed {n} platform account(s)',
+        'provision.allDone': 'All auto-provisionable platforms for this email are already provisioned',
+        // Add account (phone / username-password grouped input)
+        'addacct.title': 'Add accounts for {email}',
+        'addacct.hint': 'Only manually-addable, not-yet-added platforms are listed; only those with credentials filled will be added.',
+        'addacct.phoneGroup': '📱 Phone login',
+        'addacct.passwordGroup': '🔑 Username & password',
+        'addacct.phonePlaceholder': 'Phone number',
+        'addacct.usernamePlaceholder': 'Username / email',
+        'addacct.passwordPlaceholder': 'Password',
+        'addacct.submit': 'Add ({n})',
+        'addacct.none': 'All manually-addable platforms for this email are already added',
+        'addacct.nothing': 'No credentials entered',
+        'addacct.added': 'Added {n} account(s)',
+        'addacct.addFailed': 'Failed to add account: ',
+        // Transfer ownership (manual accounts only)
+        'transfer.btn': 'Transfer',
+        'transfer.title': 'Transfer ownership',
+        'transfer.hint': 'Choose which Gmail identity this account belongs to (it will share that identity\'s browser + IP + fingerprint).',
+        'transfer.unassigned': 'Unassigned (global profile)',
+        'transfer.current': 'Current',
+        'transfer.done': 'Ownership transferred',
+        'transfer.failed': 'Transfer failed: ',
+        // Airport node periodic refresh
+        'airport.nodesReplaced': 'Airport node change detected — auto-replaced exit nodes for {n} identities',
+        // Airport subscription (set / refresh)
+        'airport.title': '🌐 Airport proxy',
+        'airport.poolInfo': '{total} nodes ({free} free) · each email gets a dedicated exit IP',
+        'airport.notConfigured': 'Not configured — set it up to assign dedicated IPs per email',
+        'airport.setSub': 'Set subscription',
+        'airport.refreshSub': 'Refresh',
+        'airport.setTitle': 'Set airport subscription',
+        'airport.setLabel': 'Paste your airport subscription link (must be a Clash subscription, not a single ss/vmess)',
+        'airport.setOk': 'Save',
+        'airport.saved': 'Saved (subscription unchanged)',
+        'airport.fetching': 'Fetching nodes…',
+        'airport.refreshing': 'Refreshing subscription…',
+        'airport.subFailed': 'Subscription failed: ',
+        // Login method labels
+        'login.method': 'Login method',
+        'login.google': 'Google sign-in',
+        'login.phone': 'Phone number',
+        'login.password': 'Username & password',
+        // Scene groups
+        'scene.research': '💻 Dev / Tech',
+        'scene.product': '🚀 Product / Startup',
+        'scene.social': '🌐 General / Social',
+        'scene.content': '📝 Knowledge / Content',
+        'scene.career': '💼 Career / Business',
+        'scene.lifestyle': '🛍️ Lifestyle / Recommendation',
+        // Create / delete persona
+        'persona.createTitle': 'New Gmail identity',
+        'persona.createLabel': 'Enter a real Gmail (this email becomes a standalone identity: dedicated browser + IP + fingerprint)',
+        'persona.createOk': 'Create',
+        'persona.invalidEmail': 'Please enter a valid Gmail address',
+        'persona.creating': 'Creating identity… (browser + random fingerprint + exit node, ~5-10s)',
+        'persona.created': 'Email ready ✓ Google sign-in page opened → please sign in to {email} in the popup browser window (basic login, once only; required before auto register/login)',
+        'persona.createFailed': 'Create failed: ',
+        'persona.deleteConfirm': 'Delete identity {email}?\nIts dedicated browser will be removed and exit node released; accounts under it become "unassigned".',
+        'persona.deleted': 'Identity deleted',
+        'persona.deleteFailed': 'Delete failed: ',
+        // #13 identity type / fixed-IP identity
+        'persona.newTypeTitle': 'New identity',
+        'persona.newTypeHint': 'Pick the identity type by the platform\'s exit-IP requirement:',
+        'persona.newGmail': '📧 Gmail identity',
+        'persona.newGmailDesc': 'Overseas platforms (Reddit/PH/Twitter…) · airport node auto-rotation',
+        'persona.newFixedCn': '🇨🇳 China fixed-IP identity',
+        'persona.newFixedCnDesc': 'Xiaohongshu/Douyin/Weibo… · your own CN residential/4G proxy · IP pinned',
+        'persona.newFixedOverseas': '🌍 Overseas fixed-IP identity',
+        'persona.newFixedOverseasDesc': 'Platforms needing a stable overseas IP · your own static proxy · IP pinned',
+        'persona.fixedTitle': 'New fixed-IP identity',
+        'persona.fixedLabelLabel': 'Identity label (name or phone, unique)',
+        'persona.fixedLabelPlaceholder': 'e.g. xhs-1 or phone number',
+        'persona.fixedProxyLabel': 'Fixed proxy (residential/4G, pinned & dedicated to this identity)',
+        'persona.fixedProxyPlaceholder': 'socks5://user:pass@host:port',
+        'persona.fixedOk': 'Create',
+        'persona.creatingFixed': 'Creating fixed-IP identity… (browser + fingerprint + proxy bind)',
+        'persona.fixedCreated': 'Fixed-IP identity "{label}" ready ✓ Exit IP pinned, will not be auto-rotated',
         // Settings
         'settings.title': 'Settings',
         'settings.aiConfig': 'AI Configuration',
@@ -413,6 +729,14 @@ const translations = {
         'settings.interval': 'Interval (minutes)',
         'settings.maxDailyPosts': 'Max Daily Posts',
         'settings.saveScheduler': 'Save Scheduler Settings',
+        'settings.nurtureCycle': 'Nurture Cycle',
+        'settings.nurtureCycleDesc': 'Customize the nurture pace for new accounts with two independent durations: warmup + growth. Warmup likes only; growth opens follows + engagement; after that the account is mature (full pace, no duration). Original posting unlocks once warmup is over. Leave unchanged to use the default (warmup 5 / growth 5 for X, mature from day 10).',
+        'settings.nurturePlatform': 'Platform',
+        'settings.nurtureWarmupDays': 'Warmup duration (days)',
+        'settings.nurtureGrowthDays': 'Growth duration (days)',
+        'settings.nurtureSessions': 'Daily sessions (min – max)',
+        'settings.nurtureEnabled': 'Enable nurture for this platform',
+        'settings.saveNurture': 'Save Nurture Cycle',
         'settings.proxyPool': 'Proxy Pool',
         'settings.addProxy': '+ Add Proxy',
         'settings.proxyDesc': 'Manage proxies for multi-account operations. Each account can use a different proxy.',
@@ -612,6 +936,14 @@ const translations = {
 function t(key) {
     return translations[currentLanguage][key] || translations['en'][key] || key;
 }
+// 带变量插值的翻译：t('x.y', { email, n }) 会把文案里的 {email}/{n} 替换掉。
+function tf(key, vars) {
+    let s = t(key);
+    for (const [k, v] of Object.entries(vars)) {
+        s = s.replace(new RegExp(`\\{${k}\\}`, 'g'), String(v));
+    }
+    return s;
+}
 // Update all elements with data-i18n attribute
 function updateAllTranslations() {
     // Update elements with data-i18n attribute
@@ -710,6 +1042,22 @@ const defaultAiProviders = {
 };
 let aiProviders = { ...defaultAiProviders };
 // Initialize
+// 跨天自动刷新：页面长期开着、跨过零点后，「今日养号进度」「今日统计」等按天数据会过期。
+// 当「上次刷新（=app 启动）的日期 ≠ 今天」时，自动刷新一次页面。
+const APP_BOOT_DAY = new Date().toDateString();
+function autoRefreshIfStale() {
+    if (new Date().toDateString() === APP_BOOT_DAY)
+        return;
+    const m = document.getElementById('modalNurture');
+    if (m && m.classList.contains('active'))
+        return; // 养号弹窗进行中，别打断
+    console.log('[auto-refresh] 上次刷新不是今天，自动刷新页面');
+    location.reload();
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden)
+    autoRefreshIfStale(); });
+window.addEventListener('focus', autoRefreshIfStale);
+window.setInterval(autoRefreshIfStale, 60_000); // 一直开着跨零点也能触发
 document.addEventListener('DOMContentLoaded', async () => {
     console.log('Tauri app initializing...');
     // Load saved language preference
@@ -725,9 +1073,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     initTabs();
     initCampaignEvents();
     initProxyEvents();
+    initBackendEvents();
     await loadInitialData();
     checkBrowserStatus();
 });
+// #11 监听后台事件：机场节点定时刷新替换了失效节点 → 提示用户 + 刷新账号页
+function initBackendEvents() {
+    if (!isTauriEnv)
+        return;
+    tauriListen('airport-nodes-replaced', (e) => {
+        const n = e?.payload?.repaired ?? 0;
+        showToast(tf('airport.nodesReplaced', { n }), 'info');
+        if (currentPage === 'accounts')
+            loadAccounts();
+    }).catch(() => { });
+}
 // Show warning banner when running in browser instead of Tauri
 function showBrowserModeWarning() {
     const banner = document.createElement('div');
@@ -743,6 +1103,13 @@ function initNavigation() {
             const page = item.dataset.page;
             if (page)
                 navigateTo(page);
+        });
+    });
+    // 「使用指南」等分组头：点击展开/收起子菜单（无 data-page，不导航）
+    document.querySelectorAll('.nav-group-header').forEach(h => {
+        h.addEventListener('click', (e) => {
+            e.preventDefault();
+            h.closest('.nav-group')?.classList.toggle('collapsed');
         });
     });
 }
@@ -794,6 +1161,9 @@ function navigateTo(page) {
         case 'stats':
             loadStats();
             break;
+        case 'guide-scenarios':
+            loadGuideScenarios();
+            break;
         case 'settings':
             loadSettings();
             break;
@@ -801,6 +1171,50 @@ function navigateTo(page) {
 }
 // Make navigateTo globally accessible
 window.navigateTo = navigateTo;
+const GUIDE_SCENARIOS = [
+    { icon: '🚀', zh: '产品冷启动 / 出海发布', en: 'Product launch / cold start',
+        descZh: '新产品发布、找种子用户、刷首批曝光', descEn: 'Launch a new product, get seed users & first exposure',
+        platforms: ['Product Hunt', 'BetaList', 'Indie Hackers', 'Hacker News', 'Reddit', 'AlternativeTo'] },
+    { icon: '💻', zh: '开发者 / 技术获客', en: 'Developer / technical audience',
+        descZh: '面向程序员，靠开源与技术内容种草', descEn: 'Reach developers via OSS & technical content',
+        platforms: ['GitHub', 'DEV.to', 'Hashnode', 'Medium', 'Hacker News', 'V2EX', 'SegmentFault'] },
+    { icon: '🌐', zh: '海外社媒声量', en: 'Overseas social reach',
+        descZh: '海外社交做声量、互动获客', descEn: 'Build reach & engagement on overseas social',
+        platforms: ['Twitter / X', 'Reddit', 'LinkedIn', 'Facebook'] },
+    { icon: '📝', zh: '内容 / SEO 长尾', en: 'Content / SEO long-tail',
+        descZh: '长文、博客，做搜索长尾引流', descEn: 'Long-form & blogs for search long-tail traffic',
+        platforms: ['Medium', 'Hashnode', 'note', 'Zenn', 'Qiita', '知乎'] },
+    { icon: '💼', zh: 'B2B / 职场', en: 'B2B / professional',
+        descZh: '面向企业与职场决策人', descEn: 'Reach businesses & professional decision-makers',
+        platforms: ['LinkedIn', 'Twitter / X', 'Medium'] },
+    { icon: '🛍️', zh: '国内种草 / 生活', en: 'China lifestyle / recommendation',
+        descZh: '国内生活、种草、社交（需国内固定 IP）', descEn: 'China lifestyle & recommendation (needs CN fixed IP)',
+        platforms: ['小红书', '微博', '知乎', '即刻'] },
+    { icon: '🗾', zh: '区域市场（日 / 韩 / 俄）', en: 'Regional (JP / KR / RU)',
+        descZh: '区域平台，建议用对应地区的身份/IP', descEn: 'Regional platforms — use a matching region identity/IP',
+        platforms: ['Qiita', 'Zenn', 'note（日）', 'Naver Blog（韩）', 'Habr', 'VK（俄）'] },
+];
+function loadGuideScenarios() {
+    const el = document.getElementById('guideScenariosBody');
+    if (!el)
+        return;
+    const isZh = currentLanguage === 'zh';
+    const intro = isZh
+        ? '按你的营销目标 / 场景挑平台。出口 IP 建议：海外平台用「📧 Gmail 身份」（机场 IP）；小红书 / 微博等用「🇨🇳 国内固定 IP 身份」；Twitter / Reddit / LinkedIn / Facebook 用「🌍 国外固定 IP 身份」。'
+        : 'Pick platforms by your marketing scenario. Exit-IP tip: overseas → "📧 Gmail identity" (airport IP); Xiaohongshu/Weibo → "🇨🇳 CN fixed-IP identity"; Twitter/Reddit/LinkedIn/Facebook → "🌍 Overseas fixed-IP identity".';
+    const cards = GUIDE_SCENARIOS.map(s => {
+        const chips = s.platforms.map(p => `<span class="guide-chip">${escapeHtml(p)}</span>`).join('');
+        return `<div class="card guide-card">
+      <div class="guide-card-title">${s.icon} ${escapeHtml(isZh ? s.zh : s.en)}</div>
+      <div class="text-muted" style="font-size:12px;margin:2px 0 8px;">${escapeHtml(isZh ? s.descZh : s.descEn)}</div>
+      <div class="guide-chips">${chips}</div>
+    </div>`;
+    }).join('');
+    el.innerHTML = `<div class="card" style="padding:12px 14px;margin-bottom:12px;border-left:4px solid #4a8cff;">
+      <span class="text-muted" style="font-size:13px;line-height:1.6;">${escapeHtml(intro)}</span>
+    </div>
+    <div class="guide-grid">${cards}</div>`;
+}
 // Re-render current page (used when language changes)
 function renderCurrentPage() {
     navigateTo(currentPage);
@@ -838,6 +1252,9 @@ function initModals() {
     document.getElementById('btnSelectAllPublish')?.addEventListener('click', selectAllPublishProducts);
     document.getElementById('btnClearPublish')?.addEventListener('click', clearPublishProducts);
     document.getElementById('btnAnalyze')?.addEventListener('click', analyzeUrl);
+    document.getElementById('btnNurtureAll')?.addEventListener('click', openNurtureAllModal);
+    document.getElementById('btnNurtureAllStart')?.addEventListener('click', startNurtureAll);
+    document.getElementById('btnNurtureAllStop')?.addEventListener('click', stopNurtureAll);
     document.getElementById('btnAddAccount')?.addEventListener('click', () => openModal('modalAddAccount'));
     document.getElementById('btnAddAccountEmpty')?.addEventListener('click', () => openModal('modalAddAccount'));
     document.getElementById('btnSaveAccount')?.addEventListener('click', saveAccount);
@@ -868,6 +1285,8 @@ function initModals() {
     document.getElementById('btnSaveAI')?.addEventListener('click', saveAISettings);
     document.getElementById('btnTestAI')?.addEventListener('click', testAIConnection);
     document.getElementById('btnSaveScheduler')?.addEventListener('click', saveSchedulerSettings);
+    document.getElementById('btnSaveNurture')?.addEventListener('click', saveNurtureStrategy);
+    document.getElementById('nurturePlatform')?.addEventListener('change', populateNurtureForm);
     document.getElementById('aiProvider')?.addEventListener('change', () => { populateDefaultModels(); updateAIKeyVisibility(); });
     document.getElementById('btnRefreshModels')?.addEventListener('click', refreshModels);
     // Engage page
@@ -959,13 +1378,19 @@ function uiConfirm(message, opts) {
     });
 }
 window.uiConfirm = uiConfirm;
-// ===== 开通账号：平台选择器（场景分组 + 地区标签 + 模式徽章） =====
-const SCENE_LABELS = {
-    research: '💻 研发/技术', product: '🚀 产品/创业', social: '🌐 通用/大众社交',
-    content: '📝 知识/内容', career: '💼 职场/商务', lifestyle: '🛍️ 生活/种草',
-};
+// ===== 开通账号：平台选择器（场景分组 + 地区标签 + 模式徽章 + 登录方式） =====
 const SCENE_ORDER = ['research', 'product', 'social', 'content', 'career', 'lifestyle'];
 const REGION_FLAGS = { us: '🇺🇸', jp: '🇯🇵', kr: '🇰🇷', ru: '🇷🇺', cn: '🇨🇳', global: '🌐' };
+// 登录方式 → 图标（与 i18n 文案配合，单独成徽章，便于区分开通/登录流程）
+const LOGIN_ICONS = { google: '🔵', phone: '📱', password: '🔑' };
+// 登录方式徽章：图标 + i18n 文案（google/phone/password），未知则不渲染。
+function loginMethodBadge(method) {
+    if (!method)
+        return '';
+    const icon = LOGIN_ICONS[method] || '🔐';
+    const label = t(`login.${method}`);
+    return `<span title="${escapeHtml(t('login.method'))}" style="color:var(--text-muted);font-size:11px;white-space:nowrap;">${icon} ${escapeHtml(label)}</span>`;
+}
 // 弹出分组复选框（已开通项预勾、可取消）。返回用户【最终勾选】的全部平台 key；取消返回 null。
 // 由调用方对比 catalog.provisioned 算出 新增/移除。
 function pickProvisionPlatforms(email, catalog) {
@@ -974,38 +1399,41 @@ function pickProvisionPlatforms(email, catalog) {
         overlay.className = 'modal active';
         const groups = SCENE_ORDER.map(s => ({ s, items: catalog.filter(c => c.scene === s) })).filter(g => g.items.length);
         const groupHtml = groups.map(g => `
-      <div style="margin:14px 0 8px;font-weight:700;font-size:13px;color:var(--text-muted);">${SCENE_LABELS[g.s] || g.s}</div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px;">
+      <div style="margin:14px 0 8px;font-weight:700;font-size:13px;color:var(--text-muted);">${t(`scene.${g.s}`)}</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px;">
         ${g.items.map(c => {
             const flag = REGION_FLAGS[c.region] || '🌐';
             const badge = c.provisioned
-                ? '<span style="color:#16a34a;font-size:12px;">已开通</span>'
-                : (c.mode === 'auto' ? '<span style="color:#16a34a;font-size:12px;">🟢自动</span>' : '<span style="color:#d97706;font-size:12px;">🟡需手动</span>');
+                ? `<span style="color:#16a34a;font-size:12px;">${t('provision.provisioned')}</span>`
+                : (c.mode === 'auto' ? `<span style="color:#16a34a;font-size:12px;">${t('provision.auto')}</span>` : `<span style="color:#d97706;font-size:12px;">${t('provision.manual')}</span>`);
             return `<label style="display:flex;align-items:center;gap:8px;border:1px solid var(--border);border-radius:8px;padding:8px 10px;cursor:pointer;">
             <input type="checkbox" data-plat="${escapeHtml(c.platform)}" data-prov="${c.provisioned ? 1 : 0}" ${c.provisioned ? 'checked' : ''}>
-            <span style="display:flex;align-items:center;gap:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(c.name)} ${flag} ${badge}</span>
+            <span style="display:flex;flex-direction:column;gap:2px;overflow:hidden;">
+              <span style="display:flex;align-items:center;gap:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(c.name)} ${flag} ${badge}</span>
+              ${loginMethodBadge(c.login_method)}
+            </span>
           </label>`;
         }).join('')}
       </div>`).join('');
         overlay.innerHTML = `
       <div class="modal-content" style="max-width:760px;max-height:84vh;display:flex;flex-direction:column;">
-        <div class="modal-header"><h3>用 ${escapeHtml(email)} 开通平台</h3><button class="modal-close" data-cancel>&times;</button></div>
+        <div class="modal-header"><h3>${escapeHtml(tf('provision.title', { email }))}</h3><button class="modal-close" data-cancel>&times;</button></div>
         <div class="modal-body" style="overflow:auto;">
-          <div class="text-muted" style="font-size:12px;margin-bottom:4px;">勾选要开通的平台；取消勾选「已开通」的会删除该账号。</div>
+          <div class="text-muted" style="font-size:12px;margin-bottom:4px;">${escapeHtml(t('provision.hint'))}</div>
           ${groupHtml}
         </div>
         <div class="modal-footer" style="display:flex;align-items:center;gap:8px;">
-          <button class="btn btn-secondary btn-small" data-selauto>全选可开通的</button>
+          <button class="btn btn-secondary btn-small" data-selauto>${escapeHtml(t('provision.selectAuto'))}</button>
           <span style="flex:1;"></span>
-          <button class="btn btn-secondary" data-cancel>取消</button>
-          <button class="btn btn-primary" data-ok>应用更改 (0)</button>
+          <button class="btn btn-secondary" data-cancel>${escapeHtml(t('provision.cancel'))}</button>
+          <button class="btn btn-primary" data-ok>${escapeHtml(tf('provision.apply', { n: 0 }))}</button>
         </div>
       </div>`;
         const boxes = () => Array.from(overlay.querySelectorAll('input[type=checkbox]'));
         const picked = () => boxes().filter(b => b.checked).map(b => b.getAttribute('data-plat'));
         const changeCount = () => boxes().filter(b => b.checked !== (b.getAttribute('data-prov') === '1')).length;
         const okBtn = overlay.querySelector('[data-ok]');
-        const refresh = () => { okBtn.textContent = `应用更改 (${changeCount()})`; };
+        const refresh = () => { okBtn.textContent = tf('provision.apply', { n: changeCount() }); };
         let done = false;
         const finish = (val) => { if (done)
             return; done = true; overlay.remove(); resolve(val); };
@@ -1026,6 +1454,208 @@ function pickProvisionPlatforms(email, catalog) {
     });
 }
 window.pickProvisionPlatforms = pickProvisionPlatforms;
+// GitHub 养号领域多选（按账号）。复用 .modal.active 显示约定。
+window.pickGithubDomains = async function (accountId) {
+    let cat = [];
+    let current = [];
+    try {
+        cat = await invoke('gh_domains_catalog');
+        current = await invoke('get_account_gh_domains', { accountId });
+    }
+    catch (e) {
+        showToast('加载领域失败: ' + e, 'error');
+        return;
+    }
+    const overlay = document.createElement('div');
+    overlay.className = 'modal active';
+    overlay.innerHTML = `
+    <div class="modal-content">
+      <div class="modal-header"><h3>选择 GitHub 养号领域（可多选）</h3></div>
+      <div class="modal-body">
+        ${cat.map(d => `<label style="display:block;margin:6px 0;">
+          <input type="checkbox" value="${d.key}"${current.includes(d.key) ? ' checked' : ''}> ${d.label}
+          <span style="color:var(--text-muted);font-size:12px;">(${d.topics.slice(0, 4).join(', ')}…)</span>
+        </label>`).join('')}
+      </div>
+      <div class="modal-footer">
+        <button class="btn" id="ghDomCancel">取消</button>
+        <button class="btn btn-success" id="ghDomSave">保存</button>
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#ghDomCancel').addEventListener('click', () => overlay.remove());
+    overlay.querySelector('#ghDomSave').addEventListener('click', async () => {
+        const keys = Array.from(overlay.querySelectorAll('input:checked')).map(i => i.value);
+        try {
+            await invoke('set_account_gh_domains', { accountId, domains: keys });
+            showToast('GitHub 领域已保存', 'success');
+            overlay.remove();
+        }
+        catch (e) {
+            showToast('保存失败: ' + e, 'error');
+        }
+    });
+};
+// 账号卡片养号方向行：展开/收起多余标签
+window.toggleNicheRow = function (btn) {
+    const row = btn.parentElement;
+    const expanded = row.getAttribute('data-expanded') === '1';
+    row.querySelectorAll('[data-extra="1"]').forEach(el => { el.style.display = expanded ? 'none' : ''; });
+    row.setAttribute('data-expanded', expanded ? '0' : '1');
+    btn.textContent = expanded ? ('展开 +' + btn.getAttribute('data-more')) : '收起';
+};
+// X 养号方向多选（按账号，X 官方 16 方向双语）。复用 .modal.active 显示约定。
+window.pickXNiches = async function (accountId) {
+    let cat = [];
+    let current = [];
+    try {
+        cat = await invoke('x_niches_catalog');
+        current = await invoke('get_account_x_niches', { accountId });
+    }
+    catch (e) {
+        showToast('加载方向失败: ' + e, 'error');
+        return;
+    }
+    const overlay = document.createElement('div');
+    overlay.className = 'modal active';
+    overlay.innerHTML = `
+    <div class="modal-content">
+      <div class="modal-header"><h3>选择 X 养号方向（可多选）</h3></div>
+      <div class="modal-body">
+        ${cat.map(d => `<label style="display:block;margin:6px 0;">
+          <input type="checkbox" value="${d.key}"${current.includes(d.key) ? ' checked' : ''}> ${d.label}
+        </label>`).join('')}
+      </div>
+      <div class="modal-footer">
+        <button class="btn" id="xNicheCancel">取消</button>
+        <button class="btn btn-success" id="xNicheSave">保存</button>
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#xNicheCancel').addEventListener('click', () => overlay.remove());
+    overlay.querySelector('#xNicheSave').addEventListener('click', async () => {
+        const keys = Array.from(overlay.querySelectorAll('input:checked')).map(i => i.value);
+        try {
+            await invoke('set_account_x_niches', { accountId, niches: keys });
+            showToast('X 方向已保存', 'success');
+            overlay.remove();
+        }
+        catch (e) {
+            showToast('保存失败: ' + e, 'error');
+        }
+    });
+};
+// SegmentFault 养号领域多选（按账号）。养号时按所选领域搜索→浏览→读文章/问题。复用 .modal.active。
+window.pickSegmentfaultDomains = async function (accountId) {
+    let cat = [];
+    let current = [];
+    try {
+        cat = await invoke('sf_domains_catalog');
+        current = await invoke('get_account_sf_domains', { accountId });
+    }
+    catch (e) {
+        showToast('加载领域失败: ' + e, 'error');
+        return;
+    }
+    const overlay = document.createElement('div');
+    overlay.className = 'modal active';
+    overlay.innerHTML = `
+    <div class="modal-content">
+      <div class="modal-header"><h3>选择 SegmentFault 养号领域（可多选）</h3></div>
+      <div class="modal-body">
+        ${cat.map(d => `<label style="display:block;margin:6px 0;">
+          <input type="checkbox" value="${d.key}"${current.includes(d.key) ? ' checked' : ''}> ${d.label}
+          <span style="color:var(--text-muted);font-size:12px;">(${d.keywords.slice(0, 4).join('、')}…)</span>
+        </label>`).join('')}
+      </div>
+      <div class="modal-footer">
+        <button class="btn" id="sfDomCancel">取消</button>
+        <button class="btn btn-success" id="sfDomSave">保存</button>
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#sfDomCancel').addEventListener('click', () => overlay.remove());
+    overlay.querySelector('#sfDomSave').addEventListener('click', async () => {
+        const keys = Array.from(overlay.querySelectorAll('input:checked')).map(i => i.value);
+        try {
+            await invoke('set_account_sf_domains', { accountId, domains: keys });
+            showToast('SegmentFault 领域已保存', 'success');
+            overlay.remove();
+        }
+        catch (e) {
+            showToast('保存失败: ' + e, 'error');
+        }
+    });
+};
+// 弹出「加账号」选择器：按登录方式分两个区块，填了凭据的平台才会被收集。
+// 返回 [{platform, username, password}]（手机号平台 username=手机号、password=''）；取消返回 null。
+function pickAddAccounts(email, candidates) {
+    return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.className = 'modal active';
+        const rowHtml = (c) => {
+            const flag = REGION_FLAGS[c.region] || '🌐';
+            const head = `<div style="display:flex;align-items:center;gap:6px;min-width:130px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(c.name)} ${flag}</div>`;
+            const inputs = c.login_method === 'phone'
+                ? `<input class="input" data-plat="${escapeHtml(c.platform)}" data-field="phone" placeholder="${escapeHtml(t('addacct.phonePlaceholder'))}" style="flex:1;min-width:120px;">`
+                : `<input class="input" data-plat="${escapeHtml(c.platform)}" data-field="username" placeholder="${escapeHtml(t('addacct.usernamePlaceholder'))}" style="flex:1;min-width:120px;">
+           <input class="input" type="password" data-plat="${escapeHtml(c.platform)}" data-field="password" placeholder="${escapeHtml(t('addacct.passwordPlaceholder'))}" style="flex:1;min-width:110px;">`;
+            return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;flex-wrap:wrap;">${head}${inputs}</div>`;
+        };
+        const block = (titleKey, items) => {
+            if (!items.length)
+                return '';
+            return `<div style="margin:12px 0 4px;font-weight:700;font-size:13px;color:var(--text-muted);">${t(titleKey)}</div>${items.map(rowHtml).join('')}`;
+        };
+        // 手机号一组；账号密码一组（含 Google 登录平台——在固定身份里用邮箱/密码直登，不走 Google）
+        const phoneItems = candidates.filter(c => c.login_method === 'phone');
+        const credItems = candidates.filter(c => c.login_method !== 'phone');
+        overlay.innerHTML = `
+      <div class="modal-content" style="max-width:640px;max-height:84vh;display:flex;flex-direction:column;">
+        <div class="modal-header"><h3>${escapeHtml(tf('addacct.title', { email }))}</h3><button class="modal-close" data-cancel>&times;</button></div>
+        <div class="modal-body" style="overflow:auto;">
+          <div class="text-muted" style="font-size:12px;margin-bottom:4px;">${escapeHtml(t('addacct.hint'))}</div>
+          ${block('addacct.phoneGroup', phoneItems)}
+          ${block('addacct.passwordGroup', credItems)}
+        </div>
+        <div class="modal-footer" style="display:flex;align-items:center;gap:8px;">
+          <span style="flex:1;"></span>
+          <button class="btn btn-secondary" data-cancel>${escapeHtml(t('provision.cancel'))}</button>
+          <button class="btn btn-primary" data-ok>${escapeHtml(tf('addacct.submit', { n: 0 }))}</button>
+        </div>
+      </div>`;
+        // 收集填了「主字段」（手机号 / 账号）的平台
+        const collect = () => {
+            const out = [];
+            candidates.forEach(c => {
+                if (c.login_method === 'phone') {
+                    const v = overlay.querySelector(`input[data-plat="${c.platform}"][data-field="phone"]`)?.value.trim();
+                    if (v)
+                        out.push({ platform: c.platform, username: v, password: '' });
+                }
+                else {
+                    const u = overlay.querySelector(`input[data-plat="${c.platform}"][data-field="username"]`)?.value.trim();
+                    const p = overlay.querySelector(`input[data-plat="${c.platform}"][data-field="password"]`)?.value || '';
+                    if (u)
+                        out.push({ platform: c.platform, username: u, password: p });
+                }
+            });
+            return out;
+        };
+        const okBtn = overlay.querySelector('[data-ok]');
+        const refresh = () => { okBtn.textContent = tf('addacct.submit', { n: collect().length }); };
+        let done = false;
+        const finish = (val) => { if (done)
+            return; done = true; overlay.remove(); resolve(val); };
+        overlay.querySelectorAll('[data-cancel]').forEach(el => el.addEventListener('click', () => finish(null)));
+        okBtn.addEventListener('click', () => finish(collect()));
+        overlay.addEventListener('input', refresh);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay)
+            finish(null); });
+        document.body.appendChild(overlay);
+    });
+}
+window.pickAddAccounts = pickAddAccounts;
 // Tabs
 function initTabs() {
     document.querySelectorAll('.tabs').forEach(tabGroup => {
@@ -1719,9 +2349,47 @@ window.editProduct = function (id) {
     showToast('Edit feature coming soon', 'info');
 };
 // Accounts
+// 平台 → 场景类别 key，缓存一次（供账号卡片展示类别徽章）
+let platformSceneMap = {};
+// 养号方向/领域：key→label（静态，缓存一次）+ account_id→已选 key 列表（每次刷新）
+let ghDomainLabels = {};
+let xNicheLabels = {};
+let sfDomainLabels = {};
+let accountNichesMap = {};
+// 平台 → 是否需要手工登录（设置页可维护，segmentfault 默认 true）。供账号卡片展示「手工登录」徽章。
+let platformManualLoginCache = {};
 async function loadAccounts() {
     try {
         accounts = await invoke('list_accounts');
+        if (Object.keys(platformSceneMap).length === 0) {
+            try {
+                platformSceneMap = (await invoke('platform_scenes')) || {};
+            }
+            catch { /* */ }
+        }
+        // 平台手工登录配置：每次刷新（轻量），保证设置改动后卡片徽章同步
+        try {
+            platformManualLoginCache = (await invoke('get_platform_manual_login')) || {};
+        }
+        catch { /* */ }
+        if (Object.keys(ghDomainLabels).length === 0) {
+            try {
+                (await invoke('gh_domains_catalog')).forEach(d => { ghDomainLabels[d.key] = d.label; });
+            }
+            catch { /* */ }
+            try {
+                (await invoke('x_niches_catalog')).forEach(n => { xNicheLabels[n.key] = n.label; });
+            }
+            catch { /* */ }
+            try {
+                (await invoke('sf_domains_catalog')).forEach(d => { sfDomainLabels[d.key] = d.label; });
+            }
+            catch { /* */ }
+        }
+        try {
+            accountNichesMap = (await invoke('account_niches')) || {};
+        }
+        catch { /* */ }
         // 加载身份(persona)列表，用于按 Gmail 分组 + 归属下拉
         try {
             personasCache = (await invoke('persona_list')) || [];
@@ -1787,6 +2455,18 @@ function getHealthBadge(account) {
     const status = account.status || 'active';
     const healthScore = account.health_score || 100;
     const warmupStage = account.warmup_stage || 'none';
+    // 优先反映真实登录态健康 health_status（由养号/体检更新）
+    const hs = account.health_status || 'unknown';
+    if (hs === 'banned')
+        return '<span class="account-health-badge danger">🔴 已封</span>';
+    if (hs === 'locked')
+        return '<span class="account-health-badge danger">🔒 锁定·待验证</span>';
+    if (hs === 'shadowbanned')
+        return '<span class="account-health-badge danger">🔴 疑似封禁</span>';
+    if (hs === 'restricted')
+        return '<span class="account-health-badge warning">⚠️ 受限·限流</span>';
+    if (hs === 'logged_out')
+        return '<span class="account-health-badge warning">🟠 掉登录</span>';
     if (status === 'banned' || status === 'suspended') {
         return '<span class="account-health-badge danger">🔴 Banned</span>';
     }
@@ -1826,19 +2506,30 @@ async function loadAccountLifecycles() {
 let personasCache = [];
 let airportStatusCache = null;
 let selectedPersonaId = null;
-// 邮箱账号 = 邮箱视角：顶部切换邮箱，下面只显示「当前选中那个邮箱」的账号/养号。切邮箱 → 整片切换。
+let selectedIdentityCategory = 'gmail';
+const ID_CATEGORIES = [
+    { key: 'gmail', labelKey: 'idcat.gmail', match: p => (p?.ip_mode || 'airport') === 'airport' },
+    { key: 'fixed_cn', labelKey: 'idcat.fixedCn', match: p => p?.ip_mode === 'fixed' && (p?.region || '') === 'cn' },
+    { key: 'fixed_overseas', labelKey: 'idcat.fixedOverseas', match: p => p?.ip_mode === 'fixed' && (p?.region || '') !== 'cn' },
+];
+function personasInCategory(cat) {
+    const c = ID_CATEGORIES.find(x => x.key === cat);
+    return c ? personasCache.filter(c.match) : [];
+}
+window.selectIdentityCategory = function (cat) {
+    selectedIdentityCategory = cat;
+    selectedPersonaId = null; // 切分类后重选该分类下第一个身份
+    renderAccounts();
+};
+// 身份管理：顶部三类身份 tab（Gmail / 国内固定 / 国外固定），分类下再切具体身份。
 function renderAccounts() {
     const list = document.getElementById('accountsList');
     const empty = document.getElementById('emptyAccounts');
     if (!list || !empty)
         return;
-    // 机场代理（出口 IP 池）
-    const a = airportStatusCache;
-    const airportBar = `<div class="card" style="margin:0 0 10px;padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-left:4px solid ${a && a.configured ? '#1a9d4a' : '#d97706'};">
-    <span style="font-weight:700;">🌐 机场代理</span>
-    <span class="text-muted" style="font-size:12px;">${a && a.configured ? `节点池 ${a.total} 个（空闲 ${a.free}）· 每个邮箱分一个独立出口 IP` : '未配置——配了才能给邮箱分配独立 IP'}</span>
-    <button class="btn btn-small btn-secondary" style="margin-left:auto;" onclick="setAirportPrompt()">${a && a.configured ? '换/刷新订阅' : '设置机场订阅'}</button>
-  </div>`;
+    list.style.display = 'block';
+    empty.style.display = 'none';
+    // 账号按身份分组 + 未归属
     const groups = new Map();
     for (const acc of accounts) {
         const key = acc.persona_id || '__none__';
@@ -1846,149 +2537,434 @@ function renderAccounts() {
             groups.set(key, []);
         groups.get(key).push(acc);
     }
-    const hasUnassigned = groups.has('__none__');
-    const tabIds = [...personasCache.map((p) => p.id), ...(hasUnassigned ? ['__none__'] : [])];
-    list.style.display = 'block';
-    empty.style.display = 'none';
-    if (tabIds.length === 0) {
-        list.innerHTML = airportBar + `<div class="card" style="padding:18px;text-align:center;">
-      <div class="text-muted">还没有邮箱。用一个真实 Gmail 新建第一个 →</div>
-      <button class="btn btn-primary" style="margin-top:10px;" onclick="createPersonaPrompt()">+ 新建 Gmail</button></div>`;
+    const unassigned = groups.get('__none__') || [];
+    // 校验当前分类（未归属仅在有未归属账号时可选）
+    if (selectedIdentityCategory === '__none__' && !unassigned.length)
+        selectedIdentityCategory = 'gmail';
+    // 分类 tab 行
+    const catTab = (key, label, count) => `<button class="email-tab ${selectedIdentityCategory === key ? 'active' : ''}" onclick="selectIdentityCategory('${key}')">${escapeHtml(label)}${count ? ` (${count})` : ''}</button>`;
+    let catTabsHtml = ID_CATEGORIES.map(c => catTab(c.key, t(c.labelKey), personasInCategory(c.key).length)).join('');
+    if (unassigned.length)
+        catTabsHtml += catTab('__none__', t('idcat.unassigned'), unassigned.length);
+    const categoryBar = `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0 0 12px;">${catTabsHtml}</div>`;
+    // 机场代理栏只在 Gmail 分类显示（固定身份不依赖机场）
+    let airportBar = '';
+    if (selectedIdentityCategory === 'gmail') {
+        const a = airportStatusCache;
+        const configured = !!(a && a.configured);
+        const airportInfo = configured ? tf('airport.poolInfo', { total: a.total, free: a.free }) : t('airport.notConfigured');
+        airportBar = `<div class="card" style="margin:0 0 10px;padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-left:4px solid ${configured ? '#1a9d4a' : '#d97706'};">
+      <span style="font-weight:700;">${escapeHtml(t('airport.title'))}</span>
+      <span class="text-muted" style="font-size:12px;">${escapeHtml(airportInfo)}</span>
+      <span style="margin-left:auto;display:flex;gap:6px;">
+        ${configured ? `<button class="btn btn-small btn-secondary" onclick="refreshAirport()" title="用已保存的订阅重新拉取、替换失效节点（同定时刷新）">🔄 ${escapeHtml(t('airport.refreshSub'))}</button>` : ''}
+        <button class="btn btn-small btn-secondary" onclick="setAirportPrompt()">${escapeHtml(t('airport.setSub'))}</button>
+      </span>
+    </div>`;
+    }
+    // ===== 未归属分类：直接列未归属账号 =====
+    if (selectedIdentityCategory === '__none__') {
+        const cards = unassigned.map((x) => renderAccountCard(x)).join('');
+        const panel = `<div class="email-group"><div class="email-group-body">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;border-left:4px solid #d97706;padding-left:10px;">
+        <span style="font-weight:600;">${escapeHtml(tf('accounts.unassignedTitle', { n: unassigned.length }))}</span>
+        <span class="text-muted" style="font-size:12px;">${escapeHtml(t('accounts.unassignedHint'))}</span>
+      </div>${cards}</div></div>`;
+        list.innerHTML = categoryBar + panel;
         return;
     }
-    // 默认选中：保持上次，或第一个
-    if (!selectedPersonaId || !tabIds.includes(selectedPersonaId))
-        selectedPersonaId = tabIds[0];
-    // 邮箱切换条（tab）
-    const tabs = tabIds.map((id) => {
-        const active = id === selectedPersonaId;
-        let label;
-        if (id === '__none__')
-            label = `🧩 未归属(${groups.get('__none__').length})`;
-        else {
-            const p = personasCache.find((x) => x.id === id);
-            label = `📧 ${p?.email || '邮箱'}`;
-        }
-        return `<button class="btn btn-small ${active ? 'btn-primary' : 'btn-secondary'}" onclick="selectEmail('${id}')">${escapeHtml(label)}</button>`;
-    }).join('');
-    const tabBar = `<div class="card" style="margin:0 0 12px;padding:10px 14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-    <span style="font-weight:700;">📧 邮箱：</span>${tabs}
-    <button class="btn btn-small btn-primary" style="margin-left:auto;" onclick="createPersonaPrompt()" title="用一个真实 Gmail 新建一套独立身份">+ 新建 Gmail</button>
-  </div>`;
-    // 当前选中邮箱的面板
+    // ===== 身份分类（gmail / fixed_cn / fixed_overseas）=====
+    const cat = selectedIdentityCategory;
+    const personas = personasInCategory(cat);
+    const newBtn = cat === 'gmail'
+        ? `<button class="btn btn-small btn-primary" onclick="createPersonaPrompt()" title="用一个真实 Gmail 新建一套独立身份">${escapeHtml(t('accounts.newGmail'))}</button>`
+        : cat === 'fixed_cn'
+            ? `<button class="btn btn-small btn-primary" onclick="createFixedPersonaPrompt('cn')" title="新建国内固定 IP 身份">${escapeHtml(t('accounts.newFixedCn'))}</button>`
+            : `<button class="btn btn-small btn-primary" onclick="createFixedPersonaPrompt('overseas')" title="新建国外固定 IP 身份">${escapeHtml(t('accounts.newFixedOverseas'))}</button>`;
+    // 该分类下没有身份
+    if (!personas.length) {
+        const emptyKey = cat === 'gmail' ? 'idcat.emptyGmail' : cat === 'fixed_cn' ? 'idcat.emptyFixedCn' : 'idcat.emptyFixedOverseas';
+        list.innerHTML = categoryBar + airportBar + `<div class="card" style="padding:18px;text-align:center;">
+      <div class="text-muted" style="margin-bottom:10px;">${escapeHtml(t(emptyKey))}</div>${newBtn}</div>`;
+        return;
+    }
+    // 选中身份必须属于该分类
+    const ids = personas.map((p) => p.id);
+    if (!selectedPersonaId || !ids.includes(selectedPersonaId))
+        selectedPersonaId = ids[0];
     const sel = selectedPersonaId;
     const accts = groups.get(sel) || [];
-    let panel = '';
-    if (sel === '__none__') {
-        panel = `<div class="card" style="margin:0 0 8px;padding:10px 14px;border-left:4px solid #d97706;">
-      <div style="font-weight:600;">🧩 未归属邮箱 · ${accts.length} 个账号</div>
-      <div class="text-muted" style="font-size:12px;">这些账号还没挂到某个 Gmail 下。在账号上选「归属身份」归类即可。</div></div>`;
-        panel += accts.map((x) => renderAccountCard(x)).join('');
-    }
-    else {
-        const p = personasCache.find((x) => x.id === sel);
-        panel = `<div class="card" style="margin:0 0 8px;padding:12px 14px;border-left:4px solid #4a8cff;">
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-        <span style="font-weight:700;font-size:15px;">📧 ${escapeHtml(p?.email || '邮箱')}</span>
-        <span class="text-muted" style="font-size:12px;">${p?.region ? escapeHtml(p.region) : '🌐 节点未分配'}${p?.profile_id ? ' · 独立浏览器 ' + escapeHtml(p.profile_id) : ''} · ${accts.length} 个账号</span>
-      </div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;">
-        <button class="btn btn-small btn-secondary" onclick="personaGmailLogin('${sel}')" title="打开这个邮箱的浏览器登录它的 Gmail（基础登录，先做这步）">📧 登录Gmail</button>
-        <button class="btn btn-small btn-success" onclick="personaProvisionAll('${sel}','${escapeHtml(p?.email || '')}')" title="逐平台：有就登录、没有就注册">🚀 检查并开通账号</button>
-        <button class="btn btn-small btn-primary" onclick="window.__addAccountPersona='${sel}';openModal('modalAddAccount');">+ 加账号</button>
-        <button class="btn btn-small btn-secondary" style="margin-left:auto;color:#e55;" onclick="deletePersonaAcct('${sel}','${escapeHtml(p?.email || '')}')" title="删除这个邮箱身份">删除此邮箱</button>
-      </div></div>`;
-        panel += accts.length
-            ? accts.map((x) => renderAccountCard(x)).join('')
-            : `<div class="card" style="padding:16px;text-align:center;"><div class="text-muted">这个邮箱还没有账号 —— 点上面「🚀 检查并开通账号」自动开通各平台，或「+ 加账号」手动加。</div></div>`;
-    }
-    list.innerHTML = airportBar + tabBar + panel;
+    const collapsed = collapsedPersonas.has(sel);
+    // 工具条：新建（该分类）+ 一键收起/展开（该分类的身份）
+    const allCollapsed = ids.length > 0 && ids.every((id) => collapsedPersonas.has(id));
+    const toolbar = `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 12px;">
+    ${newBtn}
+    ${collapseBtnHtml('toggleCollapseAllPersonas()', allCollapsed, allCollapsed ? t('accounts.expandAll') : t('accounts.collapseAll'))}
+  </div>`;
+    // 身份 sub-tabs（同分类）与「收起平台」同一行
+    const tabsHtml = personas.map((p) => {
+        const active = p.id === sel;
+        const label = `${personaIcon(p)} ${p?.email || '身份'}`;
+        return `<button class="email-tab ${active ? 'active' : ''}" onclick="selectEmail('${p.id}')" title="${escapeHtml(label)}">${escapeHtml(label)}</button>`;
+    }).join('');
+    const groupHead = `<div class="email-group-head">
+    <div class="email-tabs">${tabsHtml}</div>
+    ${collapseBtnHtml(`togglePersonaCollapse('${sel}')`, collapsed, collapsed ? t('accounts.expand') : t('accounts.collapse'))}
+  </div>`;
+    const p = personasCache.find((x) => x.id === sel);
+    const isFixed = (p?.ip_mode || 'airport') === 'fixed';
+    const emptyHintKey = isFixed ? 'accounts.fixedEmptyHint' : 'accounts.emptyEmailHint';
+    const cardsHtml = collapsed
+        ? `<div class="text-muted" style="text-align:center;padding:6px 0;">${escapeHtml(tf('accounts.collapsedHint', { n: accts.length }))}</div>`
+        : (accts.length ? accts.map((x) => renderAccountCard(x)).join('')
+            : `<div class="text-muted" style="text-align:center;padding:8px 0;">${escapeHtml(t(emptyHintKey))}</div>`);
+    const pname = profileNameOf(p); // #6 可读 profile 名
+    const meta = [
+        personaIpBadge(p), // #13 IP 类型徽章
+        isFixed
+            ? (p?.fixed_proxy ? `${t('accounts.proxy')}: ${escapeHtml(maskProxy(p.fixed_proxy))}` : '')
+            : (p?.region ? escapeHtml(p.region) : t('accounts.noNode')),
+        pname ? `🖥️ ${t('accounts.browser')}: ${escapeHtml(pname)}` : '',
+        tf('accounts.accountCount', { n: accts.length }),
+    ].filter(Boolean).join(' · ');
+    // #13 动作按钮按身份类型区分：固定身份没有 Gmail 登录 / Google 开通，只有「打开浏览器 + 加账号」
+    const actions = isFixed
+        ? `<button class="btn btn-small btn-secondary" onclick="personaOpenBrowser('${sel}')" title="打开这个身份的浏览器（手动操作平台）">${escapeHtml(t('accounts.openBrowser'))}</button>
+       <button class="btn btn-small btn-primary" onclick="personaAddAccounts('${sel}','${escapeHtml(p?.email || '')}')" title="加账号（固定 IP 身份建议一身份一号）">${escapeHtml(t('accounts.addAccountBtn'))}</button>`
+        : `<button class="btn btn-small btn-secondary" onclick="personaGmailLogin('${sel}')" title="打开这个邮箱的浏览器登录它的 Gmail（基础登录，先做这步）">${escapeHtml(t('accounts.loginGmail'))}</button>
+       <button class="btn btn-small btn-success" onclick="personaProvisionAll('${sel}','${escapeHtml(p?.email || '')}')" title="自动开通 Google 登录平台">${escapeHtml(t('accounts.provisionBtn'))}</button>
+       <button class="btn btn-small btn-primary" onclick="personaAddAccounts('${sel}','${escapeHtml(p?.email || '')}')" title="手机号 / 账号密码平台手动加账号">${escapeHtml(t('accounts.addAccountBtn'))}</button>`;
+    const infoBar = `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;border-left:4px solid ${isFixed ? '#16a34a' : '#4a8cff'};padding-left:10px;">
+      <span class="text-muted" style="font-size:12px;">${meta}</span>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
+      ${actions}
+      <button class="btn btn-small btn-secondary" style="margin-left:auto;color:#e55;" onclick="deletePersonaAcct('${sel}','${escapeHtml(p?.email || '')}')" title="删除这个身份">${escapeHtml(t('accounts.deleteEmail'))}</button>
+    </div>`;
+    const emailGroup = `<div class="email-group">${groupHead}<div class="email-group-body">${infoBar}${cardsHtml}</div></div>`;
+    list.innerHTML = categoryBar + airportBar + toolbar + emailGroup;
 }
+// #8 收起/展开按钮：胶囊 + 旋转 chevron，统一好看的样式
+function collapseBtnHtml(onclick, collapsed, label) {
+    return `<button class="collapse-btn ${collapsed ? 'is-collapsed' : ''}" onclick="${onclick}"><span class="chev">▾</span>${escapeHtml(label)}</button>`;
+}
+// #13 身份类型 → 图标 / 徽章文案 / 代理脱敏
+function personaIcon(persona) {
+    if ((persona?.ip_mode || 'airport') !== 'fixed')
+        return '📧';
+    return (persona?.region || '') === 'cn' ? '🇨🇳' : '🌍';
+}
+function personaIpBadge(persona) {
+    if ((persona?.ip_mode || 'airport') !== 'fixed')
+        return t('accounts.ipAirport');
+    return (persona?.region || '') === 'cn' ? t('accounts.ipFixedCn') : t('accounts.ipFixedOverseas');
+}
+// 代理脱敏：藏掉账号密码，只留协议+主机+端口
+function maskProxy(proxy) {
+    try {
+        const m = String(proxy).match(/^([a-z0-9]+:\/\/)(?:[^@/]*@)?(.+)$/i);
+        return m ? `${m[1]}${m[2]}` : String(proxy);
+    }
+    catch {
+        return String(proxy);
+    }
+}
+// #6 把 persona.profile_id（profile 文件夹名）映射为 Unzoo 里可读的 profile 名称
+function profileNameOf(persona) {
+    if (!persona?.profile_id)
+        return null;
+    const pid = persona.profile_id;
+    const lastSeg = (s) => (s || '').split(/[\\/]/).filter(Boolean).pop() || '';
+    const found = availableProfiles.find((p) => p.id === pid || lastSeg(p.id) === pid || lastSeg(p.path) === pid);
+    // 匹配不到可读名时，宁可不展示难看的文件夹名（返回 null 让 meta 行省略该项）
+    return found?.name || null;
+}
+// #7 平台收起：按 persona 记录折叠状态
+let collapsedPersonas = new Set();
+window.togglePersonaCollapse = function (id) {
+    if (collapsedPersonas.has(id))
+        collapsedPersonas.delete(id);
+    else
+        collapsedPersonas.add(id);
+    renderAccounts();
+};
+window.toggleCollapseAllPersonas = function () {
+    // 只对当前分类下的身份收起/展开
+    const ids = personasInCategory(selectedIdentityCategory).map((p) => p.id);
+    const allCollapsed = ids.length > 0 && ids.every((id) => collapsedPersonas.has(id));
+    if (allCollapsed)
+        ids.forEach((id) => collapsedPersonas.delete(id));
+    else
+        ids.forEach((id) => collapsedPersonas.add(id));
+    renderAccounts();
+};
 // 切换当前邮箱视角
 window.selectEmail = function (id) { selectedPersonaId = id; renderAccounts(); };
-// 设置/刷新机场订阅（出口 IP 池）
+// #12 设置机场订阅：预填当前订阅；提交时判断是否变化——无变化只提示保存成功，有变化才换节点
 window.setAirportPrompt = async function () {
-    const url = ((await uiPrompt({
-        title: '设置机场订阅',
-        label: '粘贴你的机场订阅链接（必须是 Clash 订阅，不支持单条 ss/vmess）',
+    let current = '';
+    try {
+        current = (await invoke('airport_get_subscription')) || '';
+    }
+    catch {
+        current = '';
+    }
+    const input = await uiPrompt({
+        title: t('airport.setTitle'),
+        label: t('airport.setLabel'),
         placeholder: 'https://your-airport.com/api/v1/client/subscribe?token=...',
-        okText: '拉取节点',
-    })) || '').trim();
+        value: current,
+        okText: t('airport.setOk'),
+    });
+    if (input === null)
+        return; // 取消
+    const url = input.trim();
     if (!url)
         return;
-    showToast('正在拉取节点…', 'info');
+    if (url === current.trim()) { // 订阅没变 → 不动节点，只提示
+        showToast(t('airport.saved'), 'success');
+        return;
+    }
+    showToast(t('airport.fetching'), 'info');
     try {
-        const msg = await invoke('airport_set_subscription', { url });
+        const msg = await invoke('airport_set_subscription', { url }); // 内部 force 重载 + 替换失效节点
         showToast('' + msg, 'success');
         await loadAccounts();
     }
     catch (e) {
-        showToast('订阅失败：' + e, 'error');
+        showToast(t('airport.subFailed') + e, 'error');
+    }
+};
+// #12 刷新订阅：用已保存的订阅重新拉取、替换失效节点（逻辑同后台定时刷新）
+window.refreshAirport = async function () {
+    showToast(t('airport.refreshing'), 'info');
+    try {
+        const msg = await invoke('airport_refresh_subscription');
+        showToast('' + msg, 'success');
+        await loadAccounts();
+    }
+    catch (e) {
+        showToast(t('airport.subFailed') + e, 'error');
     }
 };
 // 在邮箱账号页直接新建一个 Gmail 身份（自动建 profile+指纹+分配节点）
 window.createPersonaPrompt = async function () {
     const email = ((await uiPrompt({
-        title: '新建 Gmail 身份',
-        label: '输入一个真实 Gmail（这个邮箱会成为一套独立身份：独立浏览器+IP+指纹）',
+        title: t('persona.createTitle'),
+        label: t('persona.createLabel'),
         placeholder: 'yourname@gmail.com',
-        okText: '创建',
+        okText: t('persona.createOk'),
     })) || '').trim();
     if (!email)
         return;
     if (!email.includes('@')) {
-        showToast('请输入有效的 Gmail 地址', 'error');
+        showToast(t('persona.invalidEmail'), 'error');
         return;
     }
-    showToast('正在创建身份…（建浏览器+随机指纹+分配出口节点，约 5-10 秒）', 'info');
+    showToast(t('persona.creating'), 'info');
     try {
         const dto = await invoke('persona_create', { email });
+        selectedIdentityCategory = 'gmail';
         if (dto && dto.id)
             selectedPersonaId = dto.id; // 建好自动切到这个新邮箱
-        showToast(`邮箱已建好 ✓ 已打开 Google 登录页 → 请在弹出的浏览器窗口登录 ${email}（基础登录，只需一次；登好后才能自动注册/登录账号）`, 'info');
+        showToast(tf('persona.created', { email }), 'info');
         await loadAccounts();
     }
     catch (e) {
-        showToast('创建失败：' + e, 'error');
+        showToast(t('persona.createFailed') + e, 'error');
     }
 };
-// 以邮箱为单位：逐平台「有就登录、没有就注册」，账号自动开通到这个邮箱名下
+// #13 新建身份：先选类型（Gmail / 国内固定 / 国外固定）
+window.newIdentityChooser = function () {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal active';
+    const opt = (onclick, title, desc) => `<button class="email-tab" style="width:100%;flex-direction:column;align-items:flex-start;gap:3px;max-width:none;padding:10px 12px;" data-act="${onclick}">
+       <span style="font-weight:700;">${escapeHtml(title)}</span>
+       <span class="text-muted" style="font-size:11px;font-weight:400;white-space:normal;">${escapeHtml(desc)}</span>
+     </button>`;
+    overlay.innerHTML = `
+    <div class="modal-content" style="max-width:460px;display:flex;flex-direction:column;">
+      <div class="modal-header"><h3>${escapeHtml(t('persona.newTypeTitle'))}</h3><button class="modal-close" data-cancel>&times;</button></div>
+      <div class="modal-body">
+        <div class="text-muted" style="font-size:12px;margin-bottom:8px;">${escapeHtml(t('persona.newTypeHint'))}</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          ${opt('gmail', t('persona.newGmail'), t('persona.newGmailDesc'))}
+          ${opt('cn', t('persona.newFixedCn'), t('persona.newFixedCnDesc'))}
+          ${opt('overseas', t('persona.newFixedOverseas'), t('persona.newFixedOverseasDesc'))}
+        </div>
+      </div>
+    </div>`;
+    let done = false;
+    const close = () => { if (done)
+        return; done = true; overlay.remove(); };
+    overlay.querySelectorAll('[data-cancel]').forEach(el => el.addEventListener('click', close));
+    overlay.addEventListener('click', (e) => { if (e.target === overlay)
+        close(); });
+    overlay.querySelectorAll('button[data-act]').forEach(btn => btn.addEventListener('click', () => {
+        const act = btn.getAttribute('data-act');
+        close();
+        if (act === 'gmail')
+            window.createPersonaPrompt();
+        else
+            window.createFixedPersonaPrompt(act); // 'cn' | 'overseas'
+    }));
+    document.body.appendChild(overlay);
+};
+// #13 新建固定 IP 身份（国内/国外）：标识 + 固定代理两栏录入
+window.createFixedPersonaPrompt = async function (region) {
+    const fields = await promptFixedPersona();
+    if (!fields)
+        return;
+    showToast(t('persona.creatingFixed'), 'info');
+    try {
+        const dto = await invoke('persona_create_fixed', { label: fields.label, region, proxy: fields.proxy });
+        selectedIdentityCategory = region === 'cn' ? 'fixed_cn' : 'fixed_overseas';
+        if (dto && dto.id)
+            selectedPersonaId = dto.id;
+        showToast(tf('persona.fixedCreated', { label: fields.label }), 'success');
+        await loadAccounts();
+    }
+    catch (e) {
+        showToast(t('persona.createFailed') + e, 'error');
+    }
+};
+// 固定身份录入弹窗：返回 {label, proxy} 或 null
+function promptFixedPersona() {
+    return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.className = 'modal active';
+        overlay.innerHTML = `
+      <div class="modal-content" style="max-width:480px;">
+        <div class="modal-header"><h3>${escapeHtml(t('persona.fixedTitle'))}</h3><button class="modal-close" data-cancel>&times;</button></div>
+        <div class="modal-body">
+          <label style="display:block;margin-bottom:4px;font-size:13px;">${escapeHtml(t('persona.fixedLabelLabel'))}</label>
+          <input type="text" class="input" id="__fpLabel" placeholder="${escapeHtml(t('persona.fixedLabelPlaceholder'))}" style="width:100%;margin-bottom:12px;">
+          <label style="display:block;margin-bottom:4px;font-size:13px;">${escapeHtml(t('persona.fixedProxyLabel'))}</label>
+          <input type="text" class="input" id="__fpProxy" placeholder="${escapeHtml(t('persona.fixedProxyPlaceholder'))}" style="width:100%;">
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" data-cancel>${escapeHtml(t('provision.cancel'))}</button>
+          <button class="btn btn-primary" data-ok>${escapeHtml(t('persona.fixedOk'))}</button>
+        </div>
+      </div>`;
+        let done = false;
+        const finish = (v) => { if (done)
+            return; done = true; overlay.remove(); resolve(v); };
+        const submit = () => {
+            const label = overlay.querySelector('#__fpLabel').value.trim();
+            const proxy = overlay.querySelector('#__fpProxy').value.trim();
+            if (!label || !proxy)
+                return; // 两栏都必填
+            finish({ label, proxy });
+        };
+        overlay.querySelectorAll('[data-cancel]').forEach(el => el.addEventListener('click', () => finish(null)));
+        overlay.querySelector('[data-ok]')?.addEventListener('click', submit);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay)
+            finish(null); });
+        document.body.appendChild(overlay);
+        setTimeout(() => overlay.querySelector('#__fpLabel')?.focus(), 30);
+    });
+}
+// #13 打开固定 IP 身份的浏览器（无 Gmail 登录步骤）
+window.personaOpenBrowser = async function (id) {
+    try {
+        const msg = await invoke('persona_open_browser', { personaId: id });
+        showToast('' + msg, 'info');
+    }
+    catch (e) {
+        showToast('' + e, 'error');
+    }
+};
+// 以邮箱为单位：自动开通「Google 登录」平台（#5 选择器只列出尚未开通的）
 window.personaProvisionAll = async function (id, email) {
     let catalog;
     try {
         catalog = await invoke('persona_platform_catalog', { personaId: id });
     }
     catch (e) {
-        showToast('加载平台列表失败：' + e, 'error');
+        showToast(t('provision.loadFailed') + e, 'error');
         return;
     }
-    const checkedArr = await pickProvisionPlatforms(email, catalog);
+    // 只保留「Google 登录 + IP 宽松(shared_overseas)」且尚未开通的平台（其余走「+ 加账号」/固定身份）
+    const selectable = catalog.filter(c => c.login_method === 'google' && c.ip_policy === 'shared_overseas' && !c.provisioned);
+    if (!selectable.length) {
+        showToast(t('provision.allDone'), 'info');
+        return;
+    }
+    const checkedArr = await pickProvisionPlatforms(email, selectable);
     if (!checkedArr)
         return; // 取消
-    const checked = new Set(checkedArr);
-    const provisioned = new Set(catalog.filter(c => c.provisioned).map(c => c.platform));
-    const toAdd = [...checked].filter(p => !provisioned.has(p)); // 新勾选 = 新增开通
-    const toRemove = [...provisioned].filter(p => !checked.has(p)); // 取消已开通 = 删账号
-    if (!toAdd.length && !toRemove.length) {
-        showToast('没有变更', 'info');
+    const toAdd = checkedArr; // 全部都是未开通的 Google 平台
+    if (!toAdd.length) {
+        showToast(t('provision.noChanges'), 'info');
         return;
     }
     try {
-        if (toRemove.length) {
-            await invoke('persona_remove_platforms', { personaId: id, platforms: toRemove });
-        }
-        if (toAdd.length) {
-            showToast(`正在用 ${email} 开通 ${toAdd.length} 个平台…（逐个跑，请耐心等）`, 'info');
-            const msg = await invoke('persona_provision_all', { personaId: id, platforms: toAdd });
-            showToast('' + msg, 'success');
-        }
-        else {
-            showToast(`已移除 ${toRemove.length} 个平台账号`, 'success');
-        }
-        await loadAccounts(); // 开通/移除后列表直接刷新
+        showToast(tf('provision.provisioning', { email, n: toAdd.length }), 'info');
+        const msg = await invoke('persona_provision_all', { personaId: id, platforms: toAdd });
+        showToast('' + msg, 'success');
+        await loadAccounts(); // 开通后列表直接刷新
     }
     catch (e) {
         showToast('' + e, 'error');
+    }
+};
+// #4/#13 加账号：按身份的 IP 类型路由可加平台，按「手机号/账号密码」分区录凭据，逐个添加并归属
+window.personaAddAccounts = async function (id, email) {
+    // #13 按身份 IP 类型决定能加哪些平台：
+    //   固定·国内 → residential_cn（小红书等）；固定·海外 → static_overseas（Twitter/Reddit/FB…）；
+    //   Gmail/机场 → 宽松海外平台里「非 Google 登录」的（Google 的走「开通账号」）
+    const persona = personasCache.find((p) => p.id === id);
+    const isFixed = (persona?.ip_mode || 'airport') === 'fixed';
+    // 固定 IP 身份建议一身份一号：已有账号则不让再加
+    if (isFixed && accounts.filter((a) => a.persona_id === id).length >= 1) {
+        showToast(t('accounts.fixedOneAccount'), 'info');
+        return;
+    }
+    let catalog;
+    try {
+        catalog = await invoke('persona_platform_catalog', { personaId: id });
+    }
+    catch (e) {
+        showToast(t('provision.loadFailed') + e, 'error');
+        return;
+    }
+    const candidates = catalog.filter(c => {
+        if (c.provisioned)
+            return false;
+        if (isFixed) {
+            return c.ip_policy === ((persona?.region || '') === 'cn' ? 'residential_cn' : 'static_overseas');
+        }
+        return c.ip_policy === 'shared_overseas' && c.login_method !== 'google';
+    });
+    if (!candidates.length) {
+        showToast(t('addacct.none'), 'info');
+        return;
+    }
+    const picked = await pickAddAccounts(email, candidates);
+    if (!picked)
+        return; // 取消
+    // 固定身份一号：即便填了多个也只取第一个
+    const entries = isFixed ? picked.slice(0, 1) : picked;
+    if (!entries.length) {
+        showToast(t('addacct.nothing'), 'info');
+        return;
+    }
+    try {
+        for (const e of entries) {
+            const created = await invoke('add_account', { platform: e.platform, username: e.username, password: e.password || '' });
+            if (created?.id) {
+                try {
+                    await invoke('set_account_persona', { accountId: created.id, personaId: id });
+                }
+                catch { }
+            }
+        }
+        showToast(tf('addacct.added', { n: entries.length }), 'success');
+        await loadAccounts();
+    }
+    catch (e) {
+        showToast(t('addacct.addFailed') + e, 'error');
     }
 };
 // 打开某身份的浏览器到 Google 登录页（补登/重登该 Gmail）
@@ -2003,15 +2979,15 @@ window.personaGmailLogin = async function (id) {
 };
 // 删除一个 Gmail 身份（连带其独立浏览器，释放节点）
 window.deletePersonaAcct = async function (id, email) {
-    if (!(await uiConfirm(`删除身份 ${email}？\n会删掉它的独立浏览器并释放出口节点；名下账号会变成「未归属」。`)))
+    if (!(await uiConfirm(tf('persona.deleteConfirm', { email }))))
         return;
     try {
         await invoke('persona_delete', { id });
-        showToast('身份已删除', 'success');
+        showToast(t('persona.deleted'), 'success');
         await loadAccounts();
     }
     catch (e) {
-        showToast('删除失败：' + e, 'error');
+        showToast(t('persona.deleteFailed') + e, 'error');
     }
 };
 function personaSelectOptions(selectedId) {
@@ -2020,90 +2996,101 @@ function personaSelectOptions(selectedId) {
 }
 function renderAccountCard(account) {
     {
-        const getProfileForAccount = (accountId) => browserProfiles.find(p => p.account_id === accountId);
-        const profile = getProfileForAccount(account.id);
-        const hasProfile = !!profile;
-        const stealthBadge = profile?.stealth_enabled
-            ? '<span class="badge badge-stealth" title="Stealth Mode">🛡️</span>'
-            : '';
-        const fingerprintBadge = profile?.fingerprint_id
-            ? '<span class="badge badge-fingerprint" title="Fingerprint Randomized">🎭</span>'
-            : '';
-        const proxyBadge = profile?.proxy
-            ? `<span class="badge badge-proxy" title="${escapeHtml(profile.proxy)}">🌐</span>`
-            : '';
+        // #14 账号的浏览器/IP/指纹统一由所属身份(persona)提供，不再有「每账号 profile」
         const healthBadge = getHealthBadge(account);
         // Get lifecycle data
         const lifecycle = accountLifecycles.get(account.id);
         const stage = lifecycle?.stage || 'new';
         const daysRemaining = lifecycle?.days_remaining || 0;
         const progressPercent = lifecycle?.progress_percent || 0;
+        const daysSinceStart = lifecycle?.days_since_start ?? 0;
+        const warmupDays = lifecycle?.warmup_days ?? 14;
+        // 完整养号周期（预热+成长，到「成熟」的总天数）；兜底用 warmup
+        const totalCycleDays = lifecycle?.total_cycle_days ?? warmupDays;
         const todaySessions = lifecycle?.today?.sessions_completed || 0;
-        const todayTarget = lifecycle?.today?.sessions_min || 2;
-        const todayCompleted = todaySessions >= todayTarget;
-        // Stage badge
+        // Stage badge（#16 柔和胶囊风格，与健康徽章统一）。
+        // 徽章里的「剩N天」= 当前阶段剩余（预热剩到成长 / 成长剩到成熟），比总剩余更直观
+        const phaseRemaining = stage === 'warming'
+            ? Math.max(0, warmupDays - daysSinceStart)
+            : stage === 'growing'
+                ? Math.max(0, totalCycleDays - daysSinceStart)
+                : daysRemaining;
         const stageBadges = {
-            'new': '<span class="badge badge-new" style="background:#6c757d;color:white;">🆕 新账号</span>',
-            'warming': `<span class="badge badge-warming" style="background:#ffc107;color:black;">🔥 养号中 (${daysRemaining}天)</span>`,
-            'active': '<span class="badge badge-active" style="background:#28a745;color:white;">✅ 正常</span>'
+            'new': `<span class="stage-badge new">🆕 ${t('stage.new')}</span>`,
+            'warming': `<span class="stage-badge warming">🔥 ${tf('stage.warming', { n: phaseRemaining })}</span>`,
+            'growing': `<span class="stage-badge growing">🌿 ${tf('stage.growing', { n: phaseRemaining })}</span>`,
+            'active': `<span class="stage-badge active">✅ ${t('stage.active')}</span>`
         };
+        // 养号天数进度：已养天数 / 完整周期总天数（如 3/15 天）
+        const nurtureDaysProgress = lifecycle
+            ? `<span class="stage-badge ${stage}" title="${escapeHtml(t('nurture.daysProgressTitle'))}">🌱 ${Math.min(daysSinceStart, totalCycleDays)}/${totalCycleDays} ${t('nurture.days')}</span>`
+            : '';
         const stageBadge = stageBadges[stage] || stageBadges['new'];
         // Today's nurture progress
         const todayProgress = lifecycle ? `
       <div class="nurture-today" style="margin: 8px 0; padding: 8px; background: var(--bg-secondary); border-radius: 6px;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
-          <span style="font-size: 12px; color: var(--text-muted);">今日养号进度</span>
-          <span style="font-size: 12px; font-weight: bold; color: ${todayCompleted ? 'var(--success)' : 'var(--warning)'};">
-            ${todaySessions} / ${todayTarget} 次
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <span style="font-size: 12px; color: var(--text-muted);">今日养号</span>
+          <span style="font-size: 12px; font-weight: bold; color: ${todaySessions > 0 ? 'var(--success)' : 'var(--text-muted)'};">
+            ${todaySessions} 次
           </span>
         </div>
-        <div style="background: var(--border); border-radius: 4px; height: 6px; overflow: hidden;">
-          <div style="background: ${todayCompleted ? 'var(--success)' : 'var(--primary)'}; height: 100%; width: ${Math.min(100, (todaySessions / todayTarget) * 100)}%; transition: width 0.3s;"></div>
-        </div>
-        ${stage === 'warming' ? `
-          <div style="margin-top: 5px; font-size: 11px; color: var(--text-muted);">
+        ${(stage === 'warming' || stage === 'growing') ? `
+          <div style="margin-top: 6px; font-size: 11px; color: var(--text-muted);">
             养号进度: ${progressPercent}% (剩余 ${daysRemaining} 天)
           </div>
         ` : ''}
       </div>
     ` : '';
-        // Build profile binding dropdown options
-        const profileOptions = availableProfiles.map(p => `<option value="${escapeHtml(p.id)}" ${account.profile_id === p.id ? 'selected' : ''}>${escapeHtml(p.name)} (${escapeHtml(p.id)})</option>`).join('');
         const personaBadge = account.persona_email
-            ? `<span class="badge badge-profile" title="身份: ${escapeHtml(account.persona_email)}（共用其浏览器+IP）">🧑‍🤝‍🧑 ${escapeHtml(account.persona_email)}</span>`
-            : '<span class="badge badge-no-profile" title="未归属身份">🧩 未归属</span>';
+            ? `<span class="id-badge" title="身份: ${escapeHtml(account.persona_email)}（共用其浏览器+IP）">🧑‍🤝‍🧑 ${escapeHtml(account.persona_email)}</span>`
+            : '<span class="id-badge none" title="未归属身份">🧩 未归属</span>';
         const nurtureStats = (account.total_nurture_seconds > 0 || account.last_nurture_at)
             ? `<span class="text-muted" style="font-size:12px;">${account.total_nurture_seconds > 0 ? `🌱 累计 ${formatNurtureTime(account.total_nurture_seconds)}` : ''}${account.last_nurture_at ? ` · ${t('nurture.lastNurture')} ${formatTimeAgo(account.last_nurture_at)}` : ''}</span>`
             : '';
         return `
-      <div class="account-item ${hasProfile ? 'has-profile' : ''}">
+      <div class="account-item">
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
           <span class="account-platform" style="font-weight:700;">${escapeHtml(account.platform)}</span>
+          ${platformSceneMap[account.platform] ? `<span class="stage-badge" style="background:var(--bg-secondary);color:var(--text-muted);" title="平台场景类别">${t('scene.' + platformSceneMap[account.platform])}</span>` : ''}
+          ${platformManualLoginCache[(account.platform || '').toLowerCase()] ? `<span class="stage-badge" style="background:rgba(168,85,247,0.12);color:#a855f7;" title="该平台需手工登录（自动登录走不通，请在弹出的浏览器窗口里手动登录一次）">✋ 手工登录</span>` : ''}
           ${healthBadge}
           ${stageBadge}
+          ${nurtureDaysProgress}
           <span style="margin-left:auto;display:flex;align-items:center;gap:6px;">
-            ${stealthBadge}${fingerprintBadge}${proxyBadge}
             <button class="btn btn-small btn-danger" onclick="deleteAccount('${account.id}')" title="删除账号">🗑</button>
           </span>
         </div>
         <div class="account-username text-muted" style="font-size:13px;">${escapeHtml(account.username || account.email || 'N/A')}</div>
+        ${(() => {
+            const keys = accountNichesMap[account.id] || [];
+            if (!keys.length)
+                return '';
+            const lm = account.platform === 'github' ? ghDomainLabels : ((account.platform === 'twitter' || account.platform === 'x') ? xNicheLabels : (account.platform === 'segmentfault' ? sfDomainLabels : {}));
+            const chip = (k, hidden) => `<span class="stage-badge" style="background:var(--bg-secondary);color:var(--primary);${hidden ? 'display:none;' : ''}" data-extra="${hidden ? '1' : '0'}" title="养号方向">🎯 ${escapeHtml(lm[k] || k)}</span>`;
+            const chips = keys.map((k, i) => chip(k, i >= 2)).join('');
+            const more = keys.length > 2
+                ? `<button class="btn btn-small btn-secondary" style="padding:0 8px;font-size:11px;" onclick="toggleNicheRow(this)" data-more="${keys.length - 2}">展开 +${keys.length - 2}</button>`
+                : '';
+            return `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:4px;" data-expanded="0">${chips}${more}</div>`;
+        })()}
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-          <label class="text-muted" style="font-size:12px;">归属身份</label>
-          <select class="select select-small" onchange="setAccountPersona('${account.id}', this.value)" style="width:auto;min-width:200px;">
-            ${personaSelectOptions(account.persona_id)}
-          </select>
           ${personaBadge}
+          ${account.login_method !== 'google'
+            ? `<button class="chip-btn" onclick="transferAccountPersona('${account.id}','${escapeHtml(account.persona_id || '')}')" title="把这个账号改挂到别的身份下">🔄 ${escapeHtml(t('transfer.btn'))}</button>`
+            : ''}
           ${nurtureStats}
         </div>
         ${todayProgress}
         <div class="account-actions">
-          <button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="自动登录：查登录→Google登录→否则注册">🔑 自动登录</button>
+          ${platformManualLoginCache[(account.platform || '').toLowerCase()]
+            ? `<button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="该平台自动登录走不通，点此直接打开登录页，在浏览器里手动登录一次">✋ 手工登录</button>`
+            : `<button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="自动登录：查登录→Google登录→否则注册">🔑 自动登录</button>`}
           <button class="btn btn-small btn-success" data-nurture-account="${account.id}" onclick="openNurtureModal('${account.id}', '${escapeHtml(account.platform)}', '${escapeHtml(account.username || account.email || 'N/A')}')" title="${t('nurture.quickNurture')}">🌱 ${t('nurture.quickNurture')}</button>
-          ${stage === 'new' ? `<button class="btn btn-small btn-warning" onclick="startWarmup('${account.id}')" title="开始养号">🔥 开始养号</button>` : ''}
-          ${!hasProfile ? `<button class="btn btn-small btn-secondary" onclick="createProfileForAccount('${account.id}', '${escapeHtml(account.platform)}')">${t('accounts.createProfile')}</button>` : ''}
-          ${hasProfile ? `<button class="btn btn-small btn-secondary" onclick="toggleStealth('${profile.id}', ${!profile.stealth_enabled})" title="${profile.stealth_enabled ? 'Disable' : 'Enable'} Stealth">${profile.stealth_enabled ? '🛡️' : '⚡'}</button>` : ''}
-          ${hasProfile ? `<button class="btn btn-small btn-secondary" onclick="randomizeFingerprint('${profile.id}')" title="Randomize Fingerprint">🎭</button>` : ''}
-          ${hasProfile ? `<button class="btn btn-small btn-secondary" onclick="showProxyModal('${profile.id}')" title="Set Proxy">🌐</button>` : ''}
+          ${account.platform === 'github' ? `<button class="btn btn-small btn-secondary" onclick="pickGithubDomains('${account.id}')" title="选择 GitHub 养号领域">🎯 领域</button>` : ''}
+          ${(account.platform === 'twitter' || account.platform === 'x') ? `<button class="btn btn-small btn-secondary" onclick="pickXNiches('${account.id}')" title="选择 X 养号方向">🎯 方向</button>` : ''}
+          ${account.platform === 'segmentfault' ? `<button class="btn btn-small btn-secondary" onclick="pickSegmentfaultDomains('${account.id}')" title="选择 SegmentFault 养号领域（养号时按领域搜索→浏览→读文章）">🎯 领域</button>` : ''}
+          ${stage !== 'active' ? `<button class="btn btn-small btn-secondary" onclick="finishAccountNurture('${account.id}')" title="老账号无需养号，直接标为正常">✅ ${t('nurture.finishBtn')}</button>` : ''}
         </div>
       </div>
     `;
@@ -2151,15 +3138,67 @@ window.setAccountPersona = async function (accountId, personaId) {
         showToast('' + error, 'error');
     }
 };
+// #10 转移归属：弹出身份选择器（仅手工账号会显示该入口），选定后改挂到目标 Gmail 身份
+window.transferAccountPersona = function (accountId, currentPersonaId) {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal active';
+    const optionRow = (id, label) => {
+        const isCur = (id || '') === (currentPersonaId || '');
+        return `<button class="email-tab ${isCur ? 'active' : ''}" data-pid="${escapeHtml(id)}" style="width:100%;justify-content:space-between;max-width:none;">
+      <span style="overflow:hidden;text-overflow:ellipsis;">${escapeHtml(label)}</span>${isCur ? `<span style="font-size:11px;opacity:.85;margin-left:8px;">${escapeHtml(t('transfer.current'))}</span>` : ''}
+    </button>`;
+    };
+    const rows = [
+        ...personasCache.map((p) => optionRow(p.id, `📧 ${p.email}`)),
+        optionRow('', `🧩 ${t('transfer.unassigned')}`),
+    ].join('');
+    overlay.innerHTML = `
+    <div class="modal-content" style="max-width:460px;display:flex;flex-direction:column;">
+      <div class="modal-header"><h3>${escapeHtml(t('transfer.title'))}</h3><button class="modal-close" data-cancel>&times;</button></div>
+      <div class="modal-body" style="overflow:auto;">
+        <div class="text-muted" style="font-size:12px;margin-bottom:8px;">${escapeHtml(t('transfer.hint'))}</div>
+        <div style="display:flex;flex-direction:column;gap:6px;">${rows}</div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-cancel>${escapeHtml(t('provision.cancel'))}</button>
+      </div>
+    </div>`;
+    let done = false;
+    const close = () => { if (done)
+        return; done = true; overlay.remove(); };
+    overlay.querySelectorAll('[data-cancel]').forEach(el => el.addEventListener('click', close));
+    overlay.addEventListener('click', (e) => { if (e.target === overlay)
+        close(); });
+    overlay.querySelectorAll('button[data-pid]').forEach(btn => btn.addEventListener('click', async () => {
+        const pid = btn.getAttribute('data-pid') || '';
+        if (pid === (currentPersonaId || '')) {
+            close();
+            return;
+        } // 没变化
+        close();
+        try {
+            await invoke('set_account_persona', { accountId, personaId: pid || null });
+            showToast(t('transfer.done'), 'success');
+            await loadAccounts();
+        }
+        catch (error) {
+            showToast(t('transfer.failed') + error, 'error');
+        }
+    }));
+    document.body.appendChild(overlay);
+};
 // Start warmup for a new account
-window.startWarmup = async function (accountId) {
+// #19 一键结束养号：老账号无需养号，直接标为正常并停止自动养号
+window.finishAccountNurture = async function (accountId) {
+    if (!(await uiConfirm(t('nurture.finishConfirm'))))
+        return;
     try {
-        await invoke('start_account_nurture', { accountId });
-        showToast(currentLanguage === 'zh' ? '已开始养号' : 'Warmup started', 'success');
-        await loadAccounts(); // This also loads lifecycles and renders accounts
+        await invoke('finish_account_nurture', { accountId });
+        showToast(t('nurture.finished'), 'success');
+        await loadAccounts();
     }
     catch (error) {
-        showToast(`Error: ${error}`, 'error');
+        showToast(t('nurture.finishFailed') + error, 'error');
     }
 };
 async function loadRegisterPlatforms() {
@@ -2339,7 +3378,7 @@ async function saveAccount() {
     const username = document.getElementById('accountUsername')?.value;
     const password = document.getElementById('accountPassword')?.value;
     if (!platform || !username) {
-        showToast('Platform and username are required', 'error');
+        showToast(t('accounts.requiredFields'), 'error');
         return;
     }
     try {
@@ -2359,11 +3398,11 @@ async function saveAccount() {
     }
     catch (error) {
         console.error('Failed to save account:', error);
-        showToast('Failed to save account', 'error');
+        showToast(t('accounts.saveFailed'), 'error');
     }
 }
 window.deleteAccount = async function (id) {
-    if (!(await uiConfirm('Delete this account?')))
+    if (!(await uiConfirm(t('accounts.deleteConfirm'))))
         return;
     try {
         await invoke('delete_account', { id });
@@ -2371,7 +3410,7 @@ window.deleteAccount = async function (id) {
         showToast(t('msg.accountDeleted'), 'success');
     }
     catch (error) {
-        showToast('Failed to delete account', 'error');
+        showToast(t('accounts.deleteFailed'), 'error');
     }
 };
 // Browser Profile Management (Unzoo Integration)
@@ -2449,7 +3488,7 @@ window.showProxyModal = function (profileId) {
     if (modal) {
         document.getElementById('proxyProfileId').value = profileId;
         document.getElementById('proxyUrl').value = profile?.proxy || '';
-        modal.classList.add('show');
+        modal.classList.add('active');
     }
 };
 async function saveProxy() {
@@ -2484,7 +3523,7 @@ window.openNurtureModal = function (accountId, platform, username = '') {
         document.getElementById('nurtureAccountId').value = accountId;
         document.getElementById('nurturePlatform').value = platform;
         document.getElementById('nurtureAccountInfo').textContent = `${platform} - ${username || t('msg.account')}`;
-        modal.classList.add('show');
+        modal.classList.add('active');
     }
 };
 window.quickNurtureAccount = async function (accountId, platform, seconds = 60) {
@@ -2633,17 +3672,29 @@ function updateNurtureTimer() {
         const secs = remaining % 60;
         timerEl.textContent = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
     }
-    // Update progress bar
+    // Update progress bar（倒计时归零→不确定态滚动条纹，表示后台仍在执行）
     const progressBar = document.getElementById('nurtureProgressBar');
     if (progressBar) {
-        progressBar.style.width = `${progress}%`;
+        if (remaining === 0) {
+            progressBar.classList.add('nurture-indeterminate');
+        }
+        else {
+            progressBar.classList.remove('nurture-indeterminate');
+            progressBar.style.width = `${progress}%`;
+        }
     }
     // Update status text
     const statusEl = document.getElementById('nurtureStatusText');
     if (statusEl) {
-        const elapsedMins = Math.floor(elapsed / 60);
-        const elapsedSecs = elapsed % 60;
-        statusEl.innerHTML = `<span class="spinner-small"></span> ${t('nurture.running')} - ${elapsedMins}:${elapsedSecs.toString().padStart(2, '0')} / ${Math.floor(nurtureTotalSeconds / 60)}:${(nurtureTotalSeconds % 60).toString().padStart(2, '0')}`;
+        if (remaining === 0) {
+            // 动作驱动养号(GitHub/X)实际时长由动作决定，常超过设定时长 → 倒计时归零后不再显示误导计数
+            statusEl.innerHTML = `<span class="spinner-small"></span> 养号进行中…（后台执行动作，完成后自动关闭）`;
+        }
+        else {
+            const elapsedMins = Math.floor(elapsed / 60);
+            const elapsedSecs = elapsed % 60;
+            statusEl.innerHTML = `<span class="spinner-small"></span> ${t('nurture.running')} - ${elapsedMins}:${elapsedSecs.toString().padStart(2, '0')} / ${Math.floor(nurtureTotalSeconds / 60)}:${(nurtureTotalSeconds % 60).toString().padStart(2, '0')}`;
+        }
     }
     // Update task progress in Tasks page
     if (currentNurtureTaskId) {
@@ -2730,6 +3781,158 @@ function resetNurtureModal() {
         btnClose.style.display = 'none';
     if (progressBar)
         progressBar.style.width = '0%';
+}
+// ---- 一键养号（Nurture All）----
+// 对所有账号逐个串行跑一轮 quick_nurture，今日养号次数 ≥ 阈值的自动跳过。
+const NURTURE_ALL_SKIP_THRESHOLD = 2;
+let nurtureAllRunning = false;
+let nurtureAllAborted = false;
+/** 计算本轮养号清单：跳过今日已养 ≥ 阈值次的账号。 */
+function computeNurtureAllPlan() {
+    const todo = [];
+    let skipped = 0;
+    for (const account of accounts) {
+        const today = accountLifecycles.get(account.id)?.today?.sessions_completed || 0;
+        if (today >= NURTURE_ALL_SKIP_THRESHOLD)
+            skipped++;
+        else
+            todo.push(account);
+    }
+    return { todo, skipped };
+}
+function resetNurtureAllModal() {
+    const setup = document.getElementById('nurtureAllSetup');
+    const progress = document.getElementById('nurtureAllProgress');
+    const complete = document.getElementById('nurtureAllComplete');
+    const btnStart = document.getElementById('btnNurtureAllStart');
+    const btnStop = document.getElementById('btnNurtureAllStop');
+    const btnCancel = document.getElementById('btnNurtureAllCancel');
+    const btnClose = document.getElementById('btnNurtureAllClose');
+    const bar = document.getElementById('nurtureAllProgressBar');
+    if (setup)
+        setup.style.display = 'block';
+    if (progress)
+        progress.style.display = 'none';
+    if (complete)
+        complete.style.display = 'none';
+    if (btnStart)
+        btnStart.style.display = 'inline-block';
+    if (btnStop)
+        btnStop.style.display = 'none';
+    if (btnCancel)
+        btnCancel.style.display = 'inline-block';
+    if (btnClose)
+        btnClose.style.display = 'none';
+    if (bar)
+        bar.style.width = '0%';
+}
+function openNurtureAllModal() {
+    if (nurtureInProgress || nurtureAllRunning) {
+        showToast('有养号任务正在进行', 'warning');
+        return;
+    }
+    resetNurtureAllModal();
+    const { todo, skipped } = computeNurtureAllPlan();
+    const planEl = document.getElementById('nurtureAllPlan');
+    if (planEl) {
+        planEl.textContent = `共 ${accounts.length} 个账号：本轮养 ${todo.length} 个，跳过 ${skipped} 个（今日已养 ≥${NURTURE_ALL_SKIP_THRESHOLD} 次）`;
+    }
+    const btnStart = document.getElementById('btnNurtureAllStart');
+    if (btnStart)
+        btnStart.disabled = todo.length === 0;
+    openModal('modalNurtureAll');
+}
+async function startNurtureAll() {
+    const { todo } = computeNurtureAllPlan();
+    if (!todo.length) {
+        showToast('没有需要养号的账号（今日均已养 ≥2 次）', 'info');
+        return;
+    }
+    const seconds = parseInt(document.getElementById('nurtureAllDuration')?.value || '60');
+    // 切到进度态
+    const setup = document.getElementById('nurtureAllSetup');
+    const progress = document.getElementById('nurtureAllProgress');
+    const btnStart = document.getElementById('btnNurtureAllStart');
+    const btnStop = document.getElementById('btnNurtureAllStop');
+    const btnCancel = document.getElementById('btnNurtureAllCancel');
+    if (setup)
+        setup.style.display = 'none';
+    if (progress)
+        progress.style.display = 'block';
+    if (btnStart)
+        btnStart.style.display = 'none';
+    if (btnStop)
+        btnStop.style.display = 'inline-block';
+    if (btnCancel)
+        btnCancel.style.display = 'none';
+    const btnHeader = document.getElementById('btnNurtureAll');
+    if (btnHeader)
+        btnHeader.disabled = true;
+    nurtureAllRunning = true;
+    nurtureAllAborted = false;
+    nurtureInProgress = '__nurture_all__'; // 与单账号养号互斥
+    const total = todo.length;
+    let ok = 0, fail = 0;
+    const textEl = document.getElementById('nurtureAllProgressText');
+    const barEl = document.getElementById('nurtureAllProgressBar');
+    const statusEl = document.getElementById('nurtureAllStatusText');
+    for (let i = 0; i < total; i++) {
+        if (nurtureAllAborted)
+            break;
+        const account = todo[i];
+        const name = account.username || account.email || account.platform || account.id;
+        if (textEl)
+            textEl.textContent = `正在养号 ${i + 1}/${total}：${name}`;
+        if (barEl)
+            barEl.style.width = `${Math.round((i / total) * 100)}%`;
+        try {
+            await invoke('quick_nurture', { accountId: account.id, seconds });
+            ok++;
+            if (statusEl)
+                statusEl.textContent = `✅ 成功 ${ok} · ❌ 失败 ${fail}`;
+        }
+        catch (e) {
+            fail++;
+            console.error('Nurture failed for', account.id, e);
+            if (statusEl)
+                statusEl.textContent = `✅ 成功 ${ok} · ❌ 失败 ${fail}（最近失败：${name}）`;
+        }
+    }
+    if (barEl)
+        barEl.style.width = '100%';
+    nurtureAllRunning = false;
+    nurtureInProgress = null;
+    if (btnHeader)
+        btnHeader.disabled = false;
+    // 完成态
+    const completeDiv = document.getElementById('nurtureAllComplete');
+    const summaryEl = document.getElementById('nurtureAllSummary');
+    const btnStopEnd = document.getElementById('btnNurtureAllStop');
+    const btnClose = document.getElementById('btnNurtureAllClose');
+    if (progress)
+        progress.style.display = 'none';
+    if (completeDiv)
+        completeDiv.style.display = 'block';
+    if (btnStopEnd)
+        btnStopEnd.style.display = 'none';
+    if (btnClose)
+        btnClose.style.display = 'inline-block';
+    const skippedCount = accounts.length - total;
+    const stoppedNote = nurtureAllAborted ? '（已手动停止）' : '';
+    if (summaryEl)
+        summaryEl.textContent = `✅ 成功 ${ok} · ⏭ 跳过 ${skippedCount} · ❌ 失败 ${fail}${stoppedNote}`;
+    if (completeDiv) {
+        const title = completeDiv.querySelector('p');
+        if (title)
+            title.textContent = nurtureAllAborted ? '一键养号已停止' : '一键养号完成';
+    }
+    await loadAccounts();
+}
+function stopNurtureAll() {
+    nurtureAllAborted = true;
+    const statusEl = document.getElementById('nurtureAllStatusText');
+    if (statusEl)
+        statusEl.textContent = (statusEl.textContent || '') + ' · 停止中，养完当前账号后结束…';
 }
 // ============================================================================
 // Batch Nurture Task Modal (批量养号任务)
@@ -4259,6 +5462,8 @@ async function loadSettings() {
     if (langSelector) {
         langSelector.value = currentLanguage;
     }
+    // 区段导航不依赖后端，先建好（即使后续后端调用失败也有导航）
+    buildSettingsNav();
     try {
         // 尝试从后端加载 providers
         try {
@@ -4288,6 +5493,10 @@ async function loadSettings() {
         await loadScheduledJobs();
         // Load proxies
         await loadProxies();
+        // Load nurture cycle strategies
+        await loadNurtureStrategies();
+        // Load per-platform 手工登录 config
+        await loadPlatformManualLogin();
         // Load browser profiles for settings page
         await loadSettingsProfiles();
         // Setup profile event handlers
@@ -4297,6 +5506,54 @@ async function loadSettings() {
         console.error('Settings error:', error);
     }
 }
+// ===== 平台手工登录配置（设置页） =====
+// 列出全部平台，逐个开关「需要手工登录」。开关即存（config 表 platform_manual_login.<id>）。
+async function loadPlatformManualLogin() {
+    const container = document.getElementById('platformManualLoginList');
+    if (!container)
+        return;
+    try {
+        const [grouped, current] = await Promise.all([
+            invoke('get_register_platforms'),
+            invoke('get_platform_manual_login'),
+        ]);
+        platformManualLoginCache = current || {};
+        // 平铺所有平台（去重，保留分类信息用于分组标题）
+        const catTitles = {
+            international: '🌍 国际', developer: '👨‍💻 开发者', chinese: '🇨🇳 国内',
+            japanese: '🇯🇵 日本', korean: '🇰🇷 韩国', russian: '🇷🇺 俄语', messaging: '💬 即时通讯',
+        };
+        let html = '';
+        for (const [cat, list] of Object.entries(grouped || {})) {
+            if (!Array.isArray(list) || !list.length)
+                continue;
+            html += `<div class="platform-category" style="margin-bottom:8px;"><h4 style="margin:6px 0;color:var(--text-muted);font-size:12px;">${catTitles[cat] || cat}</h4><div style="display:flex;flex-wrap:wrap;gap:6px 14px;">`;
+            for (const p of list) {
+                const id = (p.id || '').toLowerCase();
+                const checked = platformManualLoginCache[id] ? 'checked' : '';
+                html += `<label class="checkbox" style="display:inline-flex;align-items:center;gap:6px;font-size:13px;"><input type="checkbox" value="${escapeHtml(id)}" ${checked} onchange="togglePlatformManualLogin(this)"> ${escapeHtml(p.name || p.id)}</label>`;
+            }
+            html += '</div></div>';
+        }
+        container.innerHTML = html || '<span class="text-muted" style="font-size:12px;">无可配置平台</span>';
+    }
+    catch (e) {
+        container.innerHTML = '<span class="text-muted" style="font-size:12px;">加载失败</span>';
+    }
+}
+window.togglePlatformManualLogin = async function (el) {
+    const platform = (el.value || '').toLowerCase();
+    const on = el.checked;
+    try {
+        await invoke('set_config', { key: `platform_manual_login.${platform}`, value: on ? 'true' : 'false' });
+        platformManualLoginCache[platform] = on;
+        showToast(`${platform}：${on ? '已标记为手工登录' : '已取消手工登录'}`, 'success');
+    }
+    catch (e) {
+        el.checked = !on; // 回滚
+        showToast('保存失败', 'error');
+    }
+};
 // ===== Browser Profile Selection (Settings Page) =====
 async function loadSettingsProfiles() {
     const select = document.getElementById('browserProfile');
@@ -4746,6 +6003,122 @@ async function saveSchedulerSettings() {
     }
     catch (error) {
         showToast('Failed to save scheduler settings', 'error');
+    }
+}
+// 设置页区段快速导航：遍历 .settings-section 生成跳转 chip，滚动时高亮当前区段。
+let settingsNavObserver = null;
+function buildSettingsNav() {
+    const nav = document.getElementById('settingsNav');
+    const container = document.querySelector('#page-settings .settings-container');
+    if (!nav || !container)
+        return;
+    const sections = Array.from(container.querySelectorAll('.settings-section'));
+    nav.innerHTML = '';
+    const chipBySection = new Map();
+    sections.forEach((sec, i) => {
+        if (!sec.id)
+            sec.id = `settings-sec-${i}`;
+        const h3 = sec.querySelector('h3');
+        const label = (h3?.textContent || `Section ${i + 1}`).trim();
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'settings-nav-chip';
+        chip.textContent = label;
+        chip.addEventListener('click', () => sec.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+        nav.appendChild(chip);
+        chipBySection.set(sec.id, chip);
+    });
+    // 滚动高亮：区段进入视口上半区时点亮对应 chip
+    if (settingsNavObserver)
+        settingsNavObserver.disconnect();
+    settingsNavObserver = new IntersectionObserver((entries) => {
+        entries.forEach((e) => {
+            if (!e.isIntersecting)
+                return;
+            nav.querySelectorAll('.settings-nav-chip').forEach((c) => c.classList.remove('active'));
+            chipBySection.get(e.target.id)?.classList.add('active');
+        });
+    }, { rootMargin: '-15% 0px -75% 0px', threshold: 0 });
+    sections.forEach((s) => settingsNavObserver.observe(s));
+}
+// 养号周期设置：list_nurture_strategies 回填，update_nurture_strategy 保存。
+// session_duration / active_hours 不在 UI 暴露，回填后原样带回，避免被清零。
+let nurtureStrategyCache = {};
+async function loadNurtureStrategies() {
+    try {
+        const list = await invoke('list_nurture_strategies');
+        nurtureStrategyCache = {};
+        for (const s of list || [])
+            nurtureStrategyCache[s.platform] = s;
+    }
+    catch { /* 表可能尚未播种，留空 */ }
+    populateNurtureForm();
+}
+function populateNurtureForm() {
+    const platform = document.getElementById('nurturePlatform')?.value || 'twitter';
+    const warmupEl = document.getElementById('nurtureWarmupDays');
+    const growthEl = document.getElementById('nurtureGrowthDays');
+    const minEl = document.getElementById('nurtureSessionsMin');
+    const maxEl = document.getElementById('nurtureSessionsMax');
+    const enEl = document.getElementById('nurtureEnabled');
+    if (!warmupEl)
+        return;
+    const fallbackWarmup = platform === 'github' ? 3 : 5;
+    const s = nurtureStrategyCache[platform];
+    if (s) {
+        warmupEl.value = String(s.warmup_days ?? fallbackWarmup);
+        // growth_days 为空时后端用 COALESCE 兜底成 warmup，这里也对齐
+        growthEl.value = String(s.growth_days ?? s.warmup_days ?? fallbackWarmup);
+        minEl.value = String(s.daily_sessions_min ?? 2);
+        maxEl.value = String(s.daily_sessions_max ?? 4);
+        enEl.checked = s.enabled !== false;
+    }
+    else {
+        // 没有该平台的策略行：给中等默认（GitHub 几乎无需养，3 天；成长时长默认 = 预热）
+        warmupEl.value = String(fallbackWarmup);
+        growthEl.value = String(fallbackWarmup);
+        minEl.value = '2';
+        maxEl.value = '4';
+        enEl.checked = true;
+    }
+}
+async function saveNurtureStrategy() {
+    const platform = document.getElementById('nurturePlatform')?.value || 'twitter';
+    const warmupDays = parseInt(document.getElementById('nurtureWarmupDays')?.value || '10', 10);
+    const growthDays = parseInt(document.getElementById('nurtureGrowthDays')?.value || '10', 10);
+    const min = parseInt(document.getElementById('nurtureSessionsMin')?.value || '2', 10);
+    const max = parseInt(document.getElementById('nurtureSessionsMax')?.value || '4', 10);
+    const enabled = document.getElementById('nurtureEnabled')?.checked ?? true;
+    if (!Number.isFinite(warmupDays) || warmupDays < 1) {
+        showToast(`${t('settings.nurtureWarmupDays')} ≥ 1`, 'error');
+        return;
+    }
+    if (!Number.isFinite(growthDays) || growthDays < 0) {
+        showToast(`${t('settings.nurtureGrowthDays')} ≥ 0`, 'error');
+        return;
+    }
+    const sessMin = Math.max(1, Math.min(min, max));
+    const sessMax = Math.max(sessMin, max);
+    // 保留 UI 未暴露的时段/时长配置；无历史值则用合理默认。
+    const prev = nurtureStrategyCache[platform] || {};
+    try {
+        await invoke('update_nurture_strategy', {
+            platform,
+            warmupDays,
+            growthDays,
+            dailySessionsMin: sessMin,
+            dailySessionsMax: sessMax,
+            sessionDurationMin: prev.session_duration_min ?? 60,
+            sessionDurationMax: prev.session_duration_max ?? 300,
+            activeHoursStart: prev.active_hours_start ?? 8,
+            activeHoursEnd: prev.active_hours_end ?? 22,
+            enabled,
+        });
+        showToast(t('settings.saveNurture'), 'success');
+        await loadNurtureStrategies();
+    }
+    catch (error) {
+        showToast(String(error), 'error');
     }
 }
 // Browser status
@@ -5975,6 +7348,8 @@ function renderNurtureOverview(list) {
         logged_out: '<span class="task-stat" style="background:#dc2626;color:#fff;">掉登录</span>',
         shadowbanned: '<span class="task-stat" style="background:#dc2626;color:#fff;">疑似封禁</span>',
         banned: '<span class="task-stat" style="background:#dc2626;color:#fff;">已封</span>',
+        locked: '<span class="task-stat" style="background:#ea580c;color:#fff;">锁定·待验证</span>',
+        restricted: '<span class="task-stat" style="background:#f59e0b;color:#fff;">受限·限流</span>',
         unknown: '<span class="task-stat" style="background:#6b7280;color:#fff;">待体检</span>',
     };
     const phaseLabel = { warmup: '🐣 新号期', growth: '📈 成长期', mature: '🌳 成熟期', '—': '— 无策略' };

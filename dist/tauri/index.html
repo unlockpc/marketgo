@@ -802,9 +802,12 @@
       <div class="page" id="page-accounts">
         <header class="page-header">
           <h2 data-i18n="accounts.pageTitle">👤 身份管理</h2>
-          <button class="btn btn-primary" id="btnAddAccount" style="display:none;">
-            <span data-i18n="accounts.addAccount">+ Add Account</span>
-          </button>
+          <span style="margin-left:auto;display:flex;align-items:center;gap:8px;">
+            <button class="btn btn-success" id="btnNurtureAll" title="对所有账号立即养一轮（今日已养≥2次的自动跳过）">🌱 一键养号 / Nurture All</button>
+            <button class="btn btn-primary" id="btnAddAccount" style="display:none;">
+              <span data-i18n="accounts.addAccount">+ Add Account</span>
+            </button>
+          </span>
         </header>
 
         <!-- Account Health Overview (隐藏：全局健康概览冗余，健康状态已在每个账号卡片上显示) -->
@@ -1960,6 +1963,62 @@
         <button class="btn btn-success" id="btnNurtureStart" onclick="startNurtureFromModal()">Start Nurturing / 开始养号</button>
         <button class="btn btn-danger" id="btnNurtureStop" style="display: none;" onclick="stopNurture()">Stop / 停止</button>
         <button class="btn btn-primary" id="btnNurtureClose" style="display: none;" data-close>Close / 关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Nurture All Accounts Modal (一键养号) -->
+  <div class="modal" id="modalNurtureAll">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>🌱 一键养号 / Nurture All Accounts</h3>
+        <button class="modal-close" data-close>&times;</button>
+      </div>
+      <div class="modal-body">
+        <!-- 设置界面 -->
+        <div id="nurtureAllSetup">
+          <p class="text-muted" style="font-size: 13px; margin-bottom: 15px;">
+            对所有账号逐个养一轮（今日已养 ≥2 次的自动跳过）。后台逐个开浏览器，账号越多耗时越长。<br>
+            Nurture every account one by one (accounts already nurtured ≥2× today are skipped).
+          </p>
+          <p id="nurtureAllPlan" style="font-size: 13px; margin-bottom: 15px; font-weight: bold;"></p>
+          <div class="form-group">
+            <label>每个账号时长 / Duration per account</label>
+            <select id="nurtureAllDuration" class="select">
+              <option value="30">30 seconds / 30 秒</option>
+              <option value="60" selected>1 minute / 1 分钟</option>
+              <option value="120">2 minutes / 2 分钟</option>
+              <option value="300">5 minutes / 5 分钟</option>
+              <option value="600">10 minutes / 10 分钟</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- 进度界面 -->
+        <div id="nurtureAllProgress" style="display: none;">
+          <div style="padding: 10px 0;">
+            <p id="nurtureAllProgressText" style="font-weight: bold; margin-bottom: 12px;"></p>
+            <div class="progress-bar-container" style="background: var(--border); border-radius: 8px; height: 12px; overflow: hidden; margin-bottom: 12px;">
+              <div id="nurtureAllProgressBar" style="background: linear-gradient(90deg, var(--success), var(--primary)); height: 100%; width: 0%; transition: width .4s linear; border-radius: 8px;"></div>
+            </div>
+            <p id="nurtureAllStatusText" class="text-muted" style="font-size: 13px;"></p>
+          </div>
+        </div>
+
+        <!-- 完成界面 -->
+        <div id="nurtureAllComplete" style="display: none;">
+          <div style="text-align: center; padding: 20px 0;">
+            <div style="font-size: 56px; margin-bottom: 12px;">✅</div>
+            <p style="font-size: 18px; font-weight: bold; color: var(--success); margin-bottom: 10px;">一键养号完成</p>
+            <p id="nurtureAllSummary" style="color: var(--text-muted);"></p>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btnNurtureAllCancel" data-close>取消 / Cancel</button>
+        <button class="btn btn-success" id="btnNurtureAllStart">开始养号 / Start</button>
+        <button class="btn btn-danger" id="btnNurtureAllStop" style="display: none;">停止 / Stop</button>
+        <button class="btn btn-primary" id="btnNurtureAllClose" style="display: none;" data-close>关闭 / Close</button>
       </div>
     </div>
   </div>

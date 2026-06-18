@@ -1335,6 +1335,9 @@ function initModals() {
   document.getElementById('btnSelectAllPublish')?.addEventListener('click', selectAllPublishProducts);
   document.getElementById('btnClearPublish')?.addEventListener('click', clearPublishProducts);
   document.getElementById('btnAnalyze')?.addEventListener('click', analyzeUrl);
+  document.getElementById('btnNurtureAll')?.addEventListener('click', openNurtureAllModal);
+  document.getElementById('btnNurtureAllStart')?.addEventListener('click', startNurtureAll);
+  document.getElementById('btnNurtureAllStop')?.addEventListener('click', stopNurtureAll);
   document.getElementById('btnAddAccount')?.addEventListener('click', () => openModal('modalAddAccount'));
   document.getElementById('btnAddAccountEmpty')?.addEventListener('click', () => openModal('modalAddAccount'));
   document.getElementById('btnSaveAccount')?.addEventListener('click', saveAccount);
@@ -3805,6 +3808,140 @@ function resetNurtureModal() {
   if (btnCancel) btnCancel.style.display = 'inline-block';
   if (btnClose) btnClose.style.display = 'none';
   if (progressBar) progressBar.style.width = '0%';
+}
+
+// ---- 一键养号（Nurture All）----
+// 对所有账号逐个串行跑一轮 quick_nurture，今日养号次数 ≥ 阈值的自动跳过。
+const NURTURE_ALL_SKIP_THRESHOLD = 2;
+let nurtureAllRunning = false;
+let nurtureAllAborted = false;
+
+/** 计算本轮养号清单：跳过今日已养 ≥ 阈值次的账号。 */
+function computeNurtureAllPlan(): { todo: any[]; skipped: number } {
+  const todo: any[] = [];
+  let skipped = 0;
+  for (const account of accounts) {
+    const today = accountLifecycles.get(account.id)?.today?.sessions_completed || 0;
+    if (today >= NURTURE_ALL_SKIP_THRESHOLD) skipped++;
+    else todo.push(account);
+  }
+  return { todo, skipped };
+}
+
+function resetNurtureAllModal() {
+  const setup = document.getElementById('nurtureAllSetup');
+  const progress = document.getElementById('nurtureAllProgress');
+  const complete = document.getElementById('nurtureAllComplete');
+  const btnStart = document.getElementById('btnNurtureAllStart');
+  const btnStop = document.getElementById('btnNurtureAllStop');
+  const btnCancel = document.getElementById('btnNurtureAllCancel');
+  const btnClose = document.getElementById('btnNurtureAllClose');
+  const bar = document.getElementById('nurtureAllProgressBar');
+  if (setup) setup.style.display = 'block';
+  if (progress) progress.style.display = 'none';
+  if (complete) complete.style.display = 'none';
+  if (btnStart) btnStart.style.display = 'inline-block';
+  if (btnStop) btnStop.style.display = 'none';
+  if (btnCancel) btnCancel.style.display = 'inline-block';
+  if (btnClose) btnClose.style.display = 'none';
+  if (bar) bar.style.width = '0%';
+}
+
+function openNurtureAllModal() {
+  if (nurtureInProgress || nurtureAllRunning) {
+    showToast('有养号任务正在进行', 'warning');
+    return;
+  }
+  resetNurtureAllModal();
+  const { todo, skipped } = computeNurtureAllPlan();
+  const planEl = document.getElementById('nurtureAllPlan');
+  if (planEl) {
+    planEl.textContent = `共 ${accounts.length} 个账号：本轮养 ${todo.length} 个，跳过 ${skipped} 个（今日已养 ≥${NURTURE_ALL_SKIP_THRESHOLD} 次）`;
+  }
+  const btnStart = document.getElementById('btnNurtureAllStart') as HTMLButtonElement | null;
+  if (btnStart) btnStart.disabled = todo.length === 0;
+  openModal('modalNurtureAll');
+}
+
+async function startNurtureAll() {
+  const { todo } = computeNurtureAllPlan();
+  if (!todo.length) {
+    showToast('没有需要养号的账号（今日均已养 ≥2 次）', 'info');
+    return;
+  }
+  const seconds = parseInt((document.getElementById('nurtureAllDuration') as HTMLSelectElement)?.value || '60');
+
+  // 切到进度态
+  const setup = document.getElementById('nurtureAllSetup');
+  const progress = document.getElementById('nurtureAllProgress');
+  const btnStart = document.getElementById('btnNurtureAllStart');
+  const btnStop = document.getElementById('btnNurtureAllStop');
+  const btnCancel = document.getElementById('btnNurtureAllCancel');
+  if (setup) setup.style.display = 'none';
+  if (progress) progress.style.display = 'block';
+  if (btnStart) btnStart.style.display = 'none';
+  if (btnStop) btnStop.style.display = 'inline-block';
+  if (btnCancel) btnCancel.style.display = 'none';
+
+  const btnHeader = document.getElementById('btnNurtureAll') as HTMLButtonElement | null;
+  if (btnHeader) btnHeader.disabled = true;
+
+  nurtureAllRunning = true;
+  nurtureAllAborted = false;
+  nurtureInProgress = '__nurture_all__'; // 与单账号养号互斥
+
+  const total = todo.length;
+  let ok = 0, fail = 0;
+  const textEl = document.getElementById('nurtureAllProgressText');
+  const barEl = document.getElementById('nurtureAllProgressBar');
+  const statusEl = document.getElementById('nurtureAllStatusText');
+
+  for (let i = 0; i < total; i++) {
+    if (nurtureAllAborted) break;
+    const account = todo[i];
+    const name = account.username || account.email || account.platform || account.id;
+    if (textEl) textEl.textContent = `正在养号 ${i + 1}/${total}：${name}`;
+    if (barEl) barEl.style.width = `${Math.round((i / total) * 100)}%`;
+    try {
+      await invoke<string>('quick_nurture', { accountId: account.id, seconds });
+      ok++;
+      if (statusEl) statusEl.textContent = `✅ 成功 ${ok} · ❌ 失败 ${fail}`;
+    } catch (e) {
+      fail++;
+      console.error('Nurture failed for', account.id, e);
+      if (statusEl) statusEl.textContent = `✅ 成功 ${ok} · ❌ 失败 ${fail}（最近失败：${name}）`;
+    }
+  }
+  if (barEl) barEl.style.width = '100%';
+
+  nurtureAllRunning = false;
+  nurtureInProgress = null;
+  if (btnHeader) btnHeader.disabled = false;
+
+  // 完成态
+  const completeDiv = document.getElementById('nurtureAllComplete');
+  const summaryEl = document.getElementById('nurtureAllSummary');
+  const btnStopEnd = document.getElementById('btnNurtureAllStop');
+  const btnClose = document.getElementById('btnNurtureAllClose');
+  if (progress) progress.style.display = 'none';
+  if (completeDiv) completeDiv.style.display = 'block';
+  if (btnStopEnd) btnStopEnd.style.display = 'none';
+  if (btnClose) btnClose.style.display = 'inline-block';
+  const skippedCount = accounts.length - total;
+  const stoppedNote = nurtureAllAborted ? '（已手动停止）' : '';
+  if (summaryEl) summaryEl.textContent = `✅ 成功 ${ok} · ⏭ 跳过 ${skippedCount} · ❌ 失败 ${fail}${stoppedNote}`;
+  if (completeDiv) {
+    const title = completeDiv.querySelector('p');
+    if (title) title.textContent = nurtureAllAborted ? '一键养号已停止' : '一键养号完成';
+  }
+
+  await loadAccounts();
+}
+
+function stopNurtureAll() {
+  nurtureAllAborted = true;
+  const statusEl = document.getElementById('nurtureAllStatusText');
+  if (statusEl) statusEl.textContent = (statusEl.textContent || '') + ' · 停止中，养完当前账号后结束…';
 }
 
 // ============================================================================
