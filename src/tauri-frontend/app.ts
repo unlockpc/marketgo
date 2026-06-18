@@ -3862,8 +3862,33 @@ function resetNurtureAllModal() {
   if (bar) { bar.classList.remove('nurture-indeterminate'); bar.style.width = '0%'; }
 }
 
+/** 切到「进度」视图（开跑时、以及跑的过程中重新打开弹框时复用）。 */
+function setNurtureAllProgressView() {
+  const setup = document.getElementById('nurtureAllSetup');
+  const progress = document.getElementById('nurtureAllProgress');
+  const complete = document.getElementById('nurtureAllComplete');
+  const btnStart = document.getElementById('btnNurtureAllStart');
+  const btnStop = document.getElementById('btnNurtureAllStop');
+  const btnCancel = document.getElementById('btnNurtureAllCancel');
+  const btnClose = document.getElementById('btnNurtureAllClose');
+  if (setup) setup.style.display = 'none';
+  if (progress) progress.style.display = 'block';
+  if (complete) complete.style.display = 'none';
+  if (btnStart) btnStart.style.display = 'none';
+  if (btnStop) btnStop.style.display = 'inline-block';
+  if (btnCancel) btnCancel.style.display = 'none';
+  if (btnClose) btnClose.style.display = 'none';
+}
+
 function openNurtureAllModal() {
-  if (nurtureInProgress || nurtureAllRunning) {
+  // 已有一键养号在后台跑：直接回到进度视图（关弹框只是隐藏，活儿一直在跑）。
+  if (nurtureAllRunning) {
+    setNurtureAllProgressView();
+    openModal('modalNurtureAll');
+    return;
+  }
+  // 有单账号养号在跑：两者互斥，提示一下。
+  if (nurtureInProgress) {
     showToast('有养号任务正在进行', 'warning');
     return;
   }
@@ -3886,20 +3911,9 @@ async function startNurtureAll() {
   }
   const seconds = parseInt((document.getElementById('nurtureAllDuration') as HTMLSelectElement)?.value || '60');
 
-  // 切到进度态
-  const setup = document.getElementById('nurtureAllSetup');
-  const progress = document.getElementById('nurtureAllProgress');
-  const btnStart = document.getElementById('btnNurtureAllStart');
-  const btnStop = document.getElementById('btnNurtureAllStop');
-  const btnCancel = document.getElementById('btnNurtureAllCancel');
-  if (setup) setup.style.display = 'none';
-  if (progress) progress.style.display = 'block';
-  if (btnStart) btnStart.style.display = 'none';
-  if (btnStop) btnStop.style.display = 'inline-block';
-  if (btnCancel) btnCancel.style.display = 'none';
-
-  const btnHeader = document.getElementById('btnNurtureAll') as HTMLButtonElement | null;
-  if (btnHeader) btnHeader.disabled = true;
+  // 切到进度态。不禁用头部「一键养号」按钮：跑的过程中可以关掉弹框（后台继续跑），
+  // 再点头部按钮即可回到这个进度视图。
+  setNurtureAllProgressView();
 
   nurtureAllRunning = true;
   nurtureAllAborted = false;
@@ -3997,24 +4011,27 @@ async function startNurtureAll() {
 
   nurtureAllRunning = false;
   nurtureInProgress = null;
-  if (btnHeader) btnHeader.disabled = false;
 
-  // 完成态
+  // 完成态（弹框可能已被关掉，元素仍在 DOM 里，照常更新；用户下次打开会是新的一轮）
+  const progressDiv = document.getElementById('nurtureAllProgress');
   const completeDiv = document.getElementById('nurtureAllComplete');
   const summaryEl = document.getElementById('nurtureAllSummary');
   const btnStopEnd = document.getElementById('btnNurtureAllStop');
   const btnClose = document.getElementById('btnNurtureAllClose');
-  if (progress) progress.style.display = 'none';
+  if (progressDiv) progressDiv.style.display = 'none';
   if (completeDiv) completeDiv.style.display = 'block';
   if (btnStopEnd) btnStopEnd.style.display = 'none';
   if (btnClose) btnClose.style.display = 'inline-block';
   const skippedCount = accounts.length - total;
   const stoppedNote = nurtureAllAborted ? '（已手动停止）' : '';
-  if (summaryEl) summaryEl.textContent = `✅ 成功 ${ok} · ⏭ 跳过 ${skippedCount} · ❌ 失败 ${fail}${stoppedNote}`;
+  const summary = `✅ 成功 ${ok} · ⏭ 跳过 ${skippedCount} · ❌ 失败 ${fail}${stoppedNote}`;
+  if (summaryEl) summaryEl.textContent = summary;
   if (completeDiv) {
     const title = completeDiv.querySelector('p');
     if (title) title.textContent = nurtureAllAborted ? '一键养号已停止' : '一键养号完成';
   }
+  // 弹框可能被关掉了，用 toast 兜底通知后台跑完了。
+  showToast(`一键养号完成 · ${summary}`, nurtureAllAborted ? 'info' : 'success');
 
   await loadAccounts();
 }

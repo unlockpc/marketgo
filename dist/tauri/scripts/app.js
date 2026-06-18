@@ -3577,8 +3577,29 @@
       bar.style.width = "0%";
     }
   }
+  function setNurtureAllProgressView() {
+    const setup = document.getElementById("nurtureAllSetup");
+    const progress = document.getElementById("nurtureAllProgress");
+    const complete = document.getElementById("nurtureAllComplete");
+    const btnStart = document.getElementById("btnNurtureAllStart");
+    const btnStop = document.getElementById("btnNurtureAllStop");
+    const btnCancel = document.getElementById("btnNurtureAllCancel");
+    const btnClose = document.getElementById("btnNurtureAllClose");
+    if (setup) setup.style.display = "none";
+    if (progress) progress.style.display = "block";
+    if (complete) complete.style.display = "none";
+    if (btnStart) btnStart.style.display = "none";
+    if (btnStop) btnStop.style.display = "inline-block";
+    if (btnCancel) btnCancel.style.display = "none";
+    if (btnClose) btnClose.style.display = "none";
+  }
   function openNurtureAllModal() {
-    if (nurtureInProgress || nurtureAllRunning) {
+    if (nurtureAllRunning) {
+      setNurtureAllProgressView();
+      openModal("modalNurtureAll");
+      return;
+    }
+    if (nurtureInProgress) {
       showToast("\u6709\u517B\u53F7\u4EFB\u52A1\u6B63\u5728\u8FDB\u884C", "warning");
       return;
     }
@@ -3599,18 +3620,7 @@
       return;
     }
     const seconds = parseInt(document.getElementById("nurtureAllDuration")?.value || "60");
-    const setup = document.getElementById("nurtureAllSetup");
-    const progress = document.getElementById("nurtureAllProgress");
-    const btnStart = document.getElementById("btnNurtureAllStart");
-    const btnStop = document.getElementById("btnNurtureAllStop");
-    const btnCancel = document.getElementById("btnNurtureAllCancel");
-    if (setup) setup.style.display = "none";
-    if (progress) progress.style.display = "block";
-    if (btnStart) btnStart.style.display = "none";
-    if (btnStop) btnStop.style.display = "inline-block";
-    if (btnCancel) btnCancel.style.display = "none";
-    const btnHeader = document.getElementById("btnNurtureAll");
-    if (btnHeader) btnHeader.disabled = true;
+    setNurtureAllProgressView();
     nurtureAllRunning = true;
     nurtureAllAborted = false;
     nurtureInProgress = "__nurture_all__";
@@ -3699,22 +3709,24 @@
     }
     nurtureAllRunning = false;
     nurtureInProgress = null;
-    if (btnHeader) btnHeader.disabled = false;
+    const progressDiv = document.getElementById("nurtureAllProgress");
     const completeDiv = document.getElementById("nurtureAllComplete");
     const summaryEl = document.getElementById("nurtureAllSummary");
     const btnStopEnd = document.getElementById("btnNurtureAllStop");
     const btnClose = document.getElementById("btnNurtureAllClose");
-    if (progress) progress.style.display = "none";
+    if (progressDiv) progressDiv.style.display = "none";
     if (completeDiv) completeDiv.style.display = "block";
     if (btnStopEnd) btnStopEnd.style.display = "none";
     if (btnClose) btnClose.style.display = "inline-block";
     const skippedCount = accounts.length - total;
     const stoppedNote = nurtureAllAborted ? "\uFF08\u5DF2\u624B\u52A8\u505C\u6B62\uFF09" : "";
-    if (summaryEl) summaryEl.textContent = `\u2705 \u6210\u529F ${ok} \xB7 \u23ED \u8DF3\u8FC7 ${skippedCount} \xB7 \u274C \u5931\u8D25 ${fail}${stoppedNote}`;
+    const summary = `\u2705 \u6210\u529F ${ok} \xB7 \u23ED \u8DF3\u8FC7 ${skippedCount} \xB7 \u274C \u5931\u8D25 ${fail}${stoppedNote}`;
+    if (summaryEl) summaryEl.textContent = summary;
     if (completeDiv) {
       const title = completeDiv.querySelector("p");
       if (title) title.textContent = nurtureAllAborted ? "\u4E00\u952E\u517B\u53F7\u5DF2\u505C\u6B62" : "\u4E00\u952E\u517B\u53F7\u5B8C\u6210";
     }
+    showToast(`\u4E00\u952E\u517B\u53F7\u5B8C\u6210 \xB7 ${summary}`, nurtureAllAborted ? "info" : "success");
     await loadAccounts();
   }
   function stopNurtureAll() {
