@@ -3530,6 +3530,7 @@
     if (progressBar) progressBar.style.width = "0%";
   }
   var NURTURE_ALL_SKIP_THRESHOLD = 2;
+  var NURTURE_ALL_CONCURRENCY = 2;
   var nurtureAllRunning = false;
   var nurtureAllAborted = false;
   function computeNurtureAllPlan() {
@@ -3598,26 +3599,45 @@
     nurtureAllAborted = false;
     nurtureInProgress = "__nurture_all__";
     const total = todo.length;
-    let ok = 0, fail = 0;
+    let ok = 0, fail = 0, done = 0, nextIndex = 0;
+    const inFlight = /* @__PURE__ */ new Set();
     const textEl = document.getElementById("nurtureAllProgressText");
     const barEl = document.getElementById("nurtureAllProgressBar");
     const statusEl = document.getElementById("nurtureAllStatusText");
-    for (let i = 0; i < total; i++) {
-      if (nurtureAllAborted) break;
-      const account = todo[i];
-      const name = account.username || account.email || account.platform || account.id;
-      if (textEl) textEl.textContent = `\u6B63\u5728\u517B\u53F7 ${i + 1}/${total}\uFF1A${name}`;
-      if (barEl) barEl.style.width = `${Math.round(i / total * 100)}%`;
-      try {
-        await invoke2("quick_nurture", { accountId: account.id, seconds });
-        ok++;
-        if (statusEl) statusEl.textContent = `\u2705 \u6210\u529F ${ok} \xB7 \u274C \u5931\u8D25 ${fail}`;
-      } catch (e) {
-        fail++;
-        console.error("Nurture failed for", account.id, e);
-        if (statusEl) statusEl.textContent = `\u2705 \u6210\u529F ${ok} \xB7 \u274C \u5931\u8D25 ${fail}\uFF08\u6700\u8FD1\u5931\u8D25\uFF1A${name}\uFF09`;
+    const renderProgress = () => {
+      if (textEl) textEl.textContent = `\u517B\u53F7\u4E2D ${done}/${total}\uFF08\u5E76\u53D1 ${NURTURE_ALL_CONCURRENCY}\uFF09`;
+      if (barEl) barEl.style.width = `${Math.round(done / total * 100)}%`;
+      if (statusEl) {
+        const running = inFlight.size ? ` \xB7 \u8FDB\u884C\u4E2D\uFF1A${[...inFlight].join("\u3001")}` : "";
+        statusEl.textContent = `\u2705 \u6210\u529F ${ok} \xB7 \u274C \u5931\u8D25 ${fail}${running}`;
       }
-    }
+    };
+    renderProgress();
+    const worker = async () => {
+      for (; ; ) {
+        if (nurtureAllAborted) return;
+        const i = nextIndex++;
+        if (i >= total) return;
+        const account = todo[i];
+        const name = account.username || account.email || account.platform || account.id;
+        inFlight.add(name);
+        renderProgress();
+        try {
+          await invoke2("quick_nurture", { accountId: account.id, seconds });
+          ok++;
+        } catch (e) {
+          fail++;
+          console.error("Nurture failed for", account.id, e);
+        } finally {
+          inFlight.delete(name);
+          done++;
+          renderProgress();
+        }
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(NURTURE_ALL_CONCURRENCY, total) }, () => worker())
+    );
     if (barEl) barEl.style.width = "100%";
     nurtureAllRunning = false;
     nurtureInProgress = null;

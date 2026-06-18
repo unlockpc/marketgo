@@ -3785,6 +3785,7 @@ function resetNurtureModal() {
 // ---- 一键养号（Nurture All）----
 // 对所有账号逐个串行跑一轮 quick_nurture，今日养号次数 ≥ 阈值的自动跳过。
 const NURTURE_ALL_SKIP_THRESHOLD = 2;
+const NURTURE_ALL_CONCURRENCY = 2; // 同时最多养几个账号（每个要开一个真实浏览器，别开太多）
 let nurtureAllRunning = false;
 let nurtureAllAborted = false;
 /** 计算本轮养号清单：跳过今日已养 ≥ 阈值次的账号。 */
@@ -3872,32 +3873,50 @@ async function startNurtureAll() {
     nurtureAllAborted = false;
     nurtureInProgress = '__nurture_all__'; // 与单账号养号互斥
     const total = todo.length;
-    let ok = 0, fail = 0;
+    let ok = 0, fail = 0, done = 0, nextIndex = 0;
+    const inFlight = new Set();
     const textEl = document.getElementById('nurtureAllProgressText');
     const barEl = document.getElementById('nurtureAllProgressBar');
     const statusEl = document.getElementById('nurtureAllStatusText');
-    for (let i = 0; i < total; i++) {
-        if (nurtureAllAborted)
-            break;
-        const account = todo[i];
-        const name = account.username || account.email || account.platform || account.id;
+    const renderProgress = () => {
         if (textEl)
-            textEl.textContent = `正在养号 ${i + 1}/${total}：${name}`;
+            textEl.textContent = `养号中 ${done}/${total}（并发 ${NURTURE_ALL_CONCURRENCY}）`;
         if (barEl)
-            barEl.style.width = `${Math.round((i / total) * 100)}%`;
-        try {
-            await invoke('quick_nurture', { accountId: account.id, seconds });
-            ok++;
-            if (statusEl)
-                statusEl.textContent = `✅ 成功 ${ok} · ❌ 失败 ${fail}`;
+            barEl.style.width = `${Math.round((done / total) * 100)}%`;
+        if (statusEl) {
+            const running = inFlight.size ? ` · 进行中：${[...inFlight].join('、')}` : '';
+            statusEl.textContent = `✅ 成功 ${ok} · ❌ 失败 ${fail}${running}`;
         }
-        catch (e) {
-            fail++;
-            console.error('Nurture failed for', account.id, e);
-            if (statusEl)
-                statusEl.textContent = `✅ 成功 ${ok} · ❌ 失败 ${fail}（最近失败：${name}）`;
+    };
+    renderProgress();
+    // 并发工作池：固定数量的 worker 各自从清单里取下一个账号，取完即止。
+    const worker = async () => {
+        for (;;) {
+            if (nurtureAllAborted)
+                return;
+            const i = nextIndex++;
+            if (i >= total)
+                return;
+            const account = todo[i];
+            const name = account.username || account.email || account.platform || account.id;
+            inFlight.add(name);
+            renderProgress();
+            try {
+                await invoke('quick_nurture', { accountId: account.id, seconds });
+                ok++;
+            }
+            catch (e) {
+                fail++;
+                console.error('Nurture failed for', account.id, e);
+            }
+            finally {
+                inFlight.delete(name);
+                done++;
+                renderProgress();
+            }
         }
-    }
+    };
+    await Promise.all(Array.from({ length: Math.min(NURTURE_ALL_CONCURRENCY, total) }, () => worker()));
     if (barEl)
         barEl.style.width = '100%';
     nurtureAllRunning = false;
