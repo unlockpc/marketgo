@@ -10845,7 +10845,7 @@ async fn github_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -
             if let Ok(conn) = st.db.lock() { let _ = gh_record_action(&conn, account_id, "star", repo); }
             done += 1;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(get_random_delay(60, 180))).await;
+        tokio::time::sleep(std::time::Duration::from_millis(get_random_delay(15, 40))).await;
     }
     // follow：对已 star 的 repo follow 其 owner（owner profile = https://github.com/owner）
     if n_follow > 0 {
@@ -10867,7 +10867,7 @@ async fn github_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -
                     let locked = st.db.lock();
                     if let Ok(conn) = locked { let _ = gh_record_action(&conn, account_id, "follow", &owner_url); }
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(get_random_delay(60, 180))).await;
+                tokio::time::sleep(std::time::Duration::from_millis(get_random_delay(15, 40))).await;
             }
         }
     }
