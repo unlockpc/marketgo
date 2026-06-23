@@ -10,6 +10,11 @@ use uuid::Uuid;
 use chrono::{Utc, Local, Timelike};
 use reqwest::Client;
 
+// 业务域模块（从原单文件 lib.rs 逐步拆分而来）
+mod airport;
+mod metrics;
+mod engage;
+
 // ============================================================================
 // 反风控安全配置 - Anti-Detection Safety Settings
 // ============================================================================
@@ -504,7 +509,7 @@ use std::os::windows::process::CommandExt;
 // Unzoo REST API Integration
 // ============================================================================
 
-const UNZOO_API_BASE: &str = "http://127.0.0.1:9399/api/v1";
+pub(crate) const UNZOO_API_BASE: &str = "http://127.0.0.1:9399/api/v1";
 
 // Auto-start Unzoo Browser when app launches
 fn auto_start_unzoo_browser() -> Result<(), String> {
@@ -617,7 +622,7 @@ fn get_saved_browser_profile() -> String {
 }
 
 // Ensure browser is connected, launch a profile if needed
-async fn ensure_browser_connected() -> Result<String, String> {
+pub(crate) async fn ensure_browser_connected() -> Result<String, String> {
     // Check if we already have an active tab
     if let Some(tab_id) = get_active_tab() {
         // Verify the tab is still valid
@@ -2979,7 +2984,7 @@ fn unzoo_mcp(name: &str, args: serde_json::Value) -> Result<String, String> {
 }
 
 /// 拟人每字符打字间隔（毫秒）~45–110ms。
-fn human_type_delay_ms() -> i64 {
+pub(crate) fn human_type_delay_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     let n = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0) as i64;
     45 + (n % 65)
@@ -3151,7 +3156,7 @@ fn unzoo_wait_text(needle: &str, fail_needle: Option<&str>, timeout_secs: u64) -
 }
 
 // Database state
-struct AppState {
+pub(crate) struct AppState {
     db: Mutex<Connection>,
 }
 
@@ -9735,7 +9740,7 @@ Keywords: {}"#,
 // Unzoo REST API Functions
 // ============================================================================
 
-fn get_http_client() -> Client {
+pub(crate) fn get_http_client() -> Client {
     Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
@@ -9750,7 +9755,7 @@ fn get_http_client() -> Client {
 /// A single shared client (held forever in a OnceLock) is never dropped, so
 /// per-call clones can be created/dropped freely from any context. Clones share
 /// the same connection pool + runtime.
-fn get_blocking_client() -> reqwest::blocking::Client {
+pub(crate) fn get_blocking_client() -> reqwest::blocking::Client {
     static BLOCKING_CLIENT: std::sync::OnceLock<reqwest::blocking::Client> = std::sync::OnceLock::new();
     BLOCKING_CLIENT
         .get_or_init(|| {
@@ -10923,20 +10928,26 @@ async fn github_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -
                         gh_already_acted(&locked, account_id, &thread_url)
                     };
                     if !already {
-                        let text = gh_benign_comment(seed);
-                        if mode == "auto" {
+                        let _ = mode; // 养号路径直发，不再走审核队列
+                        // 抓 Issue 标题 + 正文 → AI 生成评论 → 直发（无 AI / 不合格则跳过，不记录）
+                        let tu_nav = thread_url.clone();
+                        let issue_text = tauri::async_runtime::spawn_blocking(move || {
+                            unzoo_navigate(&tu_nav)?;
+                            std::thread::sleep(std::time::Duration::from_millis(get_random_delay(2, 5)));
+                            let title = unzoo_get_text_sel(".js-issue-title").unwrap_or_default();
+                            let body = unzoo_get_text_sel(".markdown-body").unwrap_or_default();
+                            Ok::<String, String>(format!("{}\n{}", title, body))
+                        }).await.map_err(|e| e.to_string())?.unwrap_or_default();
+                        if let Some(text) = gen_nurture_text(app, "gh_comment", &issue_text).await {
                             let tu = thread_url.clone(); let tx = text.clone();
-                            let _ = tauri::async_runtime::spawn_blocking(move || post_reply_to_url("github", &tu, &tx)).await.map_err(|e| e.to_string())?;
-                        } else {
-                            let locked = st.db.lock();
-                            if let Ok(conn) = locked {
-                                let _ = conn.execute(
-                                    "INSERT INTO reply_history (id, platform, post_url, reply_content, status) VALUES (?1,'github',?2,?3,'pending_review')",
-                                    params![Uuid::new_v4().to_string(), thread_url, text]);
+                            let posted = tauri::async_runtime::spawn_blocking(move || post_reply_to_url("github", &tu, &tx)).await.map_err(|e| e.to_string())?;
+                            if posted.is_ok() {
+                                let locked = st.db.lock();
+                                if let Ok(conn) = locked { let _ = gh_record_action(&conn, account_id, "comment", &thread_url); }
                             }
+                        } else {
+                            emit_nurture_step(app, account_id, "未配置 AI 或生成失败，跳过 Issue 评论");
                         }
-                        let locked = st.db.lock();
-                        if let Ok(conn) = locked { let _ = gh_record_action(&conn, account_id, "comment", &thread_url); }
                     }
                 }
             }
@@ -11287,8 +11298,17 @@ async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Res
             let r = if i % 2 == 0 {
                 tauri::async_runtime::spawn_blocking(move || x_retweet_blocking(&tc)).await.map_err(|e| e.to_string())?
             } else {
-                let txt = x_benign_tweet(seed.wrapping_add(i as u64));
-                tauri::async_runtime::spawn_blocking(move || x_reply_blocking(&tc, &txt)).await.map_err(|e| e.to_string())?
+                // 抓推文正文 → AI 基于内容生成回复（无 AI / 不合格则跳过本次回复）
+                let tc_nav = tc.clone();
+                let tweet_text = tauri::async_runtime::spawn_blocking(move || {
+                    unzoo_navigate(&tc_nav)?;
+                    std::thread::sleep(std::time::Duration::from_millis(get_random_delay(2, 5)));
+                    unzoo_get_text_sel("[data-testid=\"tweetText\"]")
+                }).await.map_err(|e| e.to_string())?.unwrap_or_default();
+                match gen_nurture_text(app, "x_reply", &tweet_text).await {
+                    Some(txt) => tauri::async_runtime::spawn_blocking(move || x_reply_blocking(&tc, &txt)).await.map_err(|e| e.to_string())?,
+                    None => { emit_nurture_step(app, account_id, "未配置 AI 或生成失败，跳过本次回复"); Err(String::new()) }
+                }
             };
             if r.is_ok() {
                 let st = app.state::<AppState>(); let l = st.db.lock();
@@ -11315,9 +11335,13 @@ async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Res
             (age, l1, weekly)
         };
         if x_l3_allowed(age, warmup, l1) && weekly < 1 {
-            let text = x_benign_tweet(seed.wrapping_mul(7));
-            let txt = text.clone();
-            let r = tauri::async_runtime::spawn_blocking(move || x_post_tweet_blocking(&txt)).await.map_err(|e| e.to_string())?;
+            // AI 基于账号领域生成一条原创（L3 无原文，按领域/话题；无 AI / 不合格则跳过）
+            let domains_str = niches.join("、");
+            let ctx = format!("领域: {} / 话题: {}", domains_str, kw);
+            let r = match gen_nurture_text(app, "x_tweet", &ctx).await {
+                Some(txt) => tauri::async_runtime::spawn_blocking(move || x_post_tweet_blocking(&txt)).await.map_err(|e| e.to_string())?,
+                None => { emit_nurture_step(app, account_id, "未配置 AI 或生成失败，跳过原创"); Err(String::new()) }
+            };
             if r.is_ok() {
                 let st2 = app.state::<AppState>(); let l = st2.db.lock();
                 if let Ok(conn) = l {
@@ -12203,14 +12227,14 @@ pub struct EngineStatus {
     pub failed: i64,
 }
 
-fn engine_cfg_set(conn: &Connection, key: &str, value: &str) {
+pub(crate) fn engine_cfg_set(conn: &Connection, key: &str, value: &str) {
     let _ = conn.execute(
         "INSERT OR REPLACE INTO config (key, value) VALUES (?1, ?2)",
         params![key, value],
     );
 }
 
-fn engine_cfg_get(conn: &Connection, key: &str) -> Option<String> {
+pub(crate) fn engine_cfg_get(conn: &Connection, key: &str) -> Option<String> {
     conn.query_row("SELECT value FROM config WHERE key = ?1", params![key], |r| r.get(0)).ok()
 }
 
@@ -12630,7 +12654,7 @@ fn engine_is_dry_run(app: &AppHandle) -> bool {
 }
 
 /// 回复模式：review（半自动，入审核队列）| auto（全自动，直接发）。默认 review。
-fn engine_reply_mode(conn: &Connection) -> String {
+pub(crate) fn engine_reply_mode(conn: &Connection) -> String {
     engine_cfg_get(conn, "engine_reply_mode").unwrap_or_else(|| "review".to_string())
 }
 
@@ -12716,7 +12740,7 @@ fn reddit_sub_blocks_promo(post_url: &str) -> bool {
 }
 
 /// 宽松解析时间戳（兼容 rfc3339 与 "YYYY-MM-DD HH:MM:SS"）。
-fn parse_dt(s: &str) -> Option<chrono::DateTime<Utc>> {
+pub(crate) fn parse_dt(s: &str) -> Option<chrono::DateTime<Utc>> {
     if let Ok(d) = chrono::DateTime::parse_from_rfc3339(s) {
         return Some(d.with_timezone(&Utc));
     }
@@ -13113,419 +13137,10 @@ fn enqueue_post_task(conn: &Connection, post: &PostItem) -> Result<String, Strin
     Ok(task_id)
 }
 
-// ===================== 成效追踪（搜索排名 + 品牌提及 + 可选 Trends）=====================
-// 全程走 Unzoo 的专用 auto/Default profile（与发帖 profile 隔离 → 排名最干净、最可比）。
-// 实测验证过：SERP 解析 JS 可定位域名排名；品牌词 Trends 对小品牌返回"无足够数据"。
-const METRICS_PROFILE_NAME: &str = "um-metrics"; // 专用采集 profile（干净/不登录/不绑代理，与身份隔离的 auto 分开）
-const METRICS_GL: &str = "us";
-const METRICS_HL: &str = "zh-CN";
-const METRICS_REGION: &str = "us/zh-CN";
-
-struct KwRow { keyword: String, kind: String, domain: String }
-
-/// 解析专用采集 profile 的完整路径：按 name=="um-metrics" 找；找不到就建一个**干净**的（不登录/不绑代理）。
-/// 关键：绝不回退到 auto/Default——那个现在可能是某个登录态身份，会污染排名采集。
-/// 也：/tabs/create 的 profile_id 不会真正切 profile，必须 /profiles/launch + profile_path。
-fn metrics_resolve_profile_path() -> Result<String, String> {
-    let client = get_blocking_client();
-    let resp = client.get(&format!("{}/profiles", UNZOO_API_BASE))
-        .send().map_err(|e| format!("列出 profiles 失败: {}", e))?;
-    let v: serde_json::Value = resp.json().unwrap_or_default();
-    let arr = v.get("data").and_then(|d| d.get("profiles"))
-        .or_else(|| v.get("profiles"))
-        .and_then(|x| x.as_array()).cloned().unwrap_or_default();
-    // 按文件夹 Profile_um-metrics 匹配（Unzoo 给程序建的 profile 显示名是默认"用户N"，不能按显示名匹配）
-    let want_folder = format!("Profile_{}", METRICS_PROFILE_NAME);
-    for p in &arr {
-        let name = p.get("name").and_then(|n| n.as_str());
-        let path = p.get("path").and_then(|x| x.as_str()).unwrap_or("");
-        let norm = path.replace('/', "\\");
-        let folder = norm.rsplit('\\').next().unwrap_or("");
-        if name == Some(METRICS_PROFILE_NAME) || folder == want_folder {
-            return Ok(path.to_string());
-        }
-    }
-    // 不存在 → 现建一个干净的专用采集 profile（不登录、不绑代理）
-    let resp = client.post(&format!("{}/profiles/create", UNZOO_API_BASE))
-        .json(&serde_json::json!({"name": METRICS_PROFILE_NAME, "group": "metrics", "tags": ["unmarket-metrics"]}))
-        .send().map_err(|e| format!("建采集 profile 失败: {}", e))?;
-    if !resp.status().is_success() { return Err(format!("建采集 profile 失败: HTTP {}", resp.status())); }
-    let data: serde_json::Value = resp.json().unwrap_or_default();
-    let path = data.get("data").and_then(|d| d.get("path")).and_then(|p| p.as_str())
-        .or_else(|| data.get("path").and_then(|p| p.as_str()))
-        .ok_or("建采集 profile 成功但无 path")?;
-    Ok(path.to_string())
-}
-
-/// 启动专用采集 profile（auto，独立窗口，与发帖 profile 完全隔离）并返回其窗口里的一个标签页 id。
-fn metrics_ensure_tab() -> Result<String, String> {
-    let path = metrics_resolve_profile_path()?;
-    let client = get_blocking_client();
-    let resp = client.post(&format!("{}/profiles/launch", UNZOO_API_BASE))
-        .json(&serde_json::json!({"profile_path": path}))
-        .send().map_err(|e| format!("启动采集 profile 失败: {}", e))?;
-    if !resp.status().is_success() {
-        return Err(format!("启动采集 profile 失败: HTTP {}", resp.status()));
-    }
-    let data: serde_json::Value = resp.json().unwrap_or_default();
-    let tid = data.get("data").and_then(|d| d.get("tab_id")).map(|t| {
-        if let Some(n) = t.as_i64() { n.to_string() }
-        else if let Some(s) = t.as_str() { s.to_string() }
-        else { String::new() }
-    }).unwrap_or_default();
-    if tid.is_empty() { return Err("采集 profile 启动后无 tab_id".into()); }
-    Ok(tid)
-}
-
-fn metrics_navigate(tab_id: &str, url: &str) -> Result<(), String> {
-    let client = get_blocking_client();
-    let resp = client.post(&format!("{}/navigate", UNZOO_API_BASE))
-        .json(&serde_json::json!({"tab_id": tab_id, "url": url}))
-        .send().map_err(|e| format!("采集导航失败: {}", e))?;
-    if resp.status().is_success() { Ok(()) } else { Err(format!("采集导航失败: HTTP {}", resp.status())) }
-}
-
-fn metrics_evaluate(tab_id: &str, expr: &str) -> Result<String, String> {
-    let client = get_blocking_client();
-    let resp = client.post(&format!("{}/evaluate", UNZOO_API_BASE))
-        .json(&serde_json::json!({"tab_id": tab_id, "expression": expr}))
-        .send().map_err(|e| format!("采集求值失败: {}", e))?;
-    if !resp.status().is_success() { return Err(format!("采集求值失败: HTTP {}", resp.status())); }
-    let v: serde_json::Value = resp.json().unwrap_or_default();
-    let r = v.get("data").and_then(|d| d.get("result"));
-    Ok(match r {
-        Some(serde_json::Value::String(s)) => s.clone(),
-        Some(other) => other.to_string(),
-        None => String::new(),
-    })
-}
-
-fn metrics_close_tab(tab_id: &str) {
-    let client = get_blocking_client();
-    let _ = client.post(&format!("{}/tabs/close", UNZOO_API_BASE))
-        .json(&serde_json::json!({"tab_id": tab_id})).send();
-}
-
-/// 把 /evaluate 的返回稳健地解析为 JSON（可能是裸 JSON 串，也可能被再包一层 String）。
-fn metrics_parse(raw: &str) -> serde_json::Value {
-    serde_json::from_str::<serde_json::Value>(raw)
-        .or_else(|_| serde_json::from_str::<String>(raw).and_then(|s| serde_json::from_str::<serde_json::Value>(&s)))
-        .unwrap_or_else(|_| serde_json::json!({}))
-}
-
-/// SERP 解析 JS：返回目标域名在自然结果里的排名（未进前 N 则 rank=null）+ 前 5 名。
-fn metrics_serp_js(domain: &str) -> String {
-    const TPL: &str = r#"(function(){
-  var anchors=Array.prototype.slice.call(document.querySelectorAll('a')).filter(function(a){return a.querySelector('h3');});
-  var seen={},out=[],pos=0;
-  anchors.forEach(function(a){
-    var href=a.href; if(!href||href.indexOf('https://www.google.')===0||href.indexOf('https://webcache')===0) return;
-    var host; try{host=new URL(href).hostname.replace(/^www\./,'');}catch(e){return;}
-    if(seen[href])return; seen[href]=1; pos++;
-    out.push({pos:pos,host:host,title:(a.querySelector('h3').innerText||'').slice(0,60)});
-  });
-  var hit=null; for(var i=0;i<out.length;i++){ if(out[i].host.indexOf('__DOMAIN__')>=0){hit=out[i];break;} }
-  return JSON.stringify({rank:hit?hit.pos:null,total:out.length,top:out.slice(0,5)});
-})()"#;
-    TPL.replace("__DOMAIN__", domain)
-}
-
-/// 品牌提及 JS：统计排除自家域名后的第三方独立域名数（精确匹配查询时噪声最低）。
-fn metrics_mention_js(domain: &str) -> String {
-    const TPL: &str = r#"(function(){
-  var anchors=Array.prototype.slice.call(document.querySelectorAll('a')).filter(function(a){return a.querySelector('h3');});
-  var seen={},hosts={};
-  anchors.forEach(function(a){
-    var href=a.href; if(!href||href.indexOf('https://www.google.')===0||href.indexOf('https://webcache')===0) return;
-    var host; try{host=new URL(href).hostname.replace(/^www\./,'');}catch(e){return;}
-    if(host.indexOf('__DOMAIN__')>=0)return; if(seen[href])return; seen[href]=1;
-    hosts[host]=(hosts[host]||0)+1;
-  });
-  var keys=Object.keys(hosts);
-  return JSON.stringify({domains:keys.length,total:keys.reduce(function(s,k){return s+hosts[k];},0),hosts:hosts});
-})()"#;
-    TPL.replace("__DOMAIN__", domain)
-}
-
-fn metrics_search_url(query: &str) -> Result<String, String> {
-    reqwest::Url::parse_with_params(
-        "https://www.google.com/search",
-        &[("q", query), ("num", "30"), ("hl", METRICS_HL), ("gl", METRICS_GL), ("pws", "0")],
-    ).map(|u| u.to_string()).map_err(|e| e.to_string())
-}
-
-/// 是否被 Google 拦截（/sorry/ 异常流量 CAPTCHA）。被拦时不能把结果当"未进前30"记，否则是假数据。
-fn metrics_blocked(tab_id: &str) -> bool {
-    let raw = metrics_evaluate(tab_id, "location.href").unwrap_or_default();
-    let href = serde_json::from_str::<String>(&raw).unwrap_or(raw);
-    href.contains("/sorry")
-}
-
-/// 采一个词的搜索排名。返回 (排名位次或 None, detail JSON)。被 Google 限流时返回 Err("BLOCKED")。
-fn metrics_collect_serp(tab_id: &str, keyword: &str, domain: &str) -> Result<(Option<i64>, String), String> {
-    let url = metrics_search_url(keyword)?;
-    metrics_navigate(tab_id, &url)?;
-    std::thread::sleep(std::time::Duration::from_millis(2500));
-    if metrics_blocked(tab_id) { return Err("BLOCKED: Google 限流(CAPTCHA)".into()); }
-    let raw = metrics_evaluate(tab_id, &metrics_serp_js(domain))?;
-    let v = metrics_parse(&raw);
-    // 零自然结果 = 软限流/异常页（正常搜索一定有结果）→ 当作被拦，不记假"未进前30"
-    if v.get("total").and_then(|x| x.as_i64()).unwrap_or(0) == 0 {
-        return Err("BLOCKED: 0 结果(疑似软限流)".into());
-    }
-    let rank = v.get("rank").and_then(|x| x.as_i64());
-    Ok((rank, v.to_string()))
-}
-
-/// 采一个词的品牌提及（精确匹配 + 排除自家域名）。返回 (第三方域名数, detail JSON)。被限流时 Err("BLOCKED")。
-fn metrics_collect_mention(tab_id: &str, keyword: &str, domain: &str) -> Result<(i64, String), String> {
-    let q = format!("\"{}\" -site:{}", keyword, domain);
-    let url = metrics_search_url(&q)?;
-    metrics_navigate(tab_id, &url)?;
-    std::thread::sleep(std::time::Duration::from_millis(2500));
-    if metrics_blocked(tab_id) { return Err("BLOCKED: Google 限流(CAPTCHA)".into()); }
-    let raw = metrics_evaluate(tab_id, &metrics_mention_js(domain))?;
-    let v = metrics_parse(&raw);
-    let domains = v.get("domains").and_then(|x| x.as_i64()).unwrap_or(0);
-    Ok((domains, v.to_string()))
-}
-
-/// 采一个品牌词的 Trends 状态（默认关）。小品牌通常返回"无足够数据" → value=None。
-fn metrics_collect_trends(tab_id: &str, term: &str) -> Result<(Option<i64>, String), String> {
-    let url = reqwest::Url::parse_with_params(
-        "https://trends.google.com/trends/explore",
-        &[("date", "today 12-m"), ("q", term), ("hl", METRICS_HL)],
-    ).map(|u| u.to_string()).map_err(|e| e.to_string())?;
-    metrics_navigate(tab_id, &url)?;
-    std::thread::sleep(std::time::Duration::from_millis(4500));
-    let js = r#"(function(){var b=(document.body&&document.body.innerText)||'';var no=b.indexOf('没有足够')>=0||b.indexOf("enough data")>=0||b.indexOf('not enough')>=0;return JSON.stringify({no_data:no});})()"#;
-    let raw = metrics_evaluate(tab_id, js)?;
-    let v = metrics_parse(&raw);
-    let no_data = v.get("no_data").and_then(|x| x.as_bool()).unwrap_or(true);
-    Ok((if no_data { None } else { Some(1) }, v.to_string()))
-}
-
-/// 跑一整轮采集：读启用关键词 → 逐词走 Unzoo 采 → 每条独立写库。网络 IO 在 spawn_blocking 里跑，绝不持 db 锁。
-fn metrics_collect_all(app: &AppHandle) -> Result<(usize, usize), String> {
-    let rows: Vec<KwRow> = {
-        let state = app.state::<AppState>();
-        let guard = state.db.lock();
-        let conn = match guard { Ok(c) => c, Err(_) => return Err("db lock".into()) };
-        let mut stmt = conn.prepare(
-            "SELECT keyword, kind, COALESCE(target_domain,'doaipm.com') FROM metric_keywords WHERE enabled=1 ORDER BY kind, keyword"
-        ).map_err(|e| e.to_string())?;
-        let it = stmt.query_map([], |r| Ok(KwRow{keyword:r.get(0)?, kind:r.get(1)?, domain:r.get(2)?}))
-            .map_err(|e| e.to_string())?;
-        it.flatten().collect()
-    };
-    if rows.is_empty() { return Ok((0, 0)); }
-
-    let trends_on = {
-        let state = app.state::<AppState>();
-        let g = state.db.lock();
-        g.ok().and_then(|c| engine_cfg_get(&c, "metrics_trends_on")) .as_deref() == Some("1")
-    };
-
-    let tab_id = metrics_ensure_tab()?;
-    let mut serp_done = 0usize;
-    let mut mention_done = 0usize;
-
-    let mut blocked = false;
-    for kw in &rows {
-        let collected: Result<(&str, Option<i64>, String), String> = match kw.kind.as_str() {
-            "mention" => metrics_collect_mention(&tab_id, &kw.keyword, &kw.domain).map(|(d, det)| ("mention", Some(d), det)),
-            _ => metrics_collect_serp(&tab_id, &kw.keyword, &kw.domain).map(|(rank, det)| ("serp", rank, det)),
-        };
-        let (source, value, detail) = match collected {
-            Ok(v) => v,
-            // 被 Google 限流：立刻停，绝不把后续记成"未进前30"假数据
-            Err(e) if e.starts_with("BLOCKED") => {
-                log::warn!("[METRICS] {}，本轮提前结束（已采 serp {} / mention {}）", e, serp_done, mention_done);
-                blocked = true; break;
-            }
-            Err(e) => { log::warn!("[METRICS] {} 采集失败: {}", kw.keyword, e); continue; }
-        };
-        if source == "serp" { serp_done += 1; } else { mention_done += 1; }
-        {
-            let state = app.state::<AppState>();
-            let guard = state.db.lock();
-            if let Ok(conn) = guard {
-                let _ = conn.execute(
-                    "INSERT INTO metrics (keyword, kind, source, region, value, detail) VALUES (?1,?2,?3,?4,?5,?6)",
-                    params![kw.keyword, kw.kind, source, METRICS_REGION, value, detail]);
-            }
-        }
-        // 拟人限速，别把 Google 打急了
-        std::thread::sleep(std::time::Duration::from_millis(1500 + (human_type_delay_ms() as u64) * 8));
-    }
-
-    if trends_on && !blocked {
-        let brand_terms: Vec<String> = rows.iter().filter(|k| k.kind == "brand").map(|k| k.keyword.clone()).collect();
-        for term in brand_terms {
-            if let Ok((val, det)) = metrics_collect_trends(&tab_id, &term) {
-                let state = app.state::<AppState>();
-                let guard = state.db.lock();
-                if let Ok(conn) = guard {
-                    let _ = conn.execute(
-                        "INSERT INTO metrics (keyword, kind, source, region, value, detail) VALUES (?1,'brand','trends',?2,?3,?4)",
-                        params![term, METRICS_REGION, val, det]);
-                }
-            }
-            std::thread::sleep(std::time::Duration::from_millis(2000));
-        }
-    }
-
-    metrics_close_tab(&tab_id);
-    // 整轮一开头就被限流、一条没采到 → 明确报错（引擎会择机重试），不要假装"采集完成"
-    if blocked && serp_done == 0 && mention_done == 0 {
-        return Err("Google 临时限流(CAPTCHA)，本轮未采到数据；通常是短时间查询过多，稍后自动重试即可".into());
-    }
-    log::info!("[METRICS] 采集{}：排名 {} 词，提及 {} 词", if blocked {"中断(限流)"} else {"完成"}, serp_done, mention_done);
-    Ok((serp_done, mention_done))
-}
-
-/// 成效采集调度：每天一次入队 metrics_collect 任务（实际采集在 engine_execute 里跑，避免持 db 锁做网络 IO）。
-fn metrics_collect_tick(conn: &Connection) {
-    if engine_cfg_get(conn, "metrics_enabled").as_deref() == Some("0") { return; }
-    let now = Utc::now();
-    let interval = engine_cfg_get(conn, "metrics_interval_secs").and_then(|s| s.parse::<i64>().ok()).unwrap_or(86400);
-    if let Some(last) = engine_cfg_get(conn, "metrics_last_tick").and_then(|s| parse_dt(&s)) {
-        if (now - last).num_seconds() < interval { return; }
-    }
-    let pending: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM tasks WHERE task_type='metrics_collect' AND status IN ('pending','running')",
-        [], |r| r.get(0)).unwrap_or(0);
-    engine_cfg_set(conn, "metrics_last_tick", &now.to_rfc3339());
-    if pending > 0 { return; }
-    let task_id = Uuid::new_v4().to_string();
-    let _ = conn.execute(
-        "INSERT INTO tasks (id, task_type, status, retry_count, created_at) VALUES (?1,'metrics_collect','pending',0,datetime('now'))",
-        params![task_id]);
-    log::info!("[METRICS] 入队采集任务 {}", task_id);
-}
-
-#[derive(Serialize)]
-pub struct KeywordDto { pub id: String, pub keyword: String, pub kind: String, pub target_domain: String, pub enabled: bool }
-
-#[derive(Serialize)]
-pub struct MetricOverview {
-    pub keyword: String,
-    pub kind: String,
-    pub source: String,              // serp | mention | trends
-    pub latest: Option<i64>,
-    pub previous: Option<i64>,
-    pub captured_at: Option<String>,
-    pub samples: usize,
-    pub series: Vec<Option<i64>>,    // 时间升序的值（折线/迷你图）
-    pub detail: Option<String>,      // 最新一条 detail（JSON 串）
-}
-
-#[tauri::command]
-fn metrics_list_keywords(state: State<AppState>) -> Result<Vec<KeywordDto>, String> {
-    let conn = state.db.lock().map_err(|_| "db".to_string())?;
-    let mut stmt = conn.prepare(
-        "SELECT id, keyword, kind, COALESCE(target_domain,'doaipm.com'), enabled FROM metric_keywords ORDER BY kind, keyword"
-    ).map_err(|e| e.to_string())?;
-    let it = stmt.query_map([], |r| Ok(KeywordDto{
-        id: r.get(0)?, keyword: r.get(1)?, kind: r.get(2)?, target_domain: r.get(3)?, enabled: r.get::<_, i64>(4)? != 0
-    })).map_err(|e| e.to_string())?;
-    Ok(it.flatten().collect())
-}
-
-#[tauri::command]
-fn metrics_add_keyword(state: State<AppState>, keyword: String, kind: String, target_domain: Option<String>) -> Result<String, String> {
-    let kw = keyword.trim().to_string();
-    if kw.is_empty() { return Err("关键词为空".into()); }
-    let kind = if ["brand","longtail","mention"].contains(&kind.as_str()) { kind } else { "longtail".to_string() };
-    let id = Uuid::new_v4().to_string();
-    let conn = state.db.lock().map_err(|_| "db".to_string())?;
-    conn.execute(
-        "INSERT INTO metric_keywords (id, keyword, kind, target_domain, enabled) VALUES (?1,?2,?3,?4,1)",
-        params![id, kw, kind, target_domain.unwrap_or_else(|| "doaipm.com".into())]
-    ).map_err(|e| e.to_string())?;
-    Ok(id)
-}
-
-#[tauri::command]
-fn metrics_delete_keyword(state: State<AppState>, id: String) -> Result<(), String> {
-    let conn = state.db.lock().map_err(|_| "db".to_string())?;
-    conn.execute("DELETE FROM metric_keywords WHERE id=?1", params![id]).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
-fn metrics_toggle_keyword(state: State<AppState>, id: String, enabled: bool) -> Result<(), String> {
-    let conn = state.db.lock().map_err(|_| "db".to_string())?;
-    conn.execute("UPDATE metric_keywords SET enabled=?1 WHERE id=?2",
-        params![if enabled {1} else {0}, id]).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
-fn metrics_overview(state: State<AppState>) -> Result<Vec<MetricOverview>, String> {
-    let conn = state.db.lock().map_err(|_| "db".to_string())?;
-    let combos: Vec<(String, String, String)> = {
-        let mut stmt = conn.prepare(
-            "SELECT DISTINCT keyword, source, COALESCE(kind,'') FROM metrics ORDER BY source, keyword"
-        ).map_err(|e| e.to_string())?;
-        let it = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).map_err(|e| e.to_string())?;
-        it.flatten().collect()
-    };
-    let mut out = Vec::new();
-    for (kw, source, kind) in combos {
-        let rows: Vec<(Option<i64>, String, Option<String>)> = {
-            let mut s2 = conn.prepare(
-                "SELECT value, captured_at, detail FROM metrics WHERE keyword=?1 AND source=?2 ORDER BY captured_at ASC"
-            ).map_err(|e| e.to_string())?;
-            let it = s2.query_map(params![kw, source], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).map_err(|e| e.to_string())?;
-            it.flatten().collect()
-        };
-        if rows.is_empty() { continue; }
-        let full: Vec<Option<i64>> = rows.iter().map(|r| r.0).collect();
-        let latest = rows.last().and_then(|r| r.0);
-        let previous = if rows.len() >= 2 { rows[rows.len()-2].0 } else { None };
-        let captured_at = rows.last().map(|r| r.1.clone());
-        let detail = rows.last().and_then(|r| r.2.clone());
-        // 仅保留最近 30 个点用于迷你图
-        let series: Vec<Option<i64>> = if full.len() > 30 { full[full.len()-30..].to_vec() } else { full };
-        out.push(MetricOverview{ keyword: kw, kind, source, latest, previous, captured_at, samples: rows.len(), series, detail });
-    }
-    Ok(out)
-}
-
-#[tauri::command]
-fn metrics_get_settings(state: State<AppState>) -> Result<serde_json::Value, String> {
-    let conn = state.db.lock().map_err(|_| "db".to_string())?;
-    Ok(serde_json::json!({
-        "trends_on": engine_cfg_get(&conn, "metrics_trends_on").as_deref() == Some("1"),
-        "enabled": engine_cfg_get(&conn, "metrics_enabled").as_deref() != Some("0"),
-        "last_tick": engine_cfg_get(&conn, "metrics_last_tick"),
-        "region": METRICS_REGION,
-        "profile": METRICS_PROFILE_NAME,
-    }))
-}
-
-#[tauri::command]
-fn metrics_set_trends(state: State<AppState>, on: bool) -> Result<(), String> {
-    let conn = state.db.lock().map_err(|_| "db".to_string())?;
-    engine_cfg_set(&conn, "metrics_trends_on", if on {"1"} else {"0"});
-    Ok(())
-}
-
-#[tauri::command]
-async fn metrics_collect_now(app: AppHandle) -> Result<String, String> {
-    ensure_browser_connected().await.map_err(|e| format!("浏览器未就绪: {}", e))?;
-    let app2 = app.clone();
-    let res = tauri::async_runtime::spawn_blocking(move || metrics_collect_all(&app2)).await
-        .map_err(|e| format!("采集线程异常: {}", e))?;
-    let (s, m) = res?;
-    Ok(format!("采集完成：排名 {} 词，提及 {} 词", s, m))
-}
-
 // ===================== 多账号隔离：自带 Mihomo 内核 + persona/节点 =====================
 // 设计见 docs/multi-account-architecture.md。自带独立 mihomo（API 19090 / listeners 30000+），
 // 与用户的 Clash Verge 完全隔离。每 persona = 1 真实Gmail = 1 Unzoo profile = 1 机场节点(本地 listener 端口) = 1 指纹。
-const MIHOMO_API_PORT: u16 = 19090;
+pub(crate) const MIHOMO_API_PORT: u16 = 19090;
 const MIHOMO_SECRET: &str = "unmarket-local-mihomo";
 const MIHOMO_LISTENER_BASE: u16 = 30000;
 
@@ -13537,7 +13152,7 @@ fn mihomo_home_dir() -> PathBuf {
     d
 }
 fn mihomo_config_path() -> PathBuf { mihomo_home_dir().join("config.yaml") }
-fn mihomo_sub_path() -> PathBuf { mihomo_home_dir().join("subscription.yaml") }
+pub(crate) fn mihomo_sub_path() -> PathBuf { mihomo_home_dir().join("subscription.yaml") }
 
 /// 内置 mihomo 二进制文件名（Windows 用 .exe，其它系统用无扩展名）。
 #[cfg(windows)]
@@ -13563,7 +13178,7 @@ fn mihomo_exe_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 /// 判断是不是机场塞进 proxies 里的"信息展示项"（剩余流量/套餐到期/官网导航等），这些不是真节点。
-fn is_junk_node_name(name: &str, typ: &str) -> bool {
+pub(crate) fn is_junk_node_name(name: &str, typ: &str) -> bool {
     // 只接受真实代理协议；info 项有时也写成 vless，所以还要看名字
     const REAL_TYPES: &[&str] = &["ss","ssr","vmess","vless","trojan","hysteria","hysteria2","hy2","tuic","wireguard","wg","snell","anytls","mieru","socks5","http"];
     if !REAL_TYPES.contains(&typ.to_ascii_lowercase().as_str()) { return true; }
@@ -13573,7 +13188,7 @@ fn is_junk_node_name(name: &str, typ: &str) -> bool {
 }
 
 /// 节点名 → 粗略地区标签（用于 UI 展示）。
-fn node_region(name: &str) -> String {
+pub(crate) fn node_region(name: &str) -> String {
     let pairs = [("香港","🇭🇰 香港"),("HK","🇭🇰 香港"),("台湾","🇹🇼 台湾"),("台","🇹🇼 台湾"),("TW","🇹🇼 台湾"),
         ("日本","🇯🇵 日本"),("JP","🇯🇵 日本"),("新加坡","🇸🇬 新加坡"),("狮城","🇸🇬 新加坡"),("SG","🇸🇬 新加坡"),
         ("美国","🇺🇸 美国"),("US","🇺🇸 美国"),("韩国","🇰🇷 韩国"),("KR","🇰🇷 韩国"),("英国","🇬🇧 英国"),("UK","🇬🇧 英国"),
@@ -13624,7 +13239,7 @@ fn build_mihomo_config(personas: &[(String, u16)]) -> Result<String, String> {
 }
 
 /// 从 DB 里的 personas 重新生成 mihomo 配置文件。
-fn regenerate_mihomo_config(conn: &Connection) -> Result<(), String> {
+pub(crate) fn regenerate_mihomo_config(conn: &Connection) -> Result<(), String> {
     let mut stmt = conn.prepare(
         "SELECT node_name, local_port FROM personas WHERE node_name IS NOT NULL AND node_name<>'' AND local_port IS NOT NULL ORDER BY local_port"
     ).map_err(|e| e.to_string())?;
@@ -13642,7 +13257,7 @@ async fn mihomo_api_up() -> bool {
         .send().await.map(|r| r.status().is_success()).unwrap_or(false)
 }
 
-async fn mihomo_reload() -> Result<(), String> {
+pub(crate) async fn mihomo_reload() -> Result<(), String> {
     let client = get_http_client();
     let path = mihomo_config_path().to_string_lossy().to_string();
     let resp = client.put(format!("http://127.0.0.1:{}/configs?force=true", MIHOMO_API_PORT))
@@ -13680,7 +13295,7 @@ fn mihomo_spawn(app: &AppHandle) -> Result<(), String> {
 }
 
 /// 确保自带 mihomo 在跑（已在跑则复用）。
-async fn mihomo_ensure_running(app: &AppHandle) -> Result<(), String> {
+pub(crate) async fn mihomo_ensure_running(app: &AppHandle) -> Result<(), String> {
     if mihomo_api_up().await { return Ok(()); }
     mihomo_spawn(app)?;
     for _ in 0..30 {
@@ -14118,9 +13733,9 @@ async fn persona_test_ip(app: AppHandle, id: String) -> Result<String, String> {
     if tab_id.is_empty() { return Err("启动 profile 失败".into()); }
     let tid = tab_id.clone();
     let res = tauri::async_runtime::spawn_blocking(move || {
-        metrics_navigate(&tid, "https://api.ip.sb/geoip")?;
+        metrics::metrics_navigate(&tid, "https://api.ip.sb/geoip")?;
         std::thread::sleep(std::time::Duration::from_millis(2500));
-        metrics_evaluate(&tid, "(document.body&&document.body.innerText)||''")
+        metrics::metrics_evaluate(&tid, "(document.body&&document.body.innerText)||''")
     }).await.map_err(|e| e.to_string())??;
     let txt = serde_json::from_str::<String>(&res).unwrap_or(res);
     // 解析 ip + country
@@ -14129,199 +13744,6 @@ async fn persona_test_ip(app: AppHandle, id: String) -> Result<String, String> {
     let country = v.get("country").and_then(|x| x.as_str()).unwrap_or("");
     let city = v.get("city").and_then(|x| x.as_str()).unwrap_or("");
     Ok(format!("出口 IP：{}  ({} {})", ip, country, city))
-}
-
-/// 设置/刷新机场订阅：拉取 → 解析节点 → 入池 → 重建配置 → 启动并热重载内核。
-#[tauri::command]
-async fn airport_set_subscription(app: AppHandle, url: String) -> Result<String, String> {
-    let url = url.trim().to_string();
-    if !url.starts_with("http") { return Err("请输入有效的订阅链接（http/https 开头）".into()); }
-    // 手动设置：force_reload=true（无论是否有改动都重建内核配置并重载）
-    let (count, repaired) = airport_refresh(&app, url, true).await?;
-    let tail = if repaired > 0 { format!("，已为 {} 个身份重新配对节点", repaired) } else { String::new() };
-    Ok(format!("订阅已更新：{} 个有效节点入池，内核已就绪{}", count, tail))
-}
-
-/// 拉取/解析机场订阅 → 节点入池 → 把「节点已失效」的身份改派同地区相似节点 → 按需重建配置并热重载。
-/// 返回 (有效节点数, 改派身份数)。
-/// - force_reload=true：手动设置订阅时用，无论是否有改动都重建配置+重载。
-/// - force_reload=false：定时刷新用，只有「换了订阅 / 有身份的节点失效被改派」时才重载，避免无谓中断连接。
-/// 「相似节点」= 同 region 优先（保持出口地区不变），没有再退而取任意空闲节点。
-async fn airport_refresh(app: &AppHandle, url: String, force_reload: bool) -> Result<(usize, usize), String> {
-    let url = url.trim().to_string();
-    if !url.starts_with("http") { return Err("无效订阅链接".into()); }
-    // 拉订阅（Clash YAML）
-    let client = get_http_client();
-    let resp = client.get(&url).header("User-Agent", "clash-verge/v1.7.7").send().await
-        .map_err(|e| format!("拉订阅失败: {}", e))?;
-    if !resp.status().is_success() { return Err(format!("拉订阅 HTTP {}", resp.status())); }
-    let text = resp.text().await.map_err(|e| e.to_string())?;
-    let doc: serde_yaml::Value = serde_yaml::from_str(&text)
-        .map_err(|_| "订阅不是 Clash 配置格式（需要 Clash 订阅链接，不是 ss/vmess 那种）".to_string())?;
-    let proxies = doc.get("proxies").and_then(|p| p.as_sequence())
-        .ok_or("订阅里没有 proxies 节点")?.clone();
-    if proxies.is_empty() { return Err("订阅里节点为空".into()); }
-    std::fs::write(mihomo_sub_path(), &text).map_err(|e| e.to_string())?;
-
-    // 入池：只收真实节点，过滤掉机场的信息展示项（剩余流量/套餐到期/官网等）
-    let names: Vec<(String,String)> = proxies.iter().filter_map(|p| {
-        let n = p.get("name").and_then(|x| x.as_str())?.to_string();
-        let t = p.get("type").and_then(|x| x.as_str()).unwrap_or("").to_string();
-        if is_junk_node_name(&n, &t) { return None; }
-        Some((n, t))
-    }).collect();
-    if names.is_empty() { return Err("订阅里没有可用节点（全是信息展示项？请确认是 Clash 订阅）".into()); }
-    let count = names.len();
-    let valid: std::collections::HashSet<String> = names.iter().map(|(n,_)| n.clone()).collect();
-    let mut repaired = 0usize;
-    let changed;
-    {
-        let state = app.state::<AppState>();
-        let conn = state.db.lock().map_err(|_| "db".to_string())?;
-
-        // 是否换了订阅：和上次保存的订阅链接对比
-        let prev_url = engine_cfg_get(&conn, "airport_sub_url").unwrap_or_default();
-        let sub_changed = prev_url.trim() != url;
-        engine_cfg_set(&conn, "airport_sub_url", &url);
-
-        // 入池：upsert 本次订阅的有效节点
-        for (name, typ) in &names {
-            let region = node_region(name);
-            let _ = conn.execute(
-                "INSERT INTO nodes (name, region, type, in_use, last_seen) VALUES (?1,?2,?3,0,datetime('now')) \
-                 ON CONFLICT(name) DO UPDATE SET region=?2, type=?3, last_seen=datetime('now')",
-                params![name, region, typ]);
-        }
-
-        // 决定要重配的身份：
-        //   换了订阅 → 全部身份重配一遍（旧节点名多半已失效）
-        //   同一家订阅 → 只兜底处理节点恰好消失的身份（#11 定时刷新的核心：哪个身份的节点没了就替）
-        let personas: Vec<(String, String)> = {
-            let mut s = conn.prepare("SELECT id, node_name FROM personas WHERE node_name IS NOT NULL AND node_name<>''").map_err(|e| e.to_string())?;
-            let rows: Vec<(String,String)> = s.query_map([], |r| Ok((r.get::<_,String>(0)?, r.get::<_,String>(1)?))).map_err(|e| e.to_string())?
-                .flatten().collect();
-            rows
-        };
-        let targets: Vec<(String, String)> = personas.into_iter()
-            .filter(|(_, n)| sub_changed || !valid.contains(n))
-            .collect();
-
-        for (pid, old_node) in &targets {
-            // 同地区优先：尽量让身份的出口地区保持不变（美国身份仍派美国节点）
-            let want_region = node_region(old_node);
-            let pick = conn.query_row(
-                "SELECT name FROM nodes WHERE in_use=0 AND region=?1 ORDER BY name LIMIT 1",
-                params![want_region], |r| r.get::<_,String>(0))
-                .or_else(|_| conn.query_row(
-                    "SELECT name FROM nodes WHERE in_use=0 ORDER BY name LIMIT 1", [], |r| r.get::<_,String>(0)));
-            if let Ok(new_node) = pick {
-                if new_node == *old_node { continue; } // 同一节点仍有效，无需替换
-                let _ = conn.execute("UPDATE nodes SET in_use=1 WHERE name=?1", params![new_node]);
-                let _ = conn.execute("UPDATE personas SET node_name=?1 WHERE id=?2", params![new_node, pid]);
-                // 释放旧节点占用；若已不在新订阅里则一并清掉（幽灵节点）
-                if valid.contains(old_node) {
-                    let _ = conn.execute("UPDATE nodes SET in_use=0 WHERE name=?1", params![old_node]);
-                } else {
-                    let _ = conn.execute("DELETE FROM nodes WHERE name=?1", params![old_node]);
-                }
-                repaired += 1;
-            }
-        }
-
-        // 清理：删掉本次订阅里已不存在、且没被身份占用的旧节点
-        if let Ok(mut stmt) = conn.prepare("SELECT name FROM nodes WHERE in_use=0") {
-            let stale: Vec<String> = stmt.query_map([], |r| r.get::<_,String>(0)).ok()
-                .map(|it| it.flatten().filter(|n| !valid.contains(n)).collect()).unwrap_or_default();
-            for n in stale { let _ = conn.execute("DELETE FROM nodes WHERE name=?1", params![n]); }
-        }
-
-        changed = sub_changed || repaired > 0;
-        // 只有真的改了配对，或强制（手动设置）时才重建配置，避免定时刷新无谓地热重载
-        if force_reload || changed {
-            regenerate_mihomo_config(&conn)?;
-        }
-    }
-    if force_reload || changed {
-        mihomo_ensure_running(app).await?;
-        mihomo_reload().await?;
-    }
-    Ok((count, repaired))
-}
-
-/// #11 后台定时刷新机场订阅（默认 10 分钟一次）：自动替换失效节点，保证各身份出口 IP 不中断。
-async fn airport_refresh_loop(app: AppHandle) {
-    // 启动后稍等，让 mihomo_boot 先就绪，避免和启动重建撞车
-    tokio::time::sleep(std::time::Duration::from_secs(90)).await;
-    loop {
-        let url = {
-            let state = app.state::<AppState>();
-            state.db.lock().ok().and_then(|c| engine_cfg_get(&c, "airport_sub_url"))
-        };
-        if let Some(url) = url {
-            if url.trim().starts_with("http") {
-                match airport_refresh(&app, url, false).await {
-                    Ok((count, repaired)) => {
-                        if repaired > 0 {
-                            log::info!("[AIRPORT] 定时刷新：{} 个有效节点，已为 {} 个身份替换失效节点", count, repaired);
-                            // 通知前端：弹个 toast + 刷新账号页
-                            let _ = app.emit("airport-nodes-replaced", serde_json::json!({"count": count, "repaired": repaired}));
-                        } else {
-                            log::info!("[AIRPORT] 定时刷新：{} 个有效节点，节点无变化", count);
-                        }
-                    }
-                    Err(e) => log::warn!("[AIRPORT] 定时刷新失败: {}", e),
-                }
-            }
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(600)).await; // 10 分钟
-    }
-}
-
-/// 返回当前已保存的机场订阅链接（供「设置订阅」弹框预填）。没有则返回空串。
-#[tauri::command]
-fn airport_get_subscription(state: State<AppState>) -> Result<String, String> {
-    let conn = state.db.lock().map_err(|_| "db".to_string())?;
-    Ok(engine_cfg_get(&conn, "airport_sub_url").unwrap_or_default())
-}
-
-/// 「刷新订阅」：用已保存的订阅 URL 重新拉取，逻辑同定时刷新（只替换失效节点，不强制重载）。
-#[tauri::command]
-async fn airport_refresh_subscription(app: AppHandle) -> Result<String, String> {
-    let url = {
-        let state = app.state::<AppState>();
-        let conn = state.db.lock().map_err(|_| "db".to_string())?;
-        engine_cfg_get(&conn, "airport_sub_url").unwrap_or_default()
-    };
-    if !url.trim().starts_with("http") { return Err("还没设置机场订阅，请先点「设置订阅」".into()); }
-    let (count, repaired) = airport_refresh(&app, url, false).await?;
-    if repaired > 0 {
-        Ok(format!("已刷新：{} 个有效节点，替换了 {} 个身份的失效节点", count, repaired))
-    } else {
-        Ok(format!("已刷新：{} 个有效节点，节点无变化", count))
-    }
-}
-
-#[derive(Serialize)]
-pub struct NodePoolStat { pub total: i64, pub in_use: i64, pub free: i64, pub by_region: Vec<(String, i64)> }
-
-#[tauri::command]
-fn airport_status(state: State<AppState>) -> Result<serde_json::Value, String> {
-    let conn = state.db.lock().map_err(|_| "db".to_string())?;
-    let total: i64 = conn.query_row("SELECT COUNT(*) FROM nodes", [], |r| r.get(0)).unwrap_or(0);
-    let in_use: i64 = conn.query_row("SELECT COUNT(*) FROM nodes WHERE in_use=1", [], |r| r.get(0)).unwrap_or(0);
-    let url = engine_cfg_get(&conn, "airport_sub_url").unwrap_or_default();
-    let mut by_region: Vec<(String,i64)> = Vec::new();
-    if let Ok(mut stmt) = conn.prepare("SELECT region, COUNT(*) FROM nodes GROUP BY region ORDER BY COUNT(*) DESC") {
-        if let Ok(it) = stmt.query_map([], |r| Ok((r.get::<_,String>(0)?, r.get::<_,i64>(1)?))) {
-            by_region = it.flatten().collect();
-        }
-    }
-    Ok(serde_json::json!({
-        "configured": !url.is_empty(),
-        "total": total, "in_use": in_use, "free": total - in_use,
-        "by_region": by_region,
-        "kernel_port": MIHOMO_API_PORT,
-    }))
 }
 
 /// 定时发布调度：到点的 scheduled post → 入队 content_publish 任务。
@@ -14970,7 +14392,7 @@ async fn engine_execute(app: &AppHandle, task: &ClaimedTask) -> TaskOutcome {
                 return TaskOutcome::Retry(format!("浏览器未就绪: {}", e));
             }
             let app2 = app.clone();
-            match tauri::async_runtime::spawn_blocking(move || metrics_collect_all(&app2)).await {
+            match tauri::async_runtime::spawn_blocking(move || metrics::metrics_collect_all(&app2)).await {
                 Ok(Ok((s, m))) => TaskOutcome::Success(Some(format!("采集完成：排名 {} 词，提及 {} 词", s, m))),
                 // 被 Google 限流：不要重试（会继续撞墙、加重限流），标 blocked，等明天的 tick 再采
                 Ok(Err(e)) if e.contains("限流") || e.contains("CAPTCHA") || e.contains("BLOCKED") => TaskOutcome::Blocked(e),
@@ -15555,8 +14977,8 @@ async fn engine_loop(app: AppHandle) {
                 nurture_schedule_tick(&conn);
                 health_schedule_tick(&conn);
                 post_schedule_tick(&conn);
-                metrics_collect_tick(&conn);
-                engage_monitor_tick(&conn);   // 真·Engage 闭环：自动派发关键词获客 + 自有帖评论监控
+                metrics::metrics_collect_tick(&conn);
+                engage::engage_monitor_tick(&conn);   // 真·Engage 闭环：自动派发关键词获客 + 自有帖评论监控
                 let quiet = engine_in_quiet_hours(&conn);
                 engine_claim_next(&conn, quiet)
             } else {
@@ -16489,6 +15911,65 @@ async fn ai_complete(client: &reqwest::Client, provider: &str, key: &str, prompt
     }
 }
 
+/// 读取当前 AI 配置（provider + 对应 key）。未配置 key 返回 None。
+fn ai_reply_config(app: &AppHandle) -> Option<(String, String)> {
+    let st = app.state::<AppState>();
+    let conn = st.db.lock().ok()?;
+    let get_value = |k: &str| -> Option<String> {
+        conn.query_row("SELECT value FROM config WHERE key = ?1", params![k], |row| row.get(0)).ok()
+    };
+    let provider = get_value("ai.provider").unwrap_or_else(|| "gemini".to_string());
+    let key = match provider.as_str() {
+        "openai" => get_value("ai.key.openai"),
+        "deepseek" => get_value("ai.key.deepseek"),
+        "qwen" => get_value("ai.key.qwen"),
+        _ => get_value("ai.key.gemini"),
+    }.unwrap_or_default();
+    if key.trim().is_empty() { return None; }
+    Some((provider, key))
+}
+
+/// 清洗 + 校验 AI 输出：去围栏/引号，挡链接 / @提及 / 超长。不合格返回 None。
+fn validate_reply(raw: &str) -> Option<String> {
+    let stripped = strip_code_fence(raw.trim());
+    let t = stripped.trim().trim_matches(|c| c == '"' || c == '\'').trim().to_string();
+    if t.is_empty() { return None; }
+    let low = t.to_lowercase();
+    if low.contains("http://") || low.contains("https://") || low.contains("www.") { return None; }
+    if t.contains('@') { return None; }
+    if t.chars().count() > 280 { return None; }
+    Some(t)
+}
+
+/// 养号发文统一入口：读 AI 配置 → 拼 prompt → 调 AI → 校验。
+/// 无 key / 调用失败 / 不合格 均返回 None（调用方据此跳过本次发文，不影响点赞等动作）。
+/// kind: "x_reply"（回复推文）| "gh_comment"（Issue 评论）| "x_tweet"（原创，context 传领域/话题）。
+async fn gen_nurture_text(app: &AppHandle, kind: &str, context: &str) -> Option<String> {
+    let (provider, key) = ai_reply_config(app)?;
+    let prompt = match kind {
+        "x_tweet" => format!(
+            "你是一个活跃在该领域的真实用户。请就以下领域/话题，写一条自然、口语化的原创短推文，建立真人感。\
+             要求：与领域常用语言一致；不超过 200 字符；绝不包含链接、产品名/推广、@提及、话题标签(#)；\
+             只输出推文正文，不要解释、不要加引号。\n\n领域/话题：{}",
+            context),
+        "gh_comment" => format!(
+            "你是一个该领域的普通开发者。请针对下面这个 GitHub Issue 的内容，写一句友善、有同理心的简短评论，建立真人感。\
+             要求：与原文语言一致；不超过 200 字符；绝不包含链接、产品/推广、@提及；\
+             只输出评论正文，不要解释、不要加引号。\n\nIssue 内容：\n{}",
+            context),
+        _ => format!(
+            "你是一个普通真实用户。请针对下面这条推文，写一句自然、口语化、表示共鸣或认同的简短回复，建立真人感。\
+             要求：与原文语言一致；不超过 200 字符；绝不包含链接、产品/推广、@提及、话题标签(#)；\
+             只输出回复正文，不要解释、不要加引号。\n\n推文内容：\n{}",
+            context),
+    };
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build().ok()?;
+    let raw = ai_complete(&client, &provider, &key, &prompt).await.ok()?;
+    validate_reply(&raw)
+}
+
 /// 在任意嵌套 JSON 中递归找第一个匹配 key 的字符串值（用于解析 Veo 多版本响应）。
 fn json_find_str(v: &serde_json::Value, want: &[&str]) -> Option<String> {
     match v {
@@ -16701,266 +16182,6 @@ async fn generate_ai_video(state: State<'_, AppState>, prompt: String, model: Op
     let path = unmarket_media_dir().join(format!("vid_{}.mp4", Uuid::new_v4()));
     std::fs::write(&path, &bytes).map_err(|e| format!("视频保存失败: {}", e))?;
     Ok(path.to_string_lossy().to_string())
-}
-
-// ---------- ⑤ Engage 升级：转化信号 + 品牌提及 + 统一收件箱 ----------
-
-/// 买点意向加权：命中强购买信号则提分并标 hot。
-fn buy_intent_score(text: &str) -> (i64, bool) {
-    let t = text.to_lowercase();
-    let strong = ["求链接", "怎么买", "哪里买", "如何购买", "多少钱", "下单", "购买链接", "求购",
-                  "where to buy", "how to buy", "price", "pricing", "link please", "dm me", "send link", "sign up", "purchase"];
-    let medium = ["推荐", "有没有", "求推荐", "想试试", "怎么用", "教程", "对比", "值得吗",
-                  "recommend", "alternative", "vs ", "worth it", "how do i", "looking for", "any tool"];
-    let mut score = 0i64; let mut hot = false;
-    if strong.iter().any(|k| t.contains(k)) { score += 45; hot = true; }
-    if medium.iter().any(|k| t.contains(k)) { score += 20; }
-    (score.min(60), hot)
-}
-
-#[derive(Debug, Serialize)]
-pub struct InboxItem {
-    kind: String,        // lead | pending_reply | mention
-    ref_id: String,
-    platform: String,
-    author: Option<String>,
-    text: String,        // 对方说的话 / 我们的回复 / 提及域名
-    url: Option<String>,
-    intent: i64,
-    hot: bool,           // 强购买信号
-    status: String,
-    created_at: String,
-}
-
-/// 统一互动收件箱：合并 待审回复 + 高意向线索 + 品牌提及，按 hot/意向/时间排序。
-/// filter: all | hot | pending_reply | lead | mention
-#[tauri::command]
-fn engage_inbox(state: State<AppState>, filter: Option<String>) -> Result<Vec<InboxItem>, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    let f = filter.unwrap_or_else(|| "all".into());
-    let mut items: Vec<InboxItem> = Vec::new();
-
-    // 1) 待审回复（reply_history.pending_review）—— 对方原文用于买点识别
-    if f == "all" || f == "hot" || f == "pending_reply" {
-        if let Ok(mut stmt) = conn.prepare(
-            "SELECT r.id, r.platform, r.post_url, r.reply_content, COALESCE(r.intent_score,0), r.created_at, d.post_content \
-             FROM reply_history r LEFT JOIN discovered_posts d ON (d.id = r.post_id OR d.post_url = r.post_id) \
-             WHERE r.status='pending_review' ORDER BY r.created_at DESC LIMIT 100") {
-            let rows = stmt.query_map([], |row| Ok((
-                row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?,
-                row.get::<_, String>(3)?, row.get::<_, i64>(4)?, row.get::<_, String>(5)?,
-                row.get::<_, Option<String>>(6)?,
-            )));
-            if let Ok(rows) = rows {
-                for r in rows.flatten() {
-                    let (id, platform, url, reply, mut intent, created, ctx) = r;
-                    let (boost, hot) = buy_intent_score(&format!("{} {}", ctx.clone().unwrap_or_default(), reply));
-                    intent = (intent + boost).min(100);
-                    items.push(InboxItem {
-                        kind: "pending_reply".into(), ref_id: id, platform,
-                        author: None, text: ctx.unwrap_or(reply), url, intent, hot,
-                        status: "待审核".into(), created_at: created,
-                    });
-                }
-            }
-        }
-    }
-
-    // 2) 线索（leads）
-    if f == "all" || f == "hot" || f == "lead" {
-        if let Ok(mut stmt) = conn.prepare(
-            "SELECT id, platform, author, post_url, our_reply, COALESCE(intent_score,0), status, created_at \
-             FROM leads WHERE status<>'dismissed' ORDER BY created_at DESC LIMIT 100") {
-            let rows = stmt.query_map([], |row| Ok((
-                row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?,
-                row.get::<_, Option<String>>(3)?, row.get::<_, Option<String>>(4)?,
-                row.get::<_, i64>(5)?, row.get::<_, String>(6)?, row.get::<_, String>(7)?,
-            )));
-            if let Ok(rows) = rows {
-                for r in rows.flatten() {
-                    let (id, platform, author, url, reply, mut intent, status, created) = r;
-                    let (boost, hot) = buy_intent_score(&reply.clone().unwrap_or_default());
-                    intent = (intent + boost).min(100);
-                    items.push(InboxItem {
-                        kind: "lead".into(), ref_id: id, platform, author,
-                        text: reply.unwrap_or_default(), url, intent, hot,
-                        status, created_at: created,
-                    });
-                }
-            }
-        }
-    }
-
-    // 3) 品牌提及（metrics: source=mention 的最近采样，detail 里是命中域名）
-    if f == "all" || f == "mention" {
-        if let Ok(mut stmt) = conn.prepare(
-            "SELECT id, keyword, COALESCE(value,0), detail, captured_at FROM metrics \
-             WHERE source='mention' AND COALESCE(value,0)>0 ORDER BY captured_at DESC LIMIT 30") {
-            let rows = stmt.query_map([], |row| Ok((
-                row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?,
-                row.get::<_, Option<String>>(3)?, row.get::<_, String>(4)?,
-            )));
-            if let Ok(rows) = rows {
-                for r in rows.flatten() {
-                    let (id, keyword, value, detail, created) = r;
-                    items.push(InboxItem {
-                        kind: "mention".into(), ref_id: id.to_string(), platform: "web".into(),
-                        author: Some(keyword.clone()),
-                        text: format!("品牌提及「{}」命中 {} 个来源 {}", keyword, value, detail.unwrap_or_default()),
-                        url: None, intent: 30, hot: false, status: "提及".into(), created_at: created,
-                    });
-                }
-            }
-        }
-    }
-
-    // hot 过滤
-    if f == "hot" { items.retain(|i| i.hot || i.intent >= 70); }
-    // 排序：hot 优先 → 意向 → 时间
-    items.sort_by(|a, b| b.hot.cmp(&a.hot)
-        .then(b.intent.cmp(&a.intent))
-        .then(b.created_at.cmp(&a.created_at)));
-    items.truncate(150);
-    Ok(items)
-}
-
-/// Engage 概览数字（hot 线索数 / 待审 / 今日提及）。
-#[tauri::command]
-fn engage_summary(state: State<AppState>) -> Result<serde_json::Value, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    let pending: i64 = conn.query_row("SELECT COUNT(*) FROM reply_history WHERE status='pending_review'", [], |r| r.get(0)).unwrap_or(0);
-    let leads_open: i64 = conn.query_row("SELECT COUNT(*) FROM leads WHERE status NOT IN ('dismissed','converted')", [], |r| r.get(0)).unwrap_or(0);
-    let converted: i64 = conn.query_row("SELECT COUNT(*) FROM leads WHERE status='converted'", [], |r| r.get(0)).unwrap_or(0);
-    let mentions: i64 = conn.query_row("SELECT COUNT(*) FROM metrics WHERE source='mention' AND COALESCE(value,0)>0", [], |r| r.get(0)).unwrap_or(0);
-    Ok(serde_json::json!({
-        "pending_review": pending,
-        "leads_open": leads_open,
-        "converted": converted,
-        "mentions": mentions,
-    }))
-}
-
-// ============================================================================
-// 真·Engage 获客闭环：自主驱动器（让引擎自己去监控+回复，而不是等人手点）
-// ============================================================================
-
-/// 引擎每拍调用（内部节流）。自动派发两类监控任务：
-/// A) 关键词获客：每个启用关键词 × 每平台，挑一个该平台的活跃账号(persona)，入队 engage 任务（受 reply_mode 闸门：review→进收件箱，auto→真回复）。
-/// B) 自有帖评论监控：对我们已发布的帖子定期入队 reply_mention，自动读评论并就地回复（社区运营，低风险）。
-fn engage_monitor_tick(conn: &Connection) {
-    if engine_cfg_get(conn, "engage_auto").as_deref() == Some("0") { return; }   // 默认开
-    let now = Utc::now();
-    let interval = engine_cfg_get(conn, "engage_interval_secs").and_then(|s| s.parse::<i64>().ok()).unwrap_or(1800);
-    if let Some(last) = engine_cfg_get(conn, "engage_last_tick").and_then(|s| parse_dt(&s)) {
-        if (now - last).num_seconds() < interval { return; }
-    }
-    engine_cfg_set(conn, "engage_last_tick", &now.to_rfc3339());
-
-    // ---- A) 关键词获客（跨 persona 矩阵铺开）----
-    let cap = engine_cfg_get(conn, "engage_max_inflight").and_then(|s| s.parse::<i64>().ok()).unwrap_or(6);
-    let inflight: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM tasks WHERE task_type IN ('engage','reply','reply_keyword') AND status IN ('pending','running')",
-        [], |r| r.get(0)).unwrap_or(0);
-    let mut budget = (cap - inflight).max(0);
-    if budget > 0 {
-        let kws: Vec<(String, Vec<String>)> = {
-            let mut stmt = match conn.prepare(
-                "SELECT keyword, COALESCE(platforms,'[]') FROM keywords WHERE enabled=1") { Ok(s) => s, Err(_) => return };
-            let it = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)));
-            match it {
-                Ok(rows) => rows.flatten().map(|(k, pj)| {
-                    let plats: Vec<String> = serde_json::from_str(&pj).unwrap_or_default();
-                    (k, plats)
-                }).collect(),
-                Err(_) => return,
-            }
-        };
-        'outer: for (keyword, platforms) in kws {
-            let plats = if platforms.is_empty() { vec!["twitter".to_string(), "reddit".to_string()] } else { platforms };
-            for platform in plats {
-                if budget <= 0 { break 'outer; }
-                // 该平台挑一个活跃账号：尚未在跑同一关键词、优先最久没动的（轮转，防扎堆）
-                let acct: Option<String> = conn.query_row(
-                    "SELECT a.id FROM accounts a \
-                     WHERE lower(a.platform)=lower(?1) AND a.status='active' \
-                       AND COALESCE(a.health_status,'unknown') NOT IN ('banned','logged_out','shadowbanned') \
-                       AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.task_type IN ('engage','reply','reply_keyword') \
-                            AND t.status IN ('pending','running') AND lower(t.platform)=lower(?1) AND t.content=?2) \
-                     ORDER BY COALESCE(a.last_nurture_at,'') ASC LIMIT 1",
-                    params![platform, keyword], |r| r.get::<_, String>(0)).ok();
-                if let Some(aid) = acct {
-                    let r = conn.execute(
-                        "INSERT INTO tasks (id, task_type, platform, account_id, content, status, retry_count, created_at) \
-                         VALUES (?1,'engage',?2,?3,?4,'pending',0,datetime('now'))",
-                        params![Uuid::new_v4().to_string(), platform, aid, keyword]);
-                    if r.is_ok() { budget -= 1; }
-                }
-            }
-        }
-    }
-
-    // ---- B) 自有帖评论监控（社区运营，复用 reply_mention 任务臂）----
-    let mention_secs = engine_cfg_get(conn, "engage_mention_secs").and_then(|s| s.parse::<i64>().ok()).unwrap_or(21600); // 6h
-    let mut mbudget = engine_cfg_get(conn, "engage_mention_max").and_then(|s| s.parse::<i64>().ok()).unwrap_or(3);
-    let posts: Vec<(String, String, String)> = {
-        let mut stmt = match conn.prepare(
-            "SELECT platform, account_id, result_url FROM posts \
-             WHERE status='published' AND result_url IS NOT NULL AND result_url<>'' \
-               AND account_id IS NOT NULL AND account_id<>'' \
-               AND COALESCE(published_at, created_at) > datetime('now','-14 days') \
-             ORDER BY published_at DESC LIMIT 50") { Ok(s) => s, Err(_) => return };
-        let it = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)));
-        match it { Ok(rows) => rows.flatten().collect(), Err(_) => return }
-    };
-    for (platform, account_id, url) in posts {
-        if mbudget <= 0 { break; }
-        let busy: bool = conn.query_row(
-            "SELECT 1 FROM tasks WHERE task_type='reply_mention' AND status IN ('pending','running') AND target_url=?1 LIMIT 1",
-            params![url], |_| Ok(true)).unwrap_or(false);
-        if busy { continue; }
-        let last: Option<String> = conn.query_row(
-            "SELECT MAX(created_at) FROM tasks WHERE task_type='reply_mention' AND target_url=?1",
-            params![url], |r| r.get::<_, Option<String>>(0)).ok().flatten();
-        if let Some(l) = last.as_ref().and_then(|s| parse_dt(s)) {
-            if (now - l).num_seconds() < mention_secs { continue; }
-        }
-        let r = conn.execute(
-            "INSERT INTO tasks (id, task_type, platform, account_id, target_url, status, retry_count, created_at) \
-             VALUES (?1,'reply_mention',?2,?3,?4,'pending',0,datetime('now'))",
-            params![Uuid::new_v4().to_string(), platform, account_id, url]);
-        if r.is_ok() { mbudget -= 1; }
-    }
-}
-
-/// Engage 自动获客的开关 + 节奏。
-#[tauri::command]
-fn engage_get_settings(state: State<AppState>) -> Result<serde_json::Value, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    let g = |k: &str| engine_cfg_get(&conn, k);
-    let inflight: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM tasks WHERE task_type IN ('engage','reply','reply_keyword') AND status IN ('pending','running')",
-        [], |r| r.get(0)).unwrap_or(0);
-    let kw_enabled: i64 = conn.query_row("SELECT COUNT(*) FROM keywords WHERE enabled=1", [], |r| r.get(0)).unwrap_or(0);
-    Ok(serde_json::json!({
-        "auto": g("engage_auto").as_deref() != Some("0"),
-        "interval_minutes": g("engage_interval_secs").and_then(|s| s.parse::<i64>().ok()).unwrap_or(1800) / 60,
-        "max_inflight": g("engage_max_inflight").and_then(|s| s.parse::<i64>().ok()).unwrap_or(6),
-        "reply_mode": engine_reply_mode(&conn),
-        "inflight": inflight,
-        "keywords_enabled": kw_enabled,
-        "last_tick": g("engage_last_tick"),
-    }))
-}
-
-#[tauri::command]
-fn engage_set_auto(state: State<AppState>, on: bool, interval_minutes: Option<i64>, max_inflight: Option<i64>) -> Result<(), String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    engine_cfg_set(&conn, "engage_auto", if on { "1" } else { "0" });
-    if let Some(m) = interval_minutes { engine_cfg_set(&conn, "engage_interval_secs", &(m.max(5) * 60).to_string()); }
-    if let Some(c) = max_inflight { engine_cfg_set(&conn, "engage_max_inflight", &c.clamp(1, 30).to_string()); }
-    // 改了开关 → 清掉节流时间戳，让引擎下一拍立刻评估
-    engine_cfg_set(&conn, "engage_last_tick", "");
-    Ok(())
 }
 
 // ============================================================================
@@ -17229,14 +16450,14 @@ pub fn run() {
             publish_post_now,
             cancel_post,
             generate_post_content,
-            metrics_list_keywords,
-            metrics_add_keyword,
-            metrics_delete_keyword,
-            metrics_toggle_keyword,
-            metrics_overview,
-            metrics_get_settings,
-            metrics_set_trends,
-            metrics_collect_now,
+            metrics::metrics_list_keywords,
+            metrics::metrics_add_keyword,
+            metrics::metrics_delete_keyword,
+            metrics::metrics_toggle_keyword,
+            metrics::metrics_overview,
+            metrics::metrics_get_settings,
+            metrics::metrics_set_trends,
+            metrics::metrics_collect_now,
             set_account_persona,
             account_auto_login,
             persona_login_all,
@@ -17250,10 +16471,10 @@ pub fn run() {
             persona_test_ip,
             persona_platform_catalog,
             persona_remove_platforms,
-            airport_set_subscription,
-            airport_get_subscription,
-            airport_refresh_subscription,
-            airport_status,
+            airport::airport_set_subscription,
+            airport::airport_get_subscription,
+            airport::airport_refresh_subscription,
+            airport::airport_status,
             list_pending_replies,
             approve_reply,
             reject_reply,
@@ -17285,10 +16506,10 @@ pub fn run() {
             generate_post_variations,
             matrix_create_posts,
             generate_ai_video,
-            engage_inbox,
-            engage_summary,
-            engage_get_settings,
-            engage_set_auto,
+            engage::engage_inbox,
+            engage::engage_summary,
+            engage::engage_get_settings,
+            engage::engage_set_auto,
             matrix_factory_generate,
             factory_commit,
         ])
@@ -17317,7 +16538,7 @@ pub fn run() {
             // #11 后台定时（10 分钟）刷新机场订阅，自动替换失效节点
             {
                 let handle = app.handle().clone();
-                tauri::async_runtime::spawn(airport_refresh_loop(handle));
+                tauri::async_runtime::spawn(airport::airport_refresh_loop(handle));
             }
 
             // Optional: auto-start the task engine (headless 7x24 / verification).

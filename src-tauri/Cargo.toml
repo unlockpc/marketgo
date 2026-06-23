@@ -37,3 +37,8 @@ anyhow = "1"
 open = "5"
 urlencoding = "2"
 futures = "0.3"
+
+# 精简 dev 构建的调试信息,大幅减小 target 体积(仍保留行号,可看 panic 调用栈)
+# 如需完整断点调试,临时改回 debug = true
+[profile.dev]
+debug = "line-tables-only"
