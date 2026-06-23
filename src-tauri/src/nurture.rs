@@ -7,6 +7,7 @@ use rusqlite::params;
 use chrono::{Utc, Local};
 use uuid::Uuid;
 use crate::*;
+use crate::ai::gen_nurture_text;
 
 /// 向前端推送一条养号逐动作进度。前端监听 `nurture-progress` 事件 → 实时显示当前账号在干嘛。
 /// 养号动作之间有几十秒的拟人间隔/重页面加载，逐动作推送能让进度看着「在动」。
