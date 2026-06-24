@@ -149,61 +149,6 @@ pub(crate) async fn github_nurture_run(app: &AppHandle, account_id: &str, _durat
         }
     }
 
-    // 5.5) L2：满足闸门时，在所选领域 repo 的某 Issue 下入一条良性评论（review 模式入审核队列）
-    {
-        let st = app.state::<AppState>();
-        let (age, l1_count, mode) = {
-            let conn = st.db.lock().map_err(|e| e.to_string())?;
-            let created: Option<String> = conn.query_row("SELECT created_at FROM accounts WHERE id=?1", params![account_id], |r| r.get(0)).ok().flatten();
-            let age = created.as_deref().and_then(parse_dt).map(|c| (Utc::now() - c).num_days()).unwrap_or(0);
-            let l1: i64 = conn.query_row("SELECT COUNT(*) FROM gh_actions_log WHERE account_id=?1 AND action_type IN ('star','follow','watch')", params![account_id], |r| r.get(0)).unwrap_or(0);
-            (age, l1, engine_reply_mode(&conn))
-        };
-        let weekly: i64 = {
-            let conn = st.db.lock().map_err(|e| e.to_string())?;
-            conn.query_row("SELECT COUNT(*) FROM gh_actions_log WHERE account_id=?1 AND action_type='comment' AND date >= date('now','-7 day')", params![account_id], |r| r.get(0)).unwrap_or(0)
-        };
-        if gh_l2_allowed(age, &phase, l1_count) && weekly < 3 {
-            if let Some(repo) = chosen.first() {
-                let issues_url = format!("{}/issues?q=is%3Aissue+is%3Aopen", repo);
-                let thread = tauri::async_runtime::spawn_blocking(move || {
-                    unzoo_navigate(&issues_url)?;
-                    std::thread::sleep(std::time::Duration::from_secs(3));
-                    let links = unzoo_get_links("a[href*=\"/issues/\"]")?;
-                    Ok::<Option<String>, String>(links.into_iter().find(|h| h.contains("/issues/") && h.chars().filter(|c| *c=='/').count() >= 6))
-                }).await.map_err(|e| e.to_string())??;
-                if let Some(thread_url) = thread {
-                    let already = {
-                        let locked = st.db.lock().map_err(|e| e.to_string())?;
-                        gh_already_acted(&locked, account_id, &thread_url)
-                    };
-                    if !already {
-                        let _ = mode; // 养号路径直发，不再走审核队列
-                        // 抓 Issue 标题 + 正文 → AI 生成评论 → 直发（无 AI / 不合格则跳过，不记录）
-                        let tu_nav = thread_url.clone();
-                        let issue_text = tauri::async_runtime::spawn_blocking(move || {
-                            unzoo_navigate(&tu_nav)?;
-                            std::thread::sleep(std::time::Duration::from_millis(get_random_delay(2, 5)));
-                            let title = unzoo_get_text_sel(".js-issue-title").unwrap_or_default();
-                            let body = unzoo_get_text_sel(".markdown-body").unwrap_or_default();
-                            Ok::<String, String>(format!("{}\n{}", title, body))
-                        }).await.map_err(|e| e.to_string())?.unwrap_or_default();
-                        if let Some(text) = gen_nurture_text(app, "gh_comment", &issue_text).await {
-                            let tu = thread_url.clone(); let tx = text.clone();
-                            let posted = tauri::async_runtime::spawn_blocking(move || post_reply_to_url("github", &tu, &tx)).await.map_err(|e| e.to_string())?;
-                            if posted.is_ok() {
-                                let locked = st.db.lock();
-                                if let Ok(conn) = locked { let _ = gh_record_action(&conn, account_id, "comment", &thread_url); }
-                            }
-                        } else {
-                            emit_nurture_step(app, account_id, "未配置 AI 或生成失败，跳过 Issue 评论");
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     // 6) 写养号统计（如实记录本次耗时 + 累加总时长，与通用养号一致）
     let elapsed_secs = session_start.elapsed().as_secs() as i64;
     {
@@ -555,9 +500,15 @@ pub(crate) async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: 
                     std::thread::sleep(std::time::Duration::from_millis(get_random_delay(2, 5)));
                     unzoo_get_text_sel("[data-testid=\"tweetText\"]")
                 }).await.map_err(|e| e.to_string())?.unwrap_or_default();
-                match gen_nurture_text(app, "x_reply", &tweet_text).await {
-                    Some(txt) => tauri::async_runtime::spawn_blocking(move || x_reply_blocking(&tc, &txt)).await.map_err(|e| e.to_string())?,
-                    None => { emit_nurture_step(app, account_id, "未配置 AI 或生成失败，跳过本次回复"); Err(String::new()) }
+                if tweet_text.trim().is_empty() {
+                    // 抓不到正文（纯图/视频或加载失败）→ 没内容可依据，跳过，绝不发空泛套话
+                    emit_nurture_step(app, account_id, "抓不到推文正文（纯图/视频或加载失败），跳过本次回复");
+                    Err(String::new())
+                } else {
+                    match gen_nurture_text(app, "x_reply", &tweet_text).await {
+                        Some(txt) => tauri::async_runtime::spawn_blocking(move || x_reply_blocking(&tc, &txt)).await.map_err(|e| e.to_string())?,
+                        None => { emit_nurture_step(app, account_id, "未配置 AI 或生成失败，跳过本次回复"); Err(String::new()) }
+                    }
                 }
             };
             if r.is_ok() {

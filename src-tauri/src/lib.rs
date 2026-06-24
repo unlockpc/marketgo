@@ -1133,11 +1133,6 @@ fn gh_daily_quota(phase: &str) -> (i64, i64, i64) {
     }
 }
 
-/// L2（评论）是否解锁：非 warmup、号龄≥7 天、且已有 L1 历史。
-fn gh_l2_allowed(age_days: i64, phase: &str, l1_action_count: i64) -> bool {
-    phase != "warmup" && age_days >= 7 && l1_action_count > 0
-}
-
 /// 从候选里去掉已操作项，用确定性洗牌（seed）挑至多 n 个。
 /// seed 由调用方用时间派生（脚本不可用 rand，引擎里用 get_random_delay 同源时间种子）。
 fn gh_pick_targets(candidates: &[String], already: &std::collections::HashSet<String>, n: usize, seed: u64) -> Vec<String> {
@@ -12541,15 +12536,6 @@ mod platform_meta_tests {
         let (s2, _, _) = gh_daily_quota("mature");
         assert!(s2 >= 1);
         assert_eq!(gh_daily_quota("unknown"), (1, 0, 0));
-    }
-
-    #[test]
-    fn gh_l2_gate() {
-        assert!(!gh_l2_allowed(30, "warmup", 50));
-        assert!(!gh_l2_allowed(6, "growth", 50));
-        assert!(!gh_l2_allowed(10, "growth", 0));
-        assert!(gh_l2_allowed(7, "growth", 5));
-        assert!(gh_l2_allowed(30, "mature", 100));
     }
 
     #[test]
