@@ -1126,6 +1126,19 @@ fn set_account_topics_conn(conn: &Connection, account_id: &str, keys: &[String])
     Ok(())
 }
 
+/// 加自定义主题：label trim 非空 + 与该 platform 现有(内置+自定义)label 不重名；uuid key。
+fn add_custom_topic_conn(conn: &Connection, platform: &str, label: &str) -> Result<TopicItem, String> {
+    let label = label.trim();
+    if label.is_empty() { return Err("主题名不能为空".to_string()); }
+    if topics_catalog_from(conn, platform).iter().any(|i| i.label == label) {
+        return Err("主题已存在".to_string());
+    }
+    let key = Uuid::new_v4().to_string();
+    conn.execute("INSERT INTO custom_topics (key, platform, label, keywords) VALUES (?1,?2,?3,NULL)",
+        params![key, platform, label]).map_err(|e| e.to_string())?;
+    Ok(TopicItem { key, label: label.to_string(), keywords: Vec::new(), builtin: false })
+}
+
 /// 按号龄分期返回当日 X 配额：(likes, follows, engages)。engages = 转推+回复预算。
 /// X 反自动化最严 → 量级极保守、关注最克制。
 fn x_daily_quota(phase: &str) -> (i64, i64, i64) {
@@ -12914,5 +12927,17 @@ mod topics_tests {
         c.execute("INSERT INTO custom_topics (key,platform,label,keywords) VALUES ('u1','xiaohongshu','露营装备',NULL)", []).unwrap();
         set_account_topics_conn(&c, "a1", &["u1".to_string()]).unwrap();
         assert_eq!(account_topics(&c, "a1"), vec!["u1".to_string()]);
+    }
+
+    #[test]
+    fn add_trims_and_rejects_dup_per_platform() {
+        let c = setup();
+        let it = add_custom_topic_conn(&c, "xiaohongshu", "  露营装备  ").unwrap();
+        assert_eq!(it.label, "露营装备");
+        assert!(!it.builtin);
+        assert!(add_custom_topic_conn(&c, "xiaohongshu", "   ").is_err());      // 空
+        assert!(add_custom_topic_conn(&c, "xiaohongshu", "美妆护肤").is_err()); // 内置重名
+        assert!(add_custom_topic_conn(&c, "xiaohongshu", "露营装备").is_err()); // 自定义重名
+        add_custom_topic_conn(&c, "github", "露营装备").unwrap();              // 不同平台同名 OK
     }
 }
