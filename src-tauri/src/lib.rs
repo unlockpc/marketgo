@@ -1442,8 +1442,9 @@ fn platform_login_method(platform: &str, google_oauth: bool) -> &'static str {
 /// - shared_overseas：海外开发者/产品/内容社区 + Google 登录的国内开发社区 → 对 IP 宽松，机场共享轮换即可
 fn platform_ip_policy(platform: &str) -> &'static str {
     match platform.to_lowercase().as_str() {
-        // 国内固定 IP：只留「确定需要」国内住宅/4G 固定 IP 的强风控平台（小红书、微博）
-        "weibo" | "xiaohongshu" | "redbook" => "residential_cn",
+        // 国内固定 IP：只留「确定需要」国内住宅/4G 固定 IP 的强风控平台（微博）
+        // 小红书按需求改挂 Gmail/机场身份（落到默认 shared_overseas）
+        "weibo" => "residential_cn",
         // 国外固定 IP
         "reddit" | "linkedin" | "facebook" | "vk" | "naver_blog" => "static_overseas",
         // X：数据中心/VPN 级 IP 即可，per-persona 专属机场节点（区域稳定）足够，无需国外固定专线
