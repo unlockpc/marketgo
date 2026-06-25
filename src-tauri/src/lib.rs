@@ -1038,6 +1038,82 @@ fn sf_domain_keywords(keys: &[&str]) -> Vec<&'static str> {
     out
 }
 
+/// 小红书养号主题（内置赛道，代码事实源）。keywords 默认即主题名（主题名当搜索词）。
+#[derive(Clone, Copy)]
+struct XhsTopic { key: &'static str, label: &'static str }
+const XHS_TOPICS: &[XhsTopic] = &[
+    XhsTopic { key: "beauty",    label: "美妆护肤" },
+    XhsTopic { key: "fashion",   label: "穿搭时尚" },
+    XhsTopic { key: "food",      label: "美食探店" },
+    XhsTopic { key: "travel",    label: "旅行出行" },
+    XhsTopic { key: "home",      label: "家居家装" },
+    XhsTopic { key: "parenting", label: "母婴育儿" },
+    XhsTopic { key: "fitness",   label: "健身运动" },
+    XhsTopic { key: "digital",   label: "数码科技" },
+    XhsTopic { key: "career",    label: "职场成长" },
+    XhsTopic { key: "emotion",   label: "情感生活" },
+    XhsTopic { key: "pet",       label: "萌宠" },
+    XhsTopic { key: "wellness",  label: "养生健康" },
+];
+
+pub struct TopicDef { pub key: String, pub label: String, pub keywords: Vec<String> }
+
+#[derive(serde::Serialize, Clone)]
+pub struct TopicItem { pub key: String, pub label: String, pub keywords: Vec<String>, pub builtin: bool }
+
+/// 内置主题按平台映射（四常量归一为 key/label/keywords）。未知平台 → 空。
+fn builtin_topics(platform: &str) -> Vec<TopicDef> {
+    match platform.to_lowercase().as_str() {
+        "github" => GH_DOMAINS.iter().map(|d| TopicDef {
+            key: d.key.to_string(), label: d.label.to_string(),
+            keywords: d.topics.iter().map(|s| s.to_string()).collect(),
+        }).collect(),
+        "twitter" | "x" => X_NICHES.iter().map(|n| TopicDef {
+            key: n.key.to_string(), label: n.label.to_string(),
+            keywords: n.keywords.iter().map(|s| s.to_string()).collect(),
+        }).collect(),
+        "segmentfault" => SF_DOMAINS.iter().map(|d| TopicDef {
+            key: d.key.to_string(), label: d.label.to_string(),
+            keywords: d.keywords.iter().map(|s| s.to_string()).collect(),
+        }).collect(),
+        "xiaohongshu" | "redbook" => XHS_TOPICS.iter().map(|t| TopicDef {
+            key: t.key.to_string(), label: t.label.to_string(),
+            keywords: vec![t.label.to_string()],
+        }).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// 账号 platform（不存在 → None）。
+fn account_platform(conn: &Connection, account_id: &str) -> Option<String> {
+    conn.query_row("SELECT platform FROM accounts WHERE id=?1", params![account_id], |r| r.get(0)).ok()
+}
+
+/// 读账号所选主题 keys（nurture_topics JSON 数组），失败/空 → 空 vec。
+fn account_topics(conn: &Connection, account_id: &str) -> Vec<String> {
+    let raw: Option<String> = conn.query_row(
+        "SELECT nurture_topics FROM accounts WHERE id=?1",
+        params![account_id], |r| r.get(0)).ok().flatten();
+    raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok()).unwrap_or_default()
+}
+
+/// catalog = 内置(platform) ∪ 自定义表 WHERE platform（内置在前）。
+fn topics_catalog_from(conn: &Connection, platform: &str) -> Vec<TopicItem> {
+    let mut out: Vec<TopicItem> = builtin_topics(platform).into_iter().map(|d| TopicItem {
+        key: d.key, label: d.label, keywords: d.keywords, builtin: true,
+    }).collect();
+    if let Ok(mut stmt) = conn.prepare("SELECT key, label, keywords FROM custom_topics WHERE platform=?1 ORDER BY rowid") {
+        if let Ok(rows) = stmt.query_map(params![platform], |r| {
+            let kw_raw: Option<String> = r.get(2)?;
+            let keywords = kw_raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok()).unwrap_or_default();
+            Ok(TopicItem { key: r.get(0)?, label: r.get(1)?, keywords, builtin: false })
+        }) {
+            for it in rows.flatten() { out.push(it); }
+        }
+    }
+    out
+}
+
 /// 按号龄分期返回当日 X 配额：(likes, follows, engages)。engages = 转推+回复预算。
 /// X 反自动化最严 → 量级极保守、关注最克制。
 fn x_daily_quota(phase: &str) -> (i64, i64, i64) {
