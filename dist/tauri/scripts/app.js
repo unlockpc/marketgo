@@ -1573,44 +1573,88 @@
     });
   }
   window.pickProvisionPlatforms = pickProvisionPlatforms;
-  window.pickGithubDomains = async function(accountId) {
-    let cat = [];
-    let current = [];
-    try {
-      cat = await invoke2("gh_domains_catalog");
-      current = await invoke2("get_account_gh_domains", { accountId });
-    } catch (e) {
-      showToast("\u52A0\u8F7D\u9886\u57DF\u5931\u8D25: " + e, "error");
-      return;
-    }
+  window.pickTopics = async function(accountId, platform) {
+    const load = async () => {
+      try {
+        const cat = await invoke2("topics_catalog", { platform });
+        const current = await invoke2("get_account_topics", { accountId });
+        return { cat, current };
+      } catch (e) {
+        showToast("\u52A0\u8F7D\u4E3B\u9898\u5931\u8D25: " + e, "error");
+        return null;
+      }
+    };
+    const first = await load();
+    if (!first) return;
     const overlay = document.createElement("div");
     overlay.className = "modal active";
-    overlay.innerHTML = `
-    <div class="modal-content">
-      <div class="modal-header"><h3>\u9009\u62E9 GitHub \u517B\u53F7\u9886\u57DF\uFF08\u53EF\u591A\u9009\uFF09</h3></div>
-      <div class="modal-body">
-        ${cat.map((d) => `<label style="display:block;margin:6px 0;">
-          <input type="checkbox" value="${d.key}"${current.includes(d.key) ? " checked" : ""}> ${d.label}
-          <span style="color:var(--text-muted);font-size:12px;">(${d.topics.slice(0, 4).join(", ")}\u2026)</span>
-        </label>`).join("")}
-      </div>
-      <div class="modal-footer">
-        <button class="btn" id="ghDomCancel">\u53D6\u6D88</button>
-        <button class="btn btn-success" id="ghDomSave">\u4FDD\u5B58</button>
-      </div>
-    </div>`;
     document.body.appendChild(overlay);
-    overlay.querySelector("#ghDomCancel").addEventListener("click", () => overlay.remove());
-    overlay.querySelector("#ghDomSave").addEventListener("click", async () => {
-      const keys = Array.from(overlay.querySelectorAll("input:checked")).map((i) => i.value);
-      try {
-        await invoke2("set_account_gh_domains", { accountId, domains: keys });
-        showToast("GitHub \u9886\u57DF\u5DF2\u4FDD\u5B58", "success");
-        overlay.remove();
-      } catch (e) {
-        showToast("\u4FDD\u5B58\u5931\u8D25: " + e, "error");
-      }
-    });
+    const checkedKeys = () => Array.from(overlay.querySelectorAll("input[type=checkbox]:checked")).map((i) => i.value);
+    const draw = (cat, selected) => {
+      overlay.innerHTML = `
+      <div class="modal-content">
+        <div class="modal-header"><h3>\u9009\u62E9\u517B\u53F7\u4E3B\u9898\uFF08\u53EF\u591A\u9009\uFF09</h3></div>
+        <div class="modal-body">
+          ${cat.map((d) => `<label style="display:flex;align-items:center;gap:6px;margin:6px 0;">
+            <input type="checkbox" value="${d.key}"${selected.includes(d.key) ? " checked" : ""}> ${escapeHtml(d.label)}
+            ${d.builtin ? "" : `<button class="btn btn-small btn-danger" style="margin-left:auto;padding:0 8px;" data-del="${d.key}" title="\u5220\u9664\u81EA\u5B9A\u4E49\u4E3B\u9898">\u2715</button>`}
+          </label>`).join("")}
+        </div>
+        <div style="display:flex;gap:6px;padding:0 16px 8px;">
+          <input id="topicNew" type="text" placeholder="\u6DFB\u52A0\u4E3B\u9898\uFF0C\u5982\uFF1A\u9732\u8425\u88C5\u5907" style="flex:1;" />
+          <button class="btn btn-small btn-secondary" id="topicAdd">+ \u6DFB\u52A0</button>
+        </div>
+        <div class="modal-footer">
+          <button class="btn" id="topicCancel">\u53D6\u6D88</button>
+          <button class="btn btn-success" id="topicSave">\u4FDD\u5B58</button>
+        </div>
+      </div>`;
+      bind();
+    };
+    const reload = async (keep) => {
+      const d = await load();
+      if (d) draw(d.cat, Array.from(/* @__PURE__ */ new Set([...d.current, ...keep])));
+    };
+    function bind() {
+      overlay.querySelector("#topicCancel").addEventListener("click", () => overlay.remove());
+      overlay.querySelector("#topicSave").addEventListener("click", async () => {
+        try {
+          await invoke2("set_account_topics", { accountId, keys: checkedKeys() });
+          showToast("\u517B\u53F7\u4E3B\u9898\u5DF2\u4FDD\u5B58", "success");
+          overlay.remove();
+          await loadAccounts();
+        } catch (e) {
+          showToast("\u4FDD\u5B58\u5931\u8D25: " + e, "error");
+        }
+      });
+      overlay.querySelector("#topicAdd").addEventListener("click", async () => {
+        const input = overlay.querySelector("#topicNew");
+        const label = input.value.trim();
+        if (!label) return;
+        const keep = checkedKeys();
+        try {
+          const item = await invoke2("add_custom_topic", { platform, label });
+          keep.push(item.key);
+          await reload(keep);
+        } catch (e) {
+          showToast("\u6DFB\u52A0\u5931\u8D25: " + e, "error");
+        }
+      });
+      overlay.querySelectorAll("[data-del]").forEach((btn) => {
+        btn.addEventListener("click", async (ev) => {
+          ev.preventDefault();
+          const key = btn.getAttribute("data-del");
+          const keep = checkedKeys().filter((k) => k !== key);
+          try {
+            await invoke2("delete_custom_topic", { key });
+            await reload(keep);
+          } catch (e) {
+            showToast("\u5220\u9664\u5931\u8D25: " + e, "error");
+          }
+        });
+      });
+    }
+    draw(first.cat, first.current);
   };
   window.toggleNicheRow = function(btn) {
     const row = btn.parentElement;
@@ -1620,83 +1664,6 @@
     });
     row.setAttribute("data-expanded", expanded ? "0" : "1");
     btn.textContent = expanded ? "\u5C55\u5F00 +" + btn.getAttribute("data-more") : "\u6536\u8D77";
-  };
-  window.pickXNiches = async function(accountId) {
-    let cat = [];
-    let current = [];
-    try {
-      cat = await invoke2("x_niches_catalog");
-      current = await invoke2("get_account_x_niches", { accountId });
-    } catch (e) {
-      showToast("\u52A0\u8F7D\u65B9\u5411\u5931\u8D25: " + e, "error");
-      return;
-    }
-    const overlay = document.createElement("div");
-    overlay.className = "modal active";
-    overlay.innerHTML = `
-    <div class="modal-content">
-      <div class="modal-header"><h3>\u9009\u62E9 X \u517B\u53F7\u65B9\u5411\uFF08\u53EF\u591A\u9009\uFF09</h3></div>
-      <div class="modal-body">
-        ${cat.map((d) => `<label style="display:block;margin:6px 0;">
-          <input type="checkbox" value="${d.key}"${current.includes(d.key) ? " checked" : ""}> ${d.label}
-        </label>`).join("")}
-      </div>
-      <div class="modal-footer">
-        <button class="btn" id="xNicheCancel">\u53D6\u6D88</button>
-        <button class="btn btn-success" id="xNicheSave">\u4FDD\u5B58</button>
-      </div>
-    </div>`;
-    document.body.appendChild(overlay);
-    overlay.querySelector("#xNicheCancel").addEventListener("click", () => overlay.remove());
-    overlay.querySelector("#xNicheSave").addEventListener("click", async () => {
-      const keys = Array.from(overlay.querySelectorAll("input:checked")).map((i) => i.value);
-      try {
-        await invoke2("set_account_x_niches", { accountId, niches: keys });
-        showToast("X \u65B9\u5411\u5DF2\u4FDD\u5B58", "success");
-        overlay.remove();
-      } catch (e) {
-        showToast("\u4FDD\u5B58\u5931\u8D25: " + e, "error");
-      }
-    });
-  };
-  window.pickSegmentfaultDomains = async function(accountId) {
-    let cat = [];
-    let current = [];
-    try {
-      cat = await invoke2("sf_domains_catalog");
-      current = await invoke2("get_account_sf_domains", { accountId });
-    } catch (e) {
-      showToast("\u52A0\u8F7D\u9886\u57DF\u5931\u8D25: " + e, "error");
-      return;
-    }
-    const overlay = document.createElement("div");
-    overlay.className = "modal active";
-    overlay.innerHTML = `
-    <div class="modal-content">
-      <div class="modal-header"><h3>\u9009\u62E9 SegmentFault \u517B\u53F7\u9886\u57DF\uFF08\u53EF\u591A\u9009\uFF09</h3></div>
-      <div class="modal-body">
-        ${cat.map((d) => `<label style="display:block;margin:6px 0;">
-          <input type="checkbox" value="${d.key}"${current.includes(d.key) ? " checked" : ""}> ${d.label}
-          <span style="color:var(--text-muted);font-size:12px;">(${d.keywords.slice(0, 4).join("\u3001")}\u2026)</span>
-        </label>`).join("")}
-      </div>
-      <div class="modal-footer">
-        <button class="btn" id="sfDomCancel">\u53D6\u6D88</button>
-        <button class="btn btn-success" id="sfDomSave">\u4FDD\u5B58</button>
-      </div>
-    </div>`;
-    document.body.appendChild(overlay);
-    overlay.querySelector("#sfDomCancel").addEventListener("click", () => overlay.remove());
-    overlay.querySelector("#sfDomSave").addEventListener("click", async () => {
-      const keys = Array.from(overlay.querySelectorAll("input:checked")).map((i) => i.value);
-      try {
-        await invoke2("set_account_sf_domains", { accountId, domains: keys });
-        showToast("SegmentFault \u9886\u57DF\u5DF2\u4FDD\u5B58", "success");
-        overlay.remove();
-      } catch (e) {
-        showToast("\u4FDD\u5B58\u5931\u8D25: " + e, "error");
-      }
-    });
   };
   function pickAddAccounts(email, candidates) {
     return new Promise((resolve) => {
@@ -2327,10 +2294,7 @@
     showToast("Edit feature coming soon", "info");
   };
   var platformSceneMap = {};
-  var ghDomainLabels = {};
-  var xNicheLabels = {};
-  var sfDomainLabels = {};
-  var accountNichesMap = {};
+  var accountTopicLabels = {};
   var platformManualLoginCache = {};
   async function loadAccounts() {
     try {
@@ -2345,28 +2309,8 @@
         platformManualLoginCache = await invoke2("get_platform_manual_login") || {};
       } catch {
       }
-      if (Object.keys(ghDomainLabels).length === 0) {
-        try {
-          (await invoke2("gh_domains_catalog")).forEach((d) => {
-            ghDomainLabels[d.key] = d.label;
-          });
-        } catch {
-        }
-        try {
-          (await invoke2("x_niches_catalog")).forEach((n) => {
-            xNicheLabels[n.key] = n.label;
-          });
-        } catch {
-        }
-        try {
-          (await invoke2("sf_domains_catalog")).forEach((d) => {
-            sfDomainLabels[d.key] = d.label;
-          });
-        } catch {
-        }
-      }
       try {
-        accountNichesMap = await invoke2("account_niches") || {};
+        accountTopicLabels = await invoke2("account_topic_labels") || {};
       } catch {
       }
       try {
@@ -2927,12 +2871,11 @@
         </div>
         <div class="account-username text-muted" style="font-size:13px;">${escapeHtml(account.username || account.email || "N/A")}</div>
         ${(() => {
-        const keys = accountNichesMap[account.id] || [];
-        if (!keys.length) return "";
-        const lm = account.platform === "github" ? ghDomainLabels : account.platform === "twitter" || account.platform === "x" ? xNicheLabels : account.platform === "segmentfault" ? sfDomainLabels : {};
-        const chip = (k, hidden) => `<span class="stage-badge" style="background:var(--bg-secondary);color:var(--primary);${hidden ? "display:none;" : ""}" data-extra="${hidden ? "1" : "0"}" title="\u517B\u53F7\u65B9\u5411">\u{1F3AF} ${escapeHtml(lm[k] || k)}</span>`;
-        const chips = keys.map((k, i) => chip(k, i >= 2)).join("");
-        const more = keys.length > 2 ? `<button class="btn btn-small btn-secondary" style="padding:0 8px;font-size:11px;" onclick="toggleNicheRow(this)" data-more="${keys.length - 2}">\u5C55\u5F00 +${keys.length - 2}</button>` : "";
+        const labels = accountTopicLabels[account.id] || [];
+        if (!labels.length) return "";
+        const chip = (lb, hidden) => `<span class="stage-badge" style="background:var(--bg-secondary);color:var(--primary);${hidden ? "display:none;" : ""}" data-extra="${hidden ? "1" : "0"}" title="\u517B\u53F7\u4E3B\u9898">\u{1F3AF} ${escapeHtml(lb)}</span>`;
+        const chips = labels.map((lb, i) => chip(lb, i >= 2)).join("");
+        const more = labels.length > 2 ? `<button class="btn btn-small btn-secondary" style="padding:0 8px;font-size:11px;" onclick="toggleNicheRow(this)" data-more="${labels.length - 2}">\u5C55\u5F00 +${labels.length - 2}</button>` : "";
         return `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:4px;" data-expanded="0">${chips}${more}</div>`;
       })()}
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
@@ -2944,9 +2887,7 @@
         <div class="account-actions">
           ${platformManualLoginCache[(account.platform || "").toLowerCase()] ? `<button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="\u8BE5\u5E73\u53F0\u81EA\u52A8\u767B\u5F55\u8D70\u4E0D\u901A\uFF0C\u70B9\u6B64\u76F4\u63A5\u6253\u5F00\u767B\u5F55\u9875\uFF0C\u5728\u6D4F\u89C8\u5668\u91CC\u624B\u52A8\u767B\u5F55\u4E00\u6B21">\u270B \u624B\u5DE5\u767B\u5F55</button>` : `<button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="\u81EA\u52A8\u767B\u5F55\uFF1A\u67E5\u767B\u5F55\u2192Google\u767B\u5F55\u2192\u5426\u5219\u6CE8\u518C">\u{1F511} \u81EA\u52A8\u767B\u5F55</button>`}
           ${nurtureAllRunning && nurtureAllProfileKeys.has(nurtureProfileKeyOf(account)) ? `<button class="btn btn-small btn-success" data-nurture-account="${account.id}" disabled style="opacity:.5;cursor:not-allowed;" title="\u4E00\u952E\u517B\u53F7\u8FDB\u884C\u4E2D\uFF0C\u5B8C\u6210\u540E\u624D\u53EF\u5355\u72EC\u517B\u53F7">\u{1F331} ${t("nurture.quickNurture")}</button>` : `<button class="btn btn-small btn-success" data-nurture-account="${account.id}" onclick="openNurtureModal('${account.id}', '${escapeHtml(account.platform)}', '${escapeHtml(account.username || account.email || "N/A")}')" title="${t("nurture.quickNurture")}">\u{1F331} ${t("nurture.quickNurture")}</button>`}
-          ${account.platform === "github" ? `<button class="btn btn-small btn-secondary" onclick="pickGithubDomains('${account.id}')" title="\u9009\u62E9 GitHub \u517B\u53F7\u9886\u57DF">\u{1F3AF} \u9886\u57DF</button>` : ""}
-          ${account.platform === "twitter" || account.platform === "x" ? `<button class="btn btn-small btn-secondary" onclick="pickXNiches('${account.id}')" title="\u9009\u62E9 X \u517B\u53F7\u65B9\u5411">\u{1F3AF} \u65B9\u5411</button>` : ""}
-          ${account.platform === "segmentfault" ? `<button class="btn btn-small btn-secondary" onclick="pickSegmentfaultDomains('${account.id}')" title="\u9009\u62E9 SegmentFault \u517B\u53F7\u9886\u57DF\uFF08\u517B\u53F7\u65F6\u6309\u9886\u57DF\u641C\u7D22\u2192\u6D4F\u89C8\u2192\u8BFB\u6587\u7AE0\uFF09">\u{1F3AF} \u9886\u57DF</button>` : ""}
+          ${["github", "twitter", "x", "segmentfault", "xiaohongshu"].includes(account.platform) ? `<button class="btn btn-small btn-secondary" onclick="pickTopics('${account.id}','${escapeHtml(account.platform)}')" title="\u9009\u62E9\u517B\u53F7\u4E3B\u9898">\u{1F3AF} \u4E3B\u9898</button>` : ""}
           ${stage !== "active" ? `<button class="btn btn-small btn-secondary" onclick="finishAccountNurture('${account.id}')" title="\u8001\u8D26\u53F7\u65E0\u9700\u517B\u53F7\uFF0C\u76F4\u63A5\u6807\u4E3A\u6B63\u5E38">\u2705 ${t("nurture.finishBtn")}</button>` : ""}
         </div>
       </div>

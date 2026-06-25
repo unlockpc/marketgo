@@ -1549,43 +1549,85 @@ function pickProvisionPlatforms(email: string, catalog: CatalogItem[]): Promise<
 }
 (window as any).pickProvisionPlatforms = pickProvisionPlatforms;
 
-interface GhDomainItem { key: string; label: string; topics: string[] }
+interface TopicItem { key: string; label: string; keywords: string[]; builtin: boolean }
 
-// GitHub 养号领域多选（按账号）。复用 .modal.active 显示约定。
-(window as any).pickGithubDomains = async function(accountId: string): Promise<void> {
-  let cat: GhDomainItem[] = [];
-  let current: string[] = [];
-  try {
-    cat = await invoke<GhDomainItem[]>('gh_domains_catalog');
-    current = await invoke<string[]>('get_account_gh_domains', { accountId });
-  }
-  catch (e) { showToast('加载领域失败: ' + e, 'error'); return; }
+// 统一养号主题多选（按账号+平台）：内置 + 用户自定义；可现场添加/删除自定义主题。复用 .modal.active。
+(window as any).pickTopics = async function(accountId: string, platform: string): Promise<void> {
+  const load = async (): Promise<{ cat: TopicItem[]; current: string[] } | null> => {
+    try {
+      const cat = await invoke<TopicItem[]>('topics_catalog', { platform });
+      const current = await invoke<string[]>('get_account_topics', { accountId });
+      return { cat, current };
+    } catch (e) { showToast('加载主题失败: ' + e, 'error'); return null; }
+  };
+  const first = await load();
+  if (!first) return;
   const overlay = document.createElement('div');
   overlay.className = 'modal active';
-  overlay.innerHTML = `
-    <div class="modal-content">
-      <div class="modal-header"><h3>选择 GitHub 养号领域（可多选）</h3></div>
-      <div class="modal-body">
-        ${cat.map(d => `<label style="display:block;margin:6px 0;">
-          <input type="checkbox" value="${d.key}"${current.includes(d.key) ? ' checked' : ''}> ${d.label}
-          <span style="color:var(--text-muted);font-size:12px;">(${d.topics.slice(0,4).join(', ')}…)</span>
-        </label>`).join('')}
-      </div>
-      <div class="modal-footer">
-        <button class="btn" id="ghDomCancel">取消</button>
-        <button class="btn btn-success" id="ghDomSave">保存</button>
-      </div>
-    </div>`;
   document.body.appendChild(overlay);
-  overlay.querySelector('#ghDomCancel')!.addEventListener('click', () => overlay.remove());
-  overlay.querySelector('#ghDomSave')!.addEventListener('click', async () => {
-    const keys = Array.from(overlay.querySelectorAll<HTMLInputElement>('input:checked')).map(i => i.value);
-    try {
-      await invoke('set_account_gh_domains', { accountId, domains: keys });
-      showToast('GitHub 领域已保存', 'success');
-      overlay.remove();
-    } catch (e) { showToast('保存失败: ' + e, 'error'); }
-  });
+
+  const checkedKeys = (): string[] =>
+    Array.from(overlay.querySelectorAll<HTMLInputElement>('input[type=checkbox]:checked')).map(i => i.value);
+
+  const draw = (cat: TopicItem[], selected: string[]) => {
+    overlay.innerHTML = `
+      <div class="modal-content">
+        <div class="modal-header"><h3>选择养号主题（可多选）</h3></div>
+        <div class="modal-body">
+          ${cat.map(d => `<label style="display:flex;align-items:center;gap:6px;margin:6px 0;">
+            <input type="checkbox" value="${d.key}"${selected.includes(d.key) ? ' checked' : ''}> ${escapeHtml(d.label)}
+            ${d.builtin ? '' : `<button class="btn btn-small btn-danger" style="margin-left:auto;padding:0 8px;" data-del="${d.key}" title="删除自定义主题">✕</button>`}
+          </label>`).join('')}
+        </div>
+        <div style="display:flex;gap:6px;padding:0 16px 8px;">
+          <input id="topicNew" type="text" placeholder="添加主题，如：露营装备" style="flex:1;" />
+          <button class="btn btn-small btn-secondary" id="topicAdd">+ 添加</button>
+        </div>
+        <div class="modal-footer">
+          <button class="btn" id="topicCancel">取消</button>
+          <button class="btn btn-success" id="topicSave">保存</button>
+        </div>
+      </div>`;
+    bind();
+  };
+  const reload = async (keep: string[]) => {
+    const d = await load();
+    if (d) draw(d.cat, Array.from(new Set([...d.current, ...keep])));
+  };
+  function bind() {
+    overlay.querySelector('#topicCancel')!.addEventListener('click', () => overlay.remove());
+    overlay.querySelector('#topicSave')!.addEventListener('click', async () => {
+      try {
+        await invoke('set_account_topics', { accountId, keys: checkedKeys() });
+        showToast('养号主题已保存', 'success');
+        overlay.remove();
+        await loadAccounts();
+      } catch (e) { showToast('保存失败: ' + e, 'error'); }
+    });
+    overlay.querySelector('#topicAdd')!.addEventListener('click', async () => {
+      const input = overlay.querySelector<HTMLInputElement>('#topicNew')!;
+      const label = input.value.trim();
+      if (!label) return;
+      const keep = checkedKeys();
+      try {
+        const item = await invoke<TopicItem>('add_custom_topic', { platform, label });
+        keep.push(item.key);
+        await reload(keep);
+      } catch (e) { showToast('添加失败: ' + e, 'error'); }
+    });
+    overlay.querySelectorAll<HTMLElement>('[data-del]').forEach(btn => {
+      btn.addEventListener('click', async (ev) => {
+        ev.preventDefault();
+        const key = btn.getAttribute('data-del')!;
+        const keep = checkedKeys().filter(k => k !== key);
+        try {
+          await invoke('delete_custom_topic', { key });
+          await reload(keep);
+        } catch (e) { showToast('删除失败: ' + e, 'error'); }
+      });
+    });
+  }
+  draw(first.cat, first.current);
 };
 
 // 账号卡片养号方向行：展开/收起多余标签
@@ -1595,81 +1637,6 @@ interface GhDomainItem { key: string; label: string; topics: string[] }
   row.querySelectorAll<HTMLElement>('[data-extra="1"]').forEach(el => { el.style.display = expanded ? 'none' : ''; });
   row.setAttribute('data-expanded', expanded ? '0' : '1');
   btn.textContent = expanded ? ('展开 +' + btn.getAttribute('data-more')) : '收起';
-};
-
-interface XNicheItem { key: string; label: string; keywords: string[] }
-
-// X 养号方向多选（按账号，X 官方 16 方向双语）。复用 .modal.active 显示约定。
-(window as any).pickXNiches = async function(accountId: string): Promise<void> {
-  let cat: XNicheItem[] = [];
-  let current: string[] = [];
-  try {
-    cat = await invoke<XNicheItem[]>('x_niches_catalog');
-    current = await invoke<string[]>('get_account_x_niches', { accountId });
-  } catch (e) { showToast('加载方向失败: ' + e, 'error'); return; }
-  const overlay = document.createElement('div');
-  overlay.className = 'modal active';
-  overlay.innerHTML = `
-    <div class="modal-content">
-      <div class="modal-header"><h3>选择 X 养号方向（可多选）</h3></div>
-      <div class="modal-body">
-        ${cat.map(d => `<label style="display:block;margin:6px 0;">
-          <input type="checkbox" value="${d.key}"${current.includes(d.key) ? ' checked' : ''}> ${d.label}
-        </label>`).join('')}
-      </div>
-      <div class="modal-footer">
-        <button class="btn" id="xNicheCancel">取消</button>
-        <button class="btn btn-success" id="xNicheSave">保存</button>
-      </div>
-    </div>`;
-  document.body.appendChild(overlay);
-  overlay.querySelector('#xNicheCancel')!.addEventListener('click', () => overlay.remove());
-  overlay.querySelector('#xNicheSave')!.addEventListener('click', async () => {
-    const keys = Array.from(overlay.querySelectorAll<HTMLInputElement>('input:checked')).map(i => i.value);
-    try {
-      await invoke('set_account_x_niches', { accountId, niches: keys });
-      showToast('X 方向已保存', 'success');
-      overlay.remove();
-    } catch (e) { showToast('保存失败: ' + e, 'error'); }
-  });
-};
-
-interface SfDomainItem { key: string; label: string; keywords: string[] }
-
-// SegmentFault 养号领域多选（按账号）。养号时按所选领域搜索→浏览→读文章/问题。复用 .modal.active。
-(window as any).pickSegmentfaultDomains = async function(accountId: string): Promise<void> {
-  let cat: SfDomainItem[] = [];
-  let current: string[] = [];
-  try {
-    cat = await invoke<SfDomainItem[]>('sf_domains_catalog');
-    current = await invoke<string[]>('get_account_sf_domains', { accountId });
-  } catch (e) { showToast('加载领域失败: ' + e, 'error'); return; }
-  const overlay = document.createElement('div');
-  overlay.className = 'modal active';
-  overlay.innerHTML = `
-    <div class="modal-content">
-      <div class="modal-header"><h3>选择 SegmentFault 养号领域（可多选）</h3></div>
-      <div class="modal-body">
-        ${cat.map(d => `<label style="display:block;margin:6px 0;">
-          <input type="checkbox" value="${d.key}"${current.includes(d.key) ? ' checked' : ''}> ${d.label}
-          <span style="color:var(--text-muted);font-size:12px;">(${d.keywords.slice(0,4).join('、')}…)</span>
-        </label>`).join('')}
-      </div>
-      <div class="modal-footer">
-        <button class="btn" id="sfDomCancel">取消</button>
-        <button class="btn btn-success" id="sfDomSave">保存</button>
-      </div>
-    </div>`;
-  document.body.appendChild(overlay);
-  overlay.querySelector('#sfDomCancel')!.addEventListener('click', () => overlay.remove());
-  overlay.querySelector('#sfDomSave')!.addEventListener('click', async () => {
-    const keys = Array.from(overlay.querySelectorAll<HTMLInputElement>('input:checked')).map(i => i.value);
-    try {
-      await invoke('set_account_sf_domains', { accountId, domains: keys });
-      showToast('SegmentFault 领域已保存', 'success');
-      overlay.remove();
-    } catch (e) { showToast('保存失败: ' + e, 'error'); }
-  });
 };
 
 // ===== #4 加账号：手机号 / 账号密码 分区录入凭据 =====
@@ -2470,10 +2437,8 @@ async function analyzeUrl() {
 // 平台 → 场景类别 key，缓存一次（供账号卡片展示类别徽章）
 let platformSceneMap: Record<string, string> = {};
 // 养号方向/领域：key→label（静态，缓存一次）+ account_id→已选 key 列表（每次刷新）
-let ghDomainLabels: Record<string, string> = {};
-let xNicheLabels: Record<string, string> = {};
-let sfDomainLabels: Record<string, string> = {};
-let accountNichesMap: Record<string, string[]> = {};
+// account_id → 已选主题 label 列表（后端按平台解析，含用户自定义主题）
+let accountTopicLabels: Record<string, string[]> = {};
 // 平台 → 是否需要手工登录（设置页可维护，segmentfault 默认 true）。供账号卡片展示「手工登录」徽章。
 let platformManualLoginCache: Record<string, boolean> = {};
 
@@ -2485,12 +2450,7 @@ async function loadAccounts() {
     }
     // 平台手工登录配置：每次刷新（轻量），保证设置改动后卡片徽章同步
     try { platformManualLoginCache = (await invoke<Record<string, boolean>>('get_platform_manual_login')) || {}; } catch { /* */ }
-    if (Object.keys(ghDomainLabels).length === 0) {
-      try { (await invoke<any[]>('gh_domains_catalog')).forEach(d => { ghDomainLabels[d.key] = d.label; }); } catch { /* */ }
-      try { (await invoke<any[]>('x_niches_catalog')).forEach(n => { xNicheLabels[n.key] = n.label; }); } catch { /* */ }
-      try { (await invoke<any[]>('sf_domains_catalog')).forEach(d => { sfDomainLabels[d.key] = d.label; }); } catch { /* */ }
-    }
-    try { accountNichesMap = (await invoke<Record<string, string[]>>('account_niches')) || {}; } catch { /* */ }
+    try { accountTopicLabels = (await invoke<Record<string, string[]>>('account_topic_labels')) || {}; } catch { /* */ }
     // 加载身份(persona)列表，用于按 Gmail 分组 + 归属下拉
     try { personasCache = (await invoke('persona_list')) || []; } catch { personasCache = []; }
     // 加载机场代理状态（节点池），并入邮箱中心页顶部
@@ -3107,13 +3067,12 @@ function renderAccountCard(account: any): string {
         </div>
         <div class="account-username text-muted" style="font-size:13px;">${escapeHtml(account.username || account.email || 'N/A')}</div>
         ${(() => {
-          const keys = accountNichesMap[account.id] || [];
-          if (!keys.length) return '';
-          const lm = account.platform === 'github' ? ghDomainLabels : ((account.platform === 'twitter' || account.platform === 'x') ? xNicheLabels : (account.platform === 'segmentfault' ? sfDomainLabels : {}));
-          const chip = (k: string, hidden: boolean) => `<span class="stage-badge" style="background:var(--bg-secondary);color:var(--primary);${hidden ? 'display:none;' : ''}" data-extra="${hidden ? '1' : '0'}" title="养号方向">🎯 ${escapeHtml(lm[k] || k)}</span>`;
-          const chips = keys.map((k, i) => chip(k, i >= 2)).join('');
-          const more = keys.length > 2
-            ? `<button class="btn btn-small btn-secondary" style="padding:0 8px;font-size:11px;" onclick="toggleNicheRow(this)" data-more="${keys.length - 2}">展开 +${keys.length - 2}</button>`
+          const labels = accountTopicLabels[account.id] || [];
+          if (!labels.length) return '';
+          const chip = (lb: string, hidden: boolean) => `<span class="stage-badge" style="background:var(--bg-secondary);color:var(--primary);${hidden ? 'display:none;' : ''}" data-extra="${hidden ? '1' : '0'}" title="养号主题">🎯 ${escapeHtml(lb)}</span>`;
+          const chips = labels.map((lb, i) => chip(lb, i >= 2)).join('');
+          const more = labels.length > 2
+            ? `<button class="btn btn-small btn-secondary" style="padding:0 8px;font-size:11px;" onclick="toggleNicheRow(this)" data-more="${labels.length - 2}">展开 +${labels.length - 2}</button>`
             : '';
           return `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:4px;" data-expanded="0">${chips}${more}</div>`;
         })()}
@@ -3132,9 +3091,7 @@ function renderAccountCard(account: any): string {
           ${(nurtureAllRunning && nurtureAllProfileKeys.has(nurtureProfileKeyOf(account)))
             ? `<button class="btn btn-small btn-success" data-nurture-account="${account.id}" disabled style="opacity:.5;cursor:not-allowed;" title="一键养号进行中，完成后才可单独养号">🌱 ${t('nurture.quickNurture')}</button>`
             : `<button class="btn btn-small btn-success" data-nurture-account="${account.id}" onclick="openNurtureModal('${account.id}', '${escapeHtml(account.platform)}', '${escapeHtml(account.username || account.email || 'N/A')}')" title="${t('nurture.quickNurture')}">🌱 ${t('nurture.quickNurture')}</button>`}
-          ${account.platform === 'github' ? `<button class="btn btn-small btn-secondary" onclick="pickGithubDomains('${account.id}')" title="选择 GitHub 养号领域">🎯 领域</button>` : ''}
-          ${(account.platform === 'twitter' || account.platform === 'x') ? `<button class="btn btn-small btn-secondary" onclick="pickXNiches('${account.id}')" title="选择 X 养号方向">🎯 方向</button>` : ''}
-          ${account.platform === 'segmentfault' ? `<button class="btn btn-small btn-secondary" onclick="pickSegmentfaultDomains('${account.id}')" title="选择 SegmentFault 养号领域（养号时按领域搜索→浏览→读文章）">🎯 领域</button>` : ''}
+          ${['github','twitter','x','segmentfault','xiaohongshu'].includes(account.platform) ? `<button class="btn btn-small btn-secondary" onclick="pickTopics('${account.id}','${escapeHtml(account.platform)}')" title="选择养号主题">🎯 主题</button>` : ''}
           ${stage !== 'active' ? `<button class="btn btn-small btn-secondary" onclick="finishAccountNurture('${account.id}')" title="老账号无需养号，直接标为正常">✅ ${t('nurture.finishBtn')}</button>` : ''}
         </div>
       </div>
