@@ -12909,10 +12909,10 @@ mod xhs_runner_tests {
 
     #[test]
     fn phase_intensity_by_stage() {
-        // 返回 (搜索次数, 是否点赞)；阅读篇数与点赞次数在 runner 里随机
-        assert_eq!(crate::nurture::xhs_phase_intensity("warmup"), (2, false)); // 预热只读
-        assert_eq!(crate::nurture::xhs_phase_intensity("growth"), (3, true));  // 成长点赞
-        assert_eq!(crate::nurture::xhs_phase_intensity("mature"), (2, true));  // 成熟点赞
-        assert_eq!(crate::nurture::xhs_phase_intensity("other"), (2, false));  // 兜底=预热
+        // 返回 (搜索次数, 是否点赞)；阅读篇数与点赞次数在 runner 里随机。各阶段均点赞。
+        assert_eq!(crate::nurture::xhs_phase_intensity("warmup"), (2, true)); // 预热也点赞
+        assert_eq!(crate::nurture::xhs_phase_intensity("growth"), (3, true)); // 成长搜索更多
+        assert_eq!(crate::nurture::xhs_phase_intensity("mature"), (2, true)); // 成熟维持
+        assert_eq!(crate::nurture::xhs_phase_intensity("other"), (2, true));  // 兜底=预热
     }
 }

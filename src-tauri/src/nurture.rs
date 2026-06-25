@@ -316,13 +316,12 @@ pub(crate) async fn segmentfault_nurture_run(app: &AppHandle, account_id: &str, 
     Ok(format!("SegmentFault 养号完成（{}）：搜索 {} 次 · 阅读 {} 篇 · 用时 {}s", phase, searched, read, elapsed_secs))
 }
 
-/// 小红书养号分期强度 → (搜索次数, 是否点赞)。预热只读，成长/成熟点赞。
+/// 小红书养号分期强度 → (搜索次数, 是否点赞)。各阶段均点赞；成长期搜索更多。
 /// 每轮阅读篇数(3-8)与点赞次数(2-4)在 runner 里随机，不在此固定。
 pub(crate) fn xhs_phase_intensity(phase: &str) -> (i64, bool) {
     match phase {
         "growth" => (3, true),
-        "mature" => (2, true),
-        _ => (2, false), // warmup 只读
+        _ => (2, true), // warmup / mature
     }
 }
 
