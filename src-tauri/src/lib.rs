@@ -1139,6 +1139,31 @@ fn add_custom_topic_conn(conn: &Connection, platform: &str, label: &str) -> Resu
     Ok(TopicItem { key, label: label.to_string(), keywords: Vec::new(), builtin: false })
 }
 
+/// 删自定义主题（内置/不存在 → 拒绝），并从所有账号 nurture_topics 移除该 key。
+fn delete_custom_topic_conn(conn: &Connection, key: &str) -> Result<(), String> {
+    let n = conn.execute("DELETE FROM custom_topics WHERE key=?1", params![key])
+        .map_err(|e| e.to_string())?;
+    if n == 0 { return Err("内置主题不可删除".to_string()); }
+    let rows: Vec<(String, String)> = {
+        let mut stmt = conn.prepare("SELECT id, nurture_topics FROM accounts WHERE nurture_topics IS NOT NULL")
+            .map_err(|e| e.to_string())?;
+        let mapped = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(|e| e.to_string())?;
+        mapped.flatten().collect()
+    };
+    for (id, raw) in rows {
+        if let Ok(keys) = serde_json::from_str::<Vec<String>>(&raw) {
+            if keys.iter().any(|k| k == key) {
+                let kept: Vec<String> = keys.into_iter().filter(|k| k != key).collect();
+                let json = serde_json::to_string(&kept).map_err(|e| e.to_string())?;
+                conn.execute("UPDATE accounts SET nurture_topics=?1 WHERE id=?2", params![json, id])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// 按号龄分期返回当日 X 配额：(likes, follows, engages)。engages = 转推+回复预算。
 /// X 反自动化最严 → 量级极保守、关注最克制。
 fn x_daily_quota(phase: &str) -> (i64, i64, i64) {
@@ -12939,5 +12964,16 @@ mod topics_tests {
         assert!(add_custom_topic_conn(&c, "xiaohongshu", "美妆护肤").is_err()); // 内置重名
         assert!(add_custom_topic_conn(&c, "xiaohongshu", "露营装备").is_err()); // 自定义重名
         add_custom_topic_conn(&c, "github", "露营装备").unwrap();              // 不同平台同名 OK
+    }
+
+    #[test]
+    fn delete_custom_strips_and_rejects_builtin() {
+        let c = setup();
+        c.execute("INSERT INTO custom_topics (key,platform,label,keywords) VALUES ('u1','xiaohongshu','露营装备',NULL)", []).unwrap();
+        c.execute("INSERT INTO accounts (id,platform,nurture_topics) VALUES ('a1','xiaohongshu','[\"beauty\",\"u1\"]')", []).unwrap();
+        delete_custom_topic_conn(&c, "u1").unwrap();
+        assert!(!topics_catalog_from(&c, "xiaohongshu").iter().any(|i| i.key == "u1"));
+        assert_eq!(account_topics(&c, "a1"), vec!["beauty".to_string()]);
+        assert!(delete_custom_topic_conn(&c, "beauty").is_err()); // 内置不可删
     }
 }
