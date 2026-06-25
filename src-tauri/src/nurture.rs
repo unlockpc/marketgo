@@ -316,6 +316,15 @@ pub(crate) async fn segmentfault_nurture_run(app: &AppHandle, account_id: &str, 
     Ok(format!("SegmentFault 养号完成（{}）：搜索 {} 次 · 阅读 {} 篇 · 用时 {}s", phase, searched, read, elapsed_secs))
 }
 
+/// 小红书养号分期强度 → (搜索次数, 每次阅读, 点赞数)。预热只读，成长点赞，成熟维持。
+pub(crate) fn xhs_phase_intensity(phase: &str) -> (i64, i64, i64) {
+    match phase {
+        "growth" => (3, 3, 2),
+        "mature" => (2, 2, 1),
+        _ => (2, 2, 0), // warmup
+    }
+}
+
 /// X 养号：按方向取关键词→搜索采推文/用户→去重选取→点赞/关注/转推/回复 + 极少原创。
 pub(crate) async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Result<String, String> {
     let session_start = std::time::Instant::now();

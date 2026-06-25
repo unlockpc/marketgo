@@ -12902,4 +12902,12 @@ mod xhs_runner_tests {
         let w: i64 = c.query_row("SELECT warmup_days FROM nurture_strategies WHERE platform='twitter'", [], |r| r.get(0)).unwrap();
         assert_eq!(w, 14); // 不动其它平台
     }
+
+    #[test]
+    fn phase_intensity_by_stage() {
+        assert_eq!(crate::nurture::xhs_phase_intensity("warmup"), (2, 2, 0)); // 预热不点赞
+        assert_eq!(crate::nurture::xhs_phase_intensity("growth"), (3, 3, 2)); // 成长点赞
+        assert_eq!(crate::nurture::xhs_phase_intensity("mature"), (2, 2, 1)); // 成熟维持
+        assert_eq!(crate::nurture::xhs_phase_intensity("other"), (2, 2, 0)); // 兜底=预热
+    }
 }
