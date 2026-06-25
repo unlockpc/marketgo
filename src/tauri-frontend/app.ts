@@ -3749,6 +3749,8 @@ function showNurtureComplete(seconds: number, result: string) {
 
 (window as any).stopNurture = function() {
   nurtureAborted = true;
+  // 通知后端 runner 停止：仅置 JS 标志拦不住已在跑的 Rust 养号循环（会继续搜索/跳转）。
+  invoke('stop_nurture').catch(() => {});
   if (nurtureTimerInterval) {
     clearInterval(nurtureTimerInterval);
     nurtureTimerInterval = null;
@@ -4025,8 +4027,10 @@ async function startNurtureAll() {
 
 function stopNurtureAll() {
   nurtureAllAborted = true;
+  // 通知后端：在跑的账号 runner 在下一次导航前退出（不再等它把整轮搜索/阅读跑完）。
+  invoke('stop_nurture').catch(() => {});
   const statusEl = document.getElementById('nurtureAllStatusText');
-  if (statusEl) statusEl.textContent = (statusEl.textContent || '') + ' · 停止中，养完当前账号后结束…';
+  if (statusEl) statusEl.textContent = (statusEl.textContent || '') + ' · 停止中，当前账号收尾后结束…';
 }
 
 // ============================================================================

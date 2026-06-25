@@ -9480,6 +9480,8 @@ async fn quick_nurture(
     account_id: String,
     seconds: i64,
 ) -> Result<String, String> {
+    // 复位停止开关：本次养号开始，清掉上一次可能遗留的「停止」请求。
+    NURTURE_STOP.store(false, Ordering::SeqCst);
     // Get account info - query platform first, then try profile_id
     let (platform, profile_id) = {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
@@ -9582,6 +9584,15 @@ async fn quick_nurture(
     }
 
     Ok(format!("Quick nurture completed: {} seconds", duration))
+}
+
+/// 停止正在进行的手动养号：置停止开关，runner 在下一次导航前检查后提前退出。
+/// 已发出的单个浏览器动作无法中断，但不会再开始新的导航/搜索/阅读。
+#[tauri::command]
+fn stop_nurture() -> Result<(), String> {
+    NURTURE_STOP.store(true, Ordering::SeqCst);
+    log::info!("[NURTURE] 收到停止请求，runner 将在下一次导航前退出");
+    Ok(())
 }
 
 // ============================================================================
@@ -9931,6 +9942,11 @@ fn get_accounts_needing_nurture(state: State<AppState>) -> Result<Vec<serde_json
 
 static ENGINE_RUNNING: AtomicBool = AtomicBool::new(false);
 static ENGINE_STOP: AtomicBool = AtomicBool::new(false);
+/// 手动养号（quick_nurture）的停止开关：前端「停止养号」置 true，runner 在每次导航前检查并提前退出。
+/// quick_nurture 开头复位为 false。子模块经 `use crate::*` 直接引用。
+pub(crate) static NURTURE_STOP: AtomicBool = AtomicBool::new(false);
+/// runner 循环里调用：被请求停止时返回 true。
+pub(crate) fn nurture_should_stop() -> bool { NURTURE_STOP.load(Ordering::SeqCst) }
 static ENGINE_PROCESSED: AtomicI64 = AtomicI64::new(0);
 /// 当前已启动的 profile（用于复用标签页，避免每个任务都新开标签把浏览器刷爆）
 static ENGINE_CURRENT_PROFILE: std::sync::OnceLock<std::sync::Mutex<Option<String>>> = std::sync::OnceLock::new();
@@ -12353,6 +12369,7 @@ pub fn run() {
             get_account_nurture_status,
             list_accounts_with_nurture_status,
             quick_nurture,
+            stop_nurture,
             // Nurture Strategy Management
             list_nurture_strategies,
             update_nurture_strategy,

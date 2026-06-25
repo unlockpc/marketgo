@@ -3459,6 +3459,8 @@
   }
   window.stopNurture = function() {
     nurtureAborted = true;
+    invoke2("stop_nurture").catch(() => {
+    });
     if (nurtureTimerInterval) {
       clearInterval(nurtureTimerInterval);
       nurtureTimerInterval = null;
@@ -3693,8 +3695,10 @@
   }
   function stopNurtureAll() {
     nurtureAllAborted = true;
+    invoke2("stop_nurture").catch(() => {
+    });
     const statusEl = document.getElementById("nurtureAllStatusText");
-    if (statusEl) statusEl.textContent = (statusEl.textContent || "") + " \xB7 \u505C\u6B62\u4E2D\uFF0C\u517B\u5B8C\u5F53\u524D\u8D26\u53F7\u540E\u7ED3\u675F\u2026";
+    if (statusEl) statusEl.textContent = (statusEl.textContent || "") + " \xB7 \u505C\u6B62\u4E2D\uFF0C\u5F53\u524D\u8D26\u53F7\u6536\u5C3E\u540E\u7ED3\u675F\u2026";
   }
   async function openBatchNurtureModal() {
     if (accounts.length === 0) {

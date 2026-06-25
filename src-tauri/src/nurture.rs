@@ -89,6 +89,7 @@ pub(crate) async fn github_nurture_run(app: &AppHandle, account_id: &str, _durat
     let mut done = 0i64;
     emit_nurture_step(app, account_id, &format!("开始 GitHub 养号 · 准备 Star {} 个仓库", chosen.len()));
     for (i, repo) in chosen.iter().enumerate() {
+        if nurture_should_stop() { break; }
         let short = repo.trim_start_matches("https://github.com/");
         emit_nurture_step(app, account_id, &format!("⭐ Star {}/{}：{}", i + 1, chosen.len(), short));
         let repo_c = repo.clone();
@@ -104,6 +105,7 @@ pub(crate) async fn github_nurture_run(app: &AppHandle, account_id: &str, _durat
     // follow：对已 star 的 repo follow 其 owner（owner profile = https://github.com/owner）
     if n_follow > 0 {
         for (i, repo) in chosen.iter().take(n_follow as usize).enumerate() {
+            if nurture_should_stop() { break; }
             let owner_url = repo.rsplitn(2, '/').nth(1).unwrap_or(repo).to_string();
             if owner_url.matches('/').count() != 3 { continue; } // 仅 https://github.com/owner 形态
             emit_nurture_step(app, account_id, &format!("👤 Follow {}/{}：{}", i + 1, n_follow, owner_url.trim_start_matches("https://github.com/")));
@@ -214,6 +216,7 @@ fn sf_nurture_browse_blocking(keywords: Vec<String>, n_search: i64, read_per_sea
     let mut read = 0i64;
     let mut seed = seed0 | 1;
     for _ in 0..n_search.max(1) {
+        if nurture_should_stop() { break; }
         if start.elapsed().as_secs() as i64 >= duration_secs { break; }
         // xorshift 推进选词
         seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17;
@@ -242,6 +245,7 @@ fn sf_nurture_browse_blocking(keywords: Vec<String>, n_search: i64, read_per_sea
         // 点进 read_per_search 篇阅读（拟人滚动到底，stay 一会）
         let mut opened = 0i64;
         for p in posts {
+            if nurture_should_stop() { break; }
             if opened >= read_per_search { break; }
             if start.elapsed().as_secs() as i64 >= duration_secs { break; }
             if unzoo_navigate(&p).is_err() { continue; }
@@ -383,6 +387,7 @@ fn xhs_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec<S
     let mut searched = 0i64; let mut read = 0i64; let mut liked = 0i64;
     let mut seed = seed0 | 1;
     for _ in 0..n_search.max(1) {
+        if nurture_should_stop() { break; }
         if start.elapsed().as_secs() as i64 >= duration_secs { break; }
         seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17;
         let kw = &keywords[(seed as usize) % keywords.len()];
@@ -413,6 +418,7 @@ fn xhs_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec<S
         let read_per_search = get_human_delay(3, 8) as i64;
         let mut opened = 0i64;
         for p in notes {
+            if nurture_should_stop() { break; }
             if opened >= read_per_search { break; }
             if start.elapsed().as_secs() as i64 >= duration_secs { break; }
             if unzoo_navigate(&p).is_err() { continue; }
@@ -611,6 +617,7 @@ pub(crate) async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: 
     let mut aborted_health: Option<String> = None;
     emit_nurture_step(app, account_id, &format!("开始 X 养号 · 准备点赞 {} 条推文", chosen.len()));
     for (i, t) in chosen.iter().enumerate() {
+        if nurture_should_stop() { break; }
         emit_nurture_step(app, account_id, &format!("❤️ 点赞中 {}/{}", i + 1, chosen.len()));
         let tc = t.clone();
         let r = tauri::async_runtime::spawn_blocking(move || x_like_blocking(&tc)).await.map_err(|e| e.to_string())?;
@@ -651,6 +658,7 @@ pub(crate) async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: 
         };
         emit_nurture_step(app, account_id, &format!("👤 找领域优质用户关注（目标 {} 个）", n_follow));
         for prof in &pool {
+            if nurture_should_stop() { break; }
             if follows >= n_follow { break; }
             emit_nurture_step(app, account_id, &format!("👤 关注评估中（已 {}/{}）：{}", follows, n_follow, prof.trim_start_matches("https://x.com/")));
             let p = prof.clone();
@@ -675,6 +683,7 @@ pub(crate) async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: 
     let mut engages = 0i64;
     if aborted_health.is_none() && n_engage > 0 {
         for (i, t) in chosen.iter().take(n_engage as usize).enumerate() {
+            if nurture_should_stop() { break; }
             let key = format!("{}#engage", t);
             let acted = { let st = app.state::<AppState>(); let l = st.db.lock().map_err(|e| e.to_string())?; x_already_acted(&l, account_id, &key) };
             if acted { continue; }
