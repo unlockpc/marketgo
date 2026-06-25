@@ -1114,6 +1114,18 @@ fn topics_catalog_from(conn: &Connection, platform: &str) -> Vec<TopicItem> {
     out
 }
 
+/// 保存账号所选主题，按账号 platform 的 catalog 过滤非法 key。
+fn set_account_topics_conn(conn: &Connection, account_id: &str, keys: &[String]) -> Result<(), String> {
+    let platform = account_platform(conn, account_id).ok_or_else(|| "账号不存在".to_string())?;
+    let valid: std::collections::HashSet<String> =
+        topics_catalog_from(conn, &platform).into_iter().map(|i| i.key).collect();
+    let kept: Vec<String> = keys.iter().filter(|k| valid.contains(*k)).cloned().collect();
+    let json = serde_json::to_string(&kept).map_err(|e| e.to_string())?;
+    conn.execute("UPDATE accounts SET nurture_topics=?1 WHERE id=?2", params![json, account_id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// 按号龄分期返回当日 X 配额：(likes, follows, engages)。engages = 转推+回复预算。
 /// X 反自动化最严 → 量级极保守、关注最克制。
 fn x_daily_quota(phase: &str) -> (i64, i64, i64) {
@@ -12885,5 +12897,22 @@ mod topics_tests {
         c.execute("INSERT INTO accounts (id,platform,nurture_topics) VALUES ('a1','xiaohongshu','[\"beauty\",\"food\"]')", []).unwrap();
         assert_eq!(account_topics(&c, "a1"), vec!["beauty".to_string(), "food".to_string()]);
         assert!(account_topics(&c, "nope").is_empty());
+    }
+
+    #[test]
+    fn set_filters_unknown_and_roundtrips() {
+        let c = setup();
+        c.execute("INSERT INTO accounts (id,platform) VALUES ('a1','xiaohongshu')", []).unwrap();
+        set_account_topics_conn(&c, "a1", &["beauty".to_string(), "ghost".to_string()]).unwrap();
+        assert_eq!(account_topics(&c, "a1"), vec!["beauty".to_string()]);
+    }
+
+    #[test]
+    fn set_keeps_custom_of_same_platform() {
+        let c = setup();
+        c.execute("INSERT INTO accounts (id,platform) VALUES ('a1','xiaohongshu')", []).unwrap();
+        c.execute("INSERT INTO custom_topics (key,platform,label,keywords) VALUES ('u1','xiaohongshu','露营装备',NULL)", []).unwrap();
+        set_account_topics_conn(&c, "a1", &["u1".to_string()]).unwrap();
+        assert_eq!(account_topics(&c, "a1"), vec!["u1".to_string()]);
     }
 }
