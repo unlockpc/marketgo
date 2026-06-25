@@ -452,6 +452,57 @@ fn xhs_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec<S
     Ok((searched, read, liked))
 }
 
+/// 小红书养号入口：读主题 + 分期 → 搜索驱动浏览(+成长期点赞) → 写养号统计。未选主题 → 跳过提示。
+pub(crate) async fn xiaohongshu_nurture_run(app: &AppHandle, account_id: &str, duration: i64) -> Result<String, String> {
+    let session_start = std::time::Instant::now();
+    let (topics, kws, phase) = {
+        let st = app.state::<AppState>();
+        let conn = st.db.lock().map_err(|e| e.to_string())?;
+        let topics = account_topics(&conn, account_id);
+        let kws = account_topic_keywords(&conn, account_id);
+        let created: Option<String> = conn.query_row("SELECT created_at FROM accounts WHERE id=?1", params![account_id], |r| r.get(0)).ok().flatten();
+        let age = created.as_deref().and_then(parse_dt).map(|c| (Utc::now() - c).num_days()).unwrap_or(0);
+        let strat = conn.query_row("SELECT warmup_days, COALESCE(growth_days, warmup_days), daily_sessions_min, daily_sessions_max FROM nurture_strategies WHERE platform='xiaohongshu'",
+            [], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,i64>(1)?, r.get::<_,i64>(2)?, r.get::<_,i64>(3)?))).ok();
+        let (warmup, growth, smin, smax) = strat.unwrap_or((7, 5, 1, 2));
+        let (phase, _t) = nurture_phase_and_target(age, warmup, growth, smin, smax);
+        (topics, kws, phase.to_string())
+    };
+    if topics.is_empty() {
+        return Ok("账号未选主题，跳过小红书养号（点卡片上「🎯 主题」选一下方向）".to_string());
+    }
+    if kws.is_empty() { return Ok("主题无可用关键词".to_string()); }
+    let (n_search, read_per_search, n_like) = xhs_phase_intensity(&phase);
+    let dur = duration.max(30);
+    let seed0 = get_random_delay(1, 100_000);
+    emit_nurture_step(app, account_id, &format!("开始小红书养号 · 按主题搜索 {} 次并阅读（约 {}s）", n_search, dur));
+    let app_cl = app.clone();
+    let acct = account_id.to_string();
+    let (searched, read, liked) = tauri::async_runtime::spawn_blocking(move || xhs_nurture_browse_blocking(app_cl, &acct, kws, n_search, read_per_search, n_like, dur, seed0))
+        .await.map_err(|e| format!("养号任务异常: {}", e))??;
+
+    // 写养号统计（与 SF 一致）
+    let elapsed_secs = session_start.elapsed().as_secs() as i64;
+    {
+        let st = app.state::<AppState>();
+        let locked = st.db.lock();
+        if let Ok(conn) = locked {
+            let now = Utc::now().to_rfc3339();
+            let today = Local::now().format("%Y-%m-%d").to_string();
+            let _ = conn.execute(
+                "UPDATE accounts SET nurture_started_at=COALESCE(nurture_started_at,?1), last_nurture_at=?1, \
+                 total_nurture_seconds=COALESCE(total_nurture_seconds,0)+?2, health_status='healthy', last_health_check=?1 WHERE id=?3",
+                params![now, elapsed_secs, account_id]);
+            let _ = conn.execute(
+                "INSERT INTO nurture_daily_logs (id, account_id, date, sessions_completed, total_seconds) VALUES (?1,?2,?3,1,?4) \
+                 ON CONFLICT(account_id,date) DO UPDATE SET sessions_completed=sessions_completed+1, total_seconds=total_seconds+?4",
+                params![Uuid::new_v4().to_string(), account_id, today, elapsed_secs]);
+        }
+    }
+    log::info!("[XHS-NURTURE] account={} phase={} 搜索={} 阅读={} 点赞={} 耗时={}s", account_id, phase, searched, read, liked, elapsed_secs);
+    Ok(format!("小红书养号完成（{}）：搜索 {} 次 · 阅读 {} 篇 · 点赞 {} · 用时 {}s", phase, searched, read, liked, elapsed_secs))
+}
+
 /// X 养号：按方向取关键词→搜索采推文/用户→去重选取→点赞/关注/转推/回复 + 极少原创。
 pub(crate) async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Result<String, String> {
     let session_start = std::time::Instant::now();

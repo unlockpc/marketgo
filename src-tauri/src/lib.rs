@@ -9555,6 +9555,10 @@ async fn quick_nurture(
     if platform.eq_ignore_ascii_case("segmentfault") {
         return nurture::segmentfault_nurture_run(&app, &account_id, seconds).await;
     }
+    // 小红书走专属搜索驱动养号（按主题搜索→浏览→读笔记，成长期点赞），不走纯滚动。
+    if platform.eq_ignore_ascii_case("xiaohongshu") || platform.eq_ignore_ascii_case("redbook") {
+        return nurture::xiaohongshu_nurture_run(&app, &account_id, seconds).await;
+    }
 
     // Simulate browsing for specified duration.
     // 走阻塞版 + spawn_blocking（阻塞 reqwest 不能在 async 里直接调，否则导航 panic、tab 空白不操作）。
