@@ -370,6 +370,88 @@ fn xhs_like_blocking() -> bool {
     false
 }
 
+/// 小红书养号（搜索驱动）：按主题关键词搜索→拟人浏览→点进笔记阅读；成长期对少量笔记点赞。
+/// 全程"等加载+随机延迟"再操作。返回 (searched, read, liked)。
+/// app/account_id 用于点赞去重(xhs_actions_log)与进度推送。
+fn xhs_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec<String>, n_search: i64, read_per_search: i64, n_like: i64, duration_secs: i64, seed0: u64) -> Result<(i64, i64, i64), String> {
+    use std::time::{Duration, Instant};
+    let start = Instant::now();
+    if keywords.is_empty() { return Ok((0, 0, 0)); }
+    if !xhs_logged_in_blocking() {
+        return Err("未登录小红书！请先点卡片上「✋ 手工登录」在浏览器里登一次，再养号。".to_string());
+    }
+    let mut searched = 0i64; let mut read = 0i64; let mut liked = 0i64;
+    let mut seed = seed0 | 1;
+    for _ in 0..n_search.max(1) {
+        if start.elapsed().as_secs() as i64 >= duration_secs { break; }
+        seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17;
+        let kw = &keywords[(seed as usize) % keywords.len()];
+        let q_enc = kw.replace(' ', "%20");
+        let url = format!("https://www.xiaohongshu.com/search_result?keyword={}", q_enc);
+        if unzoo_navigate(&url).is_err() { continue; }
+        // 等搜索结果加载完（笔记卡片出现）再操作
+        if !xhs_wait_loaded_blocking("a[href*=\"/explore/\"]", 8) { continue; }
+        std::thread::sleep(Duration::from_millis(get_human_delay(2000, 4000)));
+        searched += 1;
+        // 拟人滚动结果页
+        for _ in 0..get_human_delay(2, 4) {
+            let _ = unzoo_scroll("down", get_human_delay(200, 500) as i32);
+            std::thread::sleep(Duration::from_millis(get_human_delay(1500, 3500)));
+            random_mouse_movement();
+        }
+        // 采笔记链接，规范化绝对 URL 去重
+        let links = unzoo_get_links("a[href*=\"/explore/\"]").unwrap_or_default();
+        let mut notes: Vec<String> = links.into_iter().filter_map(|h| {
+            let h = h.trim();
+            let abs = if h.starts_with("http") { h.to_string() }
+                      else if h.starts_with('/') { format!("https://www.xiaohongshu.com{}", h) }
+                      else { return None; };
+            if abs.contains("/explore/") { Some(abs) } else { None }
+        }).collect();
+        notes.dedup();
+        // 点进 read_per_search 篇阅读，成长期配额内点赞
+        let mut opened = 0i64;
+        for p in notes {
+            if opened >= read_per_search { break; }
+            if start.elapsed().as_secs() as i64 >= duration_secs { break; }
+            if unzoo_navigate(&p).is_err() { continue; }
+            // 等笔记页加载完再操作；加载不出就跳过这篇
+            if !xhs_wait_loaded_blocking(".note-content, #noteContainer, .interaction-container", 8) { continue; }
+            std::thread::sleep(Duration::from_millis(get_human_delay(2500, 4000)));
+            // 拟人滚动阅读
+            for _ in 0..get_human_delay(3, 6) {
+                let _ = unzoo_scroll("down", get_human_delay(250, 600) as i32);
+                std::thread::sleep(Duration::from_millis(get_human_delay(1800, 4000)));
+                random_mouse_movement();
+            }
+            read += 1; opened += 1;
+            // 成长期点赞：配额内 + 未赞过（去重避免重复点赞导致取消赞）+ 等加载后随机停 2~5s 才点
+            if liked < n_like {
+                let already = {
+                    let st = app.state::<AppState>();
+                    let locked = st.db.lock();
+                    match locked { Ok(c) => xhs_already_acted(&c, account_id, &p), Err(_) => true }
+                };
+                if !already {
+                    std::thread::sleep(Duration::from_millis(get_human_delay(2000, 5000))); // 加载后随机停几秒再点赞
+                    if xhs_like_blocking() {
+                        liked += 1;
+                        {
+                            let st = app.state::<AppState>();
+                            let locked = st.db.lock();
+                            if let Ok(c) = locked { let _ = xhs_record_action(&c, account_id, "like", &p); }
+                        }
+                        emit_nurture_step(&app, account_id, &format!("👍 点赞 {}/{}", liked, n_like));
+                        std::thread::sleep(Duration::from_millis(get_human_delay(1500, 3000))); // 点后 settle
+                    }
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(get_human_delay(2000, 4000)));
+    }
+    Ok((searched, read, liked))
+}
+
 /// X 养号：按方向取关键词→搜索采推文/用户→去重选取→点赞/关注/转推/回复 + 极少原创。
 pub(crate) async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Result<String, String> {
     let session_start = std::time::Instant::now();
