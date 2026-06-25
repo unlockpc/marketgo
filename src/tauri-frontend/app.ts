@@ -1233,6 +1233,8 @@ function navigateTo(page: string) {
   });
 
   currentPage = page;
+  // 记住当前页：刷新（location.reload）后由 loadInitialData 恢复，避免每次跳回仪表盘。
+  try { sessionStorage.setItem('unmarket_page', page); } catch {}
 
   switch (page) {
     case 'dashboard': loadDashboard(); break;
@@ -1736,8 +1738,15 @@ async function loadInitialData() {
     const providers = await invoke('get_ai_providers') as Record<string, any>;
     aiProviders = { ...defaultAiProviders, ...(providers || {}) };
     console.log('Products loaded:', products.length);
-    // Load dashboard as default page
-    await loadDashboard();
+    // 恢复刷新前所在的页（sessionStorage），默认仪表盘。整个 app 重启后回到默认。
+    const VALID_PAGES = ['dashboard','campaigns','products','publish','articles','engage','accounts','tasks','content','metrics','personas','marketplaces','stats','guide-scenarios','settings'];
+    let saved = '';
+    try { saved = sessionStorage.getItem('unmarket_page') || ''; } catch {}
+    if (saved && saved !== 'dashboard' && VALID_PAGES.includes(saved)) {
+      navigateTo(saved);
+    } else {
+      await loadDashboard();
+    }
   } catch (error) {
     console.error('Failed to load initial data:', error);
     showToast(t('msg.failedToLoad'), 'error');

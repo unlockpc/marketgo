@@ -1213,6 +1213,10 @@
       p.classList.toggle("active", p.id === `page-${page}`);
     });
     currentPage = page;
+    try {
+      sessionStorage.setItem("unmarket_page", page);
+    } catch {
+    }
     switch (page) {
       case "dashboard":
         loadDashboard();
@@ -1753,7 +1757,17 @@
       const providers = await invoke2("get_ai_providers");
       aiProviders = { ...defaultAiProviders, ...providers || {} };
       console.log("Products loaded:", products.length);
-      await loadDashboard();
+      const VALID_PAGES = ["dashboard", "campaigns", "products", "publish", "articles", "engage", "accounts", "tasks", "content", "metrics", "personas", "marketplaces", "stats", "guide-scenarios", "settings"];
+      let saved = "";
+      try {
+        saved = sessionStorage.getItem("unmarket_page") || "";
+      } catch {
+      }
+      if (saved && saved !== "dashboard" && VALID_PAGES.includes(saved)) {
+        navigateTo(saved);
+      } else {
+        await loadDashboard();
+      }
     } catch (error) {
       console.error("Failed to load initial data:", error);
       showToast(t("msg.failedToLoad"), "error");
