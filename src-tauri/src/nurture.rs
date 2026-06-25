@@ -363,7 +363,7 @@ fn xhs_logged_in_blocking() -> bool {
     false
 }
 
-/// 在当前笔记页点赞（最佳猜测选择器，实测可能需微调）。成功点击返回 true。
+/// 在当前笔记弹框点赞（最佳猜测选择器，实测可能需微调）。成功点击返回 true。
 fn xhs_like_blocking() -> bool {
     let selectors = ["span.like-wrapper", ".interact-container .like-wrapper", "[class*=\"like-active\"]", ".like-wrapper"];
     for s in selectors {
@@ -372,6 +372,39 @@ fn xhs_like_blocking() -> bool {
         }
     }
     false
+}
+
+/// 在搜索结果页上「点击」第 idx 张笔记卡片（idx 从 1 起）打开弹框——走 human 模式真实点击，
+/// 触发小红书的弹框逻辑（直接 navigate /explore/ 会跳独立页 + 开新 tab，既不拟人又错位）。
+/// 卡片选择器为最佳猜测，实测可能需微调。点击成功返回 true。
+fn xhs_open_note_blocking(idx: i64) -> bool {
+    let cands = [
+        format!("section.note-item:nth-of-type({}) a.cover", idx),
+        format!(".feeds-container section:nth-of-type({}) a.cover", idx),
+        format!("section.note-item:nth-of-type({})", idx),
+        format!(".note-item:nth-of-type({})", idx),
+    ];
+    for c in &cands {
+        if unzoo_element_exists(c) && unzoo_human_click(c).is_ok() {
+            return true;
+        }
+    }
+    false
+}
+
+/// 关闭当前笔记弹框：优先点关闭按钮，兜底按 Esc。关后回到搜索结果页（不丢上下文）。
+fn xhs_close_note_blocking() {
+    let close_sels = [".close-circle", ".note-detail-mask .close", ".close-box .close", "div[class*=\"close-circle\"]"];
+    for s in &close_sels {
+        if unzoo_element_exists(s) && unzoo_click(s).is_ok() {
+            return;
+        }
+    }
+    // 兜底：按 Esc 关弹框
+    let tab_id = get_active_tab().unwrap_or_default();
+    if !tab_id.is_empty() {
+        let _ = unzoo_mcp("browser_press_key", serde_json::json!({ "tab_id": tab_id, "key": "Escape" }));
+    }
 }
 
 /// 小红书养号（搜索驱动）：按主题关键词搜索→拟人浏览→点进笔记阅读；成长期对少量笔记点赞。
@@ -404,55 +437,59 @@ fn xhs_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec<S
             std::thread::sleep(Duration::from_millis(get_human_delay(1500, 3500)));
             random_mouse_movement();
         }
-        // 采笔记链接，规范化绝对 URL 去重
-        let links = unzoo_get_links("a[href*=\"/explore/\"]").unwrap_or_default();
-        let mut notes: Vec<String> = links.into_iter().filter_map(|h| {
-            let h = h.trim();
-            let abs = if h.starts_with("http") { h.to_string() }
-                      else if h.starts_with('/') { format!("https://www.xiaohongshu.com{}", h) }
-                      else { return None; };
-            if abs.contains("/explore/") { Some(abs) } else { None }
-        }).collect();
-        notes.dedup();
-        // 本轮随机阅读 3-8 篇；成长/成熟期配额内点赞
-        let read_per_search = get_human_delay(3, 8) as i64;
+        // 本轮随机阅读 3-8 篇；各阶段配额内点赞。卡片数量用于限定上界，避免点到不存在的序号。
+        let card_count = unzoo_get_links("a[href*=\"/explore/\"]").map(|v| v.len() as i64).unwrap_or(0);
+        let read_per_search = get_human_delay(3, 8).min(card_count.max(1) as u64) as i64;
         let mut opened = 0i64;
-        for p in notes {
+        let mut idx = 1i64;
+        while opened < read_per_search {
             if nurture_should_stop() { break; }
-            if opened >= read_per_search { break; }
             if start.elapsed().as_secs() as i64 >= duration_secs { break; }
-            if unzoo_navigate(&p).is_err() { continue; }
-            // 等笔记页加载完再操作；加载不出就跳过这篇
-            if !xhs_wait_loaded_blocking(".note-content, #noteContainer, .interaction-container", 8) { continue; }
+            if idx > card_count.max(1) { break; }
+            // 在搜索页上「点击」第 idx 张卡片打开弹框（human 真实点击，触发小红书弹框逻辑）
+            if !xhs_open_note_blocking(idx) { idx += 1; continue; }
+            idx += 1;
+            // 等弹框加载完再操作；加载不出就关掉跳过这篇
+            if !xhs_wait_loaded_blocking(".note-detail-mask, #noteContainer, .note-content", 8) {
+                xhs_close_note_blocking();
+                std::thread::sleep(Duration::from_millis(get_human_delay(800, 1500)));
+                continue;
+            }
             std::thread::sleep(Duration::from_millis(get_human_delay(2500, 4000)));
-            // 拟人滚动阅读
+            // 弹框打开后小红书会把 URL 更新为 /explore/<id>，取来做跨 session 点赞去重
+            let note_url = unzoo_evaluate("location.href").unwrap_or_default();
+            let dedup_key = if note_url.contains("/explore/") { note_url } else { String::new() };
+            // 拟人滚动阅读（弹框内）
             for _ in 0..get_human_delay(3, 6) {
                 let _ = unzoo_scroll("down", get_human_delay(250, 600) as i32);
                 std::thread::sleep(Duration::from_millis(get_human_delay(1800, 4000)));
                 random_mouse_movement();
             }
             read += 1; opened += 1;
-            // 成长期点赞：配额内 + 未赞过（去重避免重复点赞导致取消赞）+ 等加载后随机停 2~5s 才点
+            // 配额内点赞：未赞过（去重避免重复点赞导致取消赞）+ 等加载后随机停 2~5s 才点
             if liked < n_like {
-                let already = {
+                let already = if dedup_key.is_empty() { false } else {
                     let st = app.state::<AppState>();
                     let locked = st.db.lock();
-                    match locked { Ok(c) => xhs_already_acted(&c, account_id, &p), Err(_) => true }
+                    match locked { Ok(c) => xhs_already_acted(&c, account_id, &dedup_key), Err(_) => true }
                 };
                 if !already {
                     std::thread::sleep(Duration::from_millis(get_human_delay(2000, 5000))); // 加载后随机停几秒再点赞
                     if xhs_like_blocking() {
                         liked += 1;
-                        {
+                        if !dedup_key.is_empty() {
                             let st = app.state::<AppState>();
                             let locked = st.db.lock();
-                            if let Ok(c) = locked { let _ = xhs_record_action(&c, account_id, "like", &p); }
+                            if let Ok(c) = locked { let _ = xhs_record_action(&c, account_id, "like", &dedup_key); }
                         }
                         emit_nurture_step(&app, account_id, &format!("👍 点赞 {}/{}", liked, n_like));
                         std::thread::sleep(Duration::from_millis(get_human_delay(1500, 3000))); // 点后 settle
                     }
                 }
             }
+            // 关弹框回到搜索结果页，再读下一张卡片
+            xhs_close_note_blocking();
+            std::thread::sleep(Duration::from_millis(get_human_delay(1500, 3000)));
         }
         std::thread::sleep(Duration::from_millis(get_human_delay(2000, 4000)));
     }
