@@ -1351,6 +1351,28 @@ fn x_record_action(conn: &Connection, account_id: &str, action_type: &str, targe
         .map(|_| ()).map_err(|e| e.to_string())
 }
 
+/// 小红书养号动作去重（与 x_already_acted 同构，作用于 xhs_actions_log）。
+fn xhs_already_acted(conn: &Connection, account_id: &str, target: &str) -> bool {
+    conn.query_row(
+        "SELECT 1 FROM xhs_actions_log WHERE account_id=?1 AND target=?2 LIMIT 1",
+        params![account_id, target], |_| Ok(true)).unwrap_or(false)
+}
+
+fn xhs_record_action(conn: &Connection, account_id: &str, action_type: &str, target: &str) -> Result<(), String> {
+    let today = Local::now().format("%Y-%m-%d").to_string();
+    conn.execute(
+        "INSERT INTO xhs_actions_log (id, account_id, action_type, target, date) VALUES (?1,?2,?3,?4,?5)",
+        params![Uuid::new_v4().to_string(), account_id, action_type, target, today])
+        .map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// 小红书养号策略默认值：预热7/成长5（无条件更新该行）。调用方用 flag 守护只跑一次，避免覆盖用户手改。
+fn apply_xhs_strategy_default(conn: &Connection) -> usize {
+    conn.execute(
+        "UPDATE nurture_strategies SET warmup_days=7, growth_days=5 WHERE platform='xiaohongshu'",
+        []).unwrap_or(0)
+}
+
 fn x_target_persona_count(conn: &Connection, target: &str) -> i64 {
     conn.query_row(
         "SELECT COUNT(DISTINCT account_id) FROM x_actions_log WHERE target=?1",
@@ -1479,7 +1501,7 @@ const NURTURE_WARMUP_DAYS: &[(&str, i64)] = &[
     ("hackernews", 30),    // 多数功能要先攒 karma
     ("facebook", 30),      // 新号 checkpoint 极严
     ("instagram", 30),     // 极严
-    ("xiaohongshu", 30),   // 极严，需慢养拟真
+    ("xiaohongshu", 7),    // 默认预热 7 天（成长 5 天见 xhs cadence seeding）；用户可在设置里自定义
     ("v2ex", 30),          // 部分节点要金币/账号年龄才能发
     // —— 较严（21 天）——
     ("twitter", 5), ("x", 5),       // 默认预热 5 天（成长时长 NULL→兜底 = 5，成熟从第 10 天起）；用户可在设置里自定义
@@ -3673,6 +3695,9 @@ fn run_migrations(conn: &Connection) -> rusqlite::Result<()> {
     let _ = conn.execute("ALTER TABLE accounts ADD COLUMN nurture_topics TEXT", []);
     // 用户自定义主题（平台隔离）；keywords 可空，空则 runner 用 label 当关键词
     let _ = conn.execute("CREATE TABLE IF NOT EXISTS custom_topics (key TEXT PRIMARY KEY, platform TEXT NOT NULL, label TEXT NOT NULL, keywords TEXT)", []);
+    // 小红书养号动作日志（点赞去重，与 x_actions_log 同构）
+    let _ = conn.execute("CREATE TABLE IF NOT EXISTS xhs_actions_log (id TEXT PRIMARY KEY, account_id TEXT NOT NULL, action_type TEXT NOT NULL, target TEXT NOT NULL, date TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP)", []);
+    let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_xhs_actions_acct ON xhs_actions_log(account_id, target)", []);
     // 一次性把旧三列方向迁入统一列（key 不变，直接搬 JSON）
     let _ = conn.execute("UPDATE accounts SET nurture_topics = gh_domains WHERE platform='github' AND nurture_topics IS NULL AND gh_domains IS NOT NULL", []);
     let _ = conn.execute("UPDATE accounts SET nurture_topics = x_niches WHERE platform IN ('twitter','x') AND nurture_topics IS NULL AND x_niches IS NOT NULL", []);
@@ -3696,7 +3721,7 @@ fn run_migrations(conn: &Connection) -> rusqlite::Result<()> {
                 ("x", 14, 2, 4, 60, 180, 9, 22),
                 ("reddit", 14, 2, 5, 60, 300, 9, 23),
                 ("linkedin", 14, 1, 3, 60, 120, 8, 20),
-                ("xiaohongshu", 14, 3, 6, 60, 180, 10, 23),
+                ("xiaohongshu", 7, 3, 6, 60, 180, 10, 23),
                 ("zhihu", 14, 2, 4, 60, 180, 9, 22),
                 ("weibo", 14, 2, 5, 60, 180, 9, 23),
                 ("vk", 14, 2, 4, 60, 180, 10, 22),
@@ -3741,6 +3766,16 @@ fn run_migrations(conn: &Connection) -> rusqlite::Result<()> {
                     []);
             }
             engine_cfg_set(&conn, "nurture_segmentfault_cadence_seeded", "1");
+        }
+
+        // 一次性：小红书养号节奏定为「预热 7 天 + 成长 5 天」。flag 守护只跑一次，不覆盖用户后续手改；缺行补一条。
+        if engine_cfg_get(&conn, "nurture_xhs_cadence_seeded").is_none() {
+            if apply_xhs_strategy_default(&conn) == 0 {
+                let _ = conn.execute(
+                    "INSERT OR IGNORE INTO nurture_strategies (platform, warmup_days, growth_days) VALUES ('xiaohongshu', 7, 5)",
+                    []);
+            }
+            engine_cfg_set(&conn, "nurture_xhs_cadence_seeded", "1");
         }
     }
 
@@ -12833,5 +12868,38 @@ mod topics_tests {
         assert!(kws.contains(&"露营装备".to_string())); // 自定义无 keywords → 回退 label
         c.execute("INSERT INTO accounts (id,platform,nurture_topics) VALUES ('g1','github','[\"frontend\"]')", []).unwrap();
         assert!(account_topic_keywords(&c, "g1").contains(&"react".to_string())); // github：keywords 来自 topics
+    }
+}
+
+#[cfg(test)]
+mod xhs_runner_tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    fn setup_strategies() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch("
+            CREATE TABLE nurture_strategies (platform TEXT PRIMARY KEY, warmup_days INTEGER, growth_days INTEGER, daily_sessions_min INTEGER, daily_sessions_max INTEGER);
+        ").unwrap();
+        c
+    }
+
+    #[test]
+    fn xhs_default_sets_7_5() {
+        let c = setup_strategies();
+        // 不论原值（含 v4 播种的 30）→ 统一改 7/5
+        c.execute("INSERT INTO nurture_strategies (platform,warmup_days,growth_days,daily_sessions_min,daily_sessions_max) VALUES ('xiaohongshu',30,NULL,3,6)", []).unwrap();
+        assert_eq!(apply_xhs_strategy_default(&c), 1);
+        let (w, g): (i64, i64) = c.query_row("SELECT warmup_days, growth_days FROM nurture_strategies WHERE platform='xiaohongshu'", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!((w, g), (7, 5));
+    }
+
+    #[test]
+    fn xhs_default_only_touches_xiaohongshu() {
+        let c = setup_strategies();
+        c.execute("INSERT INTO nurture_strategies (platform,warmup_days,growth_days,daily_sessions_min,daily_sessions_max) VALUES ('twitter',14,NULL,2,4)", []).unwrap();
+        apply_xhs_strategy_default(&c);
+        let w: i64 = c.query_row("SELECT warmup_days FROM nurture_strategies WHERE platform='twitter'", [], |r| r.get(0)).unwrap();
+        assert_eq!(w, 14); // 不动其它平台
     }
 }
