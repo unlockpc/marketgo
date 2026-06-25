@@ -1164,6 +1164,26 @@ fn delete_custom_topic_conn(conn: &Connection, key: &str) -> Result<(), String> 
     Ok(())
 }
 
+/// 按账号 platform + 所选 keys，从 catalog 收集 keywords 去重；自定义无 keywords 时回退 label。供 runner 用。
+fn account_topic_keywords(conn: &Connection, account_id: &str) -> Vec<String> {
+    let platform = match account_platform(conn, account_id) { Some(p) => p, None => return Vec::new() };
+    let keys = account_topics(conn, account_id);
+    let catalog = topics_catalog_from(conn, &platform);
+    let mut out: Vec<String> = Vec::new();
+    for k in &keys {
+        if let Some(item) = catalog.iter().find(|i| &i.key == k) {
+            if item.keywords.is_empty() {
+                if !out.contains(&item.label) { out.push(item.label.clone()); }
+            } else {
+                for w in &item.keywords {
+                    if !out.contains(w) { out.push(w.clone()); }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// 按号龄分期返回当日 X 配额：(likes, follows, engages)。engages = 转推+回复预算。
 /// X 反自动化最严 → 量级极保守、关注最克制。
 fn x_daily_quota(phase: &str) -> (i64, i64, i64) {
@@ -12975,5 +12995,17 @@ mod topics_tests {
         assert!(!topics_catalog_from(&c, "xiaohongshu").iter().any(|i| i.key == "u1"));
         assert_eq!(account_topics(&c, "a1"), vec!["beauty".to_string()]);
         assert!(delete_custom_topic_conn(&c, "beauty").is_err()); // 内置不可删
+    }
+
+    #[test]
+    fn topic_keywords_builtin_and_custom_fallback() {
+        let c = setup();
+        c.execute("INSERT INTO custom_topics (key,platform,label,keywords) VALUES ('u1','xiaohongshu','露营装备',NULL)", []).unwrap();
+        c.execute("INSERT INTO accounts (id,platform,nurture_topics) VALUES ('a1','xiaohongshu','[\"beauty\",\"u1\"]')", []).unwrap();
+        let kws = account_topic_keywords(&c, "a1");
+        assert!(kws.contains(&"美妆护肤".to_string())); // 内置 xhs：keywords=label
+        assert!(kws.contains(&"露营装备".to_string())); // 自定义无 keywords → 回退 label
+        c.execute("INSERT INTO accounts (id,platform,nurture_topics) VALUES ('g1','github','[\"frontend\"]')", []).unwrap();
+        assert!(account_topic_keywords(&c, "g1").contains(&"react".to_string())); // github：keywords 来自 topics
     }
 }
