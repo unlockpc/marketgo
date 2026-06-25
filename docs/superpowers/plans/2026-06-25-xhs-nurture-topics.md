@@ -1,3 +1,5 @@
+> **已作废**：本计划为小红书专属版。范围已升级为「平台隔离统一主题系统 + 三套现有平台迁入」，将由新计划取代。新设计见 `docs/superpowers/specs/2026-06-25-nurture-topics-unified-design.md`。下文仅留作历史记录。
+
 # 小红书养号主题选择 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
