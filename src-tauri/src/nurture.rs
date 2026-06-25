@@ -316,12 +316,13 @@ pub(crate) async fn segmentfault_nurture_run(app: &AppHandle, account_id: &str, 
     Ok(format!("SegmentFault 养号完成（{}）：搜索 {} 次 · 阅读 {} 篇 · 用时 {}s", phase, searched, read, elapsed_secs))
 }
 
-/// 小红书养号分期强度 → (搜索次数, 每次阅读, 点赞数)。预热只读，成长点赞，成熟维持。
-pub(crate) fn xhs_phase_intensity(phase: &str) -> (i64, i64, i64) {
+/// 小红书养号分期强度 → (搜索次数, 是否点赞)。预热只读，成长/成熟点赞。
+/// 每轮阅读篇数(3-8)与点赞次数(2-4)在 runner 里随机，不在此固定。
+pub(crate) fn xhs_phase_intensity(phase: &str) -> (i64, bool) {
     match phase {
-        "growth" => (3, 3, 2),
-        "mature" => (2, 2, 1),
-        _ => (2, 2, 0), // warmup
+        "growth" => (3, true),
+        "mature" => (2, true),
+        _ => (2, false), // warmup 只读
     }
 }
 
@@ -373,7 +374,7 @@ fn xhs_like_blocking() -> bool {
 /// 小红书养号（搜索驱动）：按主题关键词搜索→拟人浏览→点进笔记阅读；成长期对少量笔记点赞。
 /// 全程"等加载+随机延迟"再操作。返回 (searched, read, liked)。
 /// app/account_id 用于点赞去重(xhs_actions_log)与进度推送。
-fn xhs_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec<String>, n_search: i64, read_per_search: i64, n_like: i64, duration_secs: i64, seed0: u64) -> Result<(i64, i64, i64), String> {
+fn xhs_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec<String>, n_search: i64, n_like: i64, duration_secs: i64, seed0: u64) -> Result<(i64, i64, i64), String> {
     use std::time::{Duration, Instant};
     let start = Instant::now();
     if keywords.is_empty() { return Ok((0, 0, 0)); }
@@ -409,7 +410,8 @@ fn xhs_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec<S
             if abs.contains("/explore/") { Some(abs) } else { None }
         }).collect();
         notes.dedup();
-        // 点进 read_per_search 篇阅读，成长期配额内点赞
+        // 本轮随机阅读 3-8 篇；成长/成熟期配额内点赞
+        let read_per_search = get_human_delay(3, 8) as i64;
         let mut opened = 0i64;
         for p in notes {
             if opened >= read_per_search { break; }
@@ -472,13 +474,15 @@ pub(crate) async fn xiaohongshu_nurture_run(app: &AppHandle, account_id: &str, d
         return Ok("账号未选主题，跳过小红书养号（点卡片上「🎯 主题」选一下方向）".to_string());
     }
     if kws.is_empty() { return Ok("主题无可用关键词".to_string()); }
-    let (n_search, read_per_search, n_like) = xhs_phase_intensity(&phase);
+    let (n_search, allow_like) = xhs_phase_intensity(&phase);
+    // 成长/成熟期点赞随机 2-4 次（预热只读 → 0）
+    let n_like = if allow_like { get_random_delay(2, 4) as i64 } else { 0 };
     let dur = duration.max(30);
     let seed0 = get_random_delay(1, 100_000);
     emit_nurture_step(app, account_id, &format!("开始小红书养号 · 按主题搜索 {} 次并阅读（约 {}s）", n_search, dur));
     let app_cl = app.clone();
     let acct = account_id.to_string();
-    let (searched, read, liked) = tauri::async_runtime::spawn_blocking(move || xhs_nurture_browse_blocking(app_cl, &acct, kws, n_search, read_per_search, n_like, dur, seed0))
+    let (searched, read, liked) = tauri::async_runtime::spawn_blocking(move || xhs_nurture_browse_blocking(app_cl, &acct, kws, n_search, n_like, dur, seed0))
         .await.map_err(|e| format!("养号任务异常: {}", e))??;
 
     // 写养号统计（与 SF 一致）
