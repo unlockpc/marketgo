@@ -949,18 +949,6 @@ const GH_DOMAINS: &[GhDomain] = &[
     GhDomain { key: "devtools",  label: "开发工具/效率",   topics: &["cli","developer-tools","vscode","neovim","terminal","automation"] },
 ];
 
-/// 收集所选领域 key 对应的全部 topic（按出现顺序去重，未知 key 跳过）。
-fn gh_domain_topics(keys: &[&str]) -> Vec<&'static str> {
-    let mut out: Vec<&'static str> = Vec::new();
-    for k in keys {
-        if let Some(d) = GH_DOMAINS.iter().find(|d| d.key == *k) {
-            for t in d.topics {
-                if !out.contains(t) { out.push(t); }
-            }
-        }
-    }
-    out
-}
 
 /// X(Twitter) 养号方向：X 消费端 Topics 的 16 个官方顶层方向。label 双语展示。
 pub struct XNiche {
@@ -988,18 +976,6 @@ const X_NICHES: &[XNiche] = &[
     XNiche { key: "hobbies",          label: "Hobbies & interests(兴趣爱好)", keywords: &["hobbies","DIY","crafts","woodworking","gardening","#DIY","collecting","model building","knitting","photography","#crafts","maker","3D printing","calligraphy","origami"] },
 ];
 
-/// 收集所选方向 key 对应的全部关键词（按出现顺序去重，未知 key 跳过）。
-fn x_niche_keywords(keys: &[&str]) -> Vec<&'static str> {
-    let mut out: Vec<&'static str> = Vec::new();
-    for k in keys {
-        if let Some(n) = X_NICHES.iter().find(|n| n.key == *k) {
-            for w in n.keywords {
-                if !out.contains(w) { out.push(w); }
-            }
-        }
-    }
-    out
-}
 
 /// SegmentFault（思否）养号领域：key 唯一，keywords 为思否站内搜索用的中文/技术词。
 /// 养号时按所选领域随机取词，走 https://segmentfault.com/search?q=<词> 搜索→浏览→读文章/问题。
@@ -1025,18 +1001,6 @@ const SF_DOMAINS: &[SfDomain] = &[
     SfDomain { key: "language",  label: "编程语言/基础",   keywords: &["算法","设计模式","数据结构","Rust","Python","JavaScript","并发编程"] },
 ];
 
-/// 收集所选领域 key 对应的全部关键词（按出现顺序去重，未知 key 跳过）。
-fn sf_domain_keywords(keys: &[&str]) -> Vec<&'static str> {
-    let mut out: Vec<&'static str> = Vec::new();
-    for k in keys {
-        if let Some(d) = SF_DOMAINS.iter().find(|d| d.key == *k) {
-            for w in d.keywords {
-                if !out.contains(w) { out.push(w); }
-            }
-        }
-    }
-    out
-}
 
 /// 小红书养号主题（内置赛道，代码事实源）。keywords 默认即主题名（主题名当搜索词）。
 #[derive(Clone, Copy)]
@@ -1371,14 +1335,6 @@ fn gh_target_persona_count(conn: &Connection, target: &str) -> i64 {
         params![target], |r| r.get(0)).unwrap_or(0)
 }
 
-/// 读账号所选领域（gh_domains JSON 数组），解析失败/空 → 空 vec。
-fn account_gh_domains(conn: &Connection, account_id: &str) -> Vec<String> {
-    let raw: Option<String> = conn.query_row(
-        "SELECT gh_domains FROM accounts WHERE id=?1",
-        params![account_id], |r| r.get(0)).ok().flatten();
-    raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok()).unwrap_or_default()
-}
-
 // ===== X 养号 DB 助手（与 gh_* 同构，作用于 x_actions_log）=====
 
 fn x_already_acted(conn: &Connection, account_id: &str, target: &str) -> bool {
@@ -1401,120 +1357,6 @@ fn x_target_persona_count(conn: &Connection, target: &str) -> i64 {
         params![target], |r| r.get(0)).unwrap_or(0)
 }
 
-fn account_x_niches(conn: &Connection, account_id: &str) -> Vec<String> {
-    let raw: Option<String> = conn.query_row(
-        "SELECT x_niches FROM accounts WHERE id=?1",
-        params![account_id], |r| r.get(0)).ok().flatten();
-    raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok()).unwrap_or_default()
-}
-
-/// 读账号所选 SegmentFault 领域（sf_domains JSON 数组），解析失败/空 → 空 vec。
-fn account_sf_domains(conn: &Connection, account_id: &str) -> Vec<String> {
-    let raw: Option<String> = conn.query_row(
-        "SELECT sf_domains FROM accounts WHERE id=?1",
-        params![account_id], |r| r.get(0)).ok().flatten();
-    raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok()).unwrap_or_default()
-}
-
-#[derive(serde::Serialize)]
-pub struct GhDomainItem { pub key: String, pub label: String, pub topics: Vec<String> }
-
-/// 给前端渲染领域多选框。
-#[tauri::command]
-fn gh_domains_catalog() -> Vec<GhDomainItem> {
-    GH_DOMAINS.iter().map(|d| GhDomainItem {
-        key: d.key.to_string(),
-        label: d.label.to_string(),
-        topics: d.topics.iter().map(|t| t.to_string()).collect(),
-    }).collect()
-}
-
-/// 读取某账号已选领域（供前端打开多选框时回勾）。
-#[tauri::command]
-fn get_account_gh_domains(state: State<AppState>, account_id: String) -> Result<Vec<String>, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    Ok(account_gh_domains(&conn, &account_id))
-}
-
-/// 保存某账号所选领域（仅保留合法 key）。
-#[tauri::command]
-fn set_account_gh_domains(state: State<AppState>, account_id: String, domains: Vec<String>) -> Result<(), String> {
-    let valid: Vec<String> = domains.into_iter()
-        .filter(|k| GH_DOMAINS.iter().any(|d| d.key == k))
-        .collect();
-    let json = serde_json::to_string(&valid).map_err(|e| e.to_string())?;
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    conn.execute("UPDATE accounts SET gh_domains=?1 WHERE id=?2", params![json, account_id])
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[derive(serde::Serialize)]
-pub struct XNicheItem { pub key: String, pub label: String, pub keywords: Vec<String> }
-
-/// 给前端渲染 X 方向多选框（16 官方方向，双语 label）。
-#[tauri::command]
-fn x_niches_catalog() -> Vec<XNicheItem> {
-    X_NICHES.iter().map(|n| XNicheItem {
-        key: n.key.to_string(),
-        label: n.label.to_string(),
-        keywords: n.keywords.iter().map(|w| w.to_string()).collect(),
-    }).collect()
-}
-
-/// 读取某账号已选 X 方向（供前端回勾）。
-#[tauri::command]
-fn get_account_x_niches(state: State<AppState>, account_id: String) -> Result<Vec<String>, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    Ok(account_x_niches(&conn, &account_id))
-}
-
-/// 保存某账号所选 X 方向（仅保留合法 key）。
-#[tauri::command]
-fn set_account_x_niches(state: State<AppState>, account_id: String, niches: Vec<String>) -> Result<(), String> {
-    let valid: Vec<String> = niches.into_iter()
-        .filter(|k| X_NICHES.iter().any(|n| n.key == k))
-        .collect();
-    let json = serde_json::to_string(&valid).map_err(|e| e.to_string())?;
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    conn.execute("UPDATE accounts SET x_niches=?1 WHERE id=?2", params![json, account_id])
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[derive(serde::Serialize)]
-pub struct SfDomainItem { pub key: String, pub label: String, pub keywords: Vec<String> }
-
-/// 给前端渲染 SegmentFault 领域多选框。
-#[tauri::command]
-fn sf_domains_catalog() -> Vec<SfDomainItem> {
-    SF_DOMAINS.iter().map(|d| SfDomainItem {
-        key: d.key.to_string(),
-        label: d.label.to_string(),
-        keywords: d.keywords.iter().map(|w| w.to_string()).collect(),
-    }).collect()
-}
-
-/// 读取某账号已选 SegmentFault 领域（供前端回勾）。
-#[tauri::command]
-fn get_account_sf_domains(state: State<AppState>, account_id: String) -> Result<Vec<String>, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    Ok(account_sf_domains(&conn, &account_id))
-}
-
-/// 保存某账号所选 SegmentFault 领域（仅保留合法 key）。
-#[tauri::command]
-fn set_account_sf_domains(state: State<AppState>, account_id: String, domains: Vec<String>) -> Result<(), String> {
-    let valid: Vec<String> = domains.into_iter()
-        .filter(|k| SF_DOMAINS.iter().any(|d| d.key == k))
-        .collect();
-    let json = serde_json::to_string(&valid).map_err(|e| e.to_string())?;
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    conn.execute("UPDATE accounts SET sf_domains=?1 WHERE id=?2", params![json, account_id])
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
 /// 平台 → 场景类别 key（research/product/social/content/career/lifestyle）。
 /// 供前端在已开通账号卡片上展示场景类别徽章（与开通选择器同一套分类）。
 #[tauri::command]
@@ -1522,33 +1364,6 @@ fn platform_scenes() -> std::collections::HashMap<String, String> {
     PLATFORM_KEYS.iter().filter_map(|&p| {
         platform_meta(p).map(|m| (p.to_string(), m.scene.to_string()))
     }).collect()
-}
-
-/// account_id → 已选养号方向/领域 key 列表（github 取 gh_domains，twitter/x 取 x_niches）。
-/// 一次性批量返回，供前端在账号卡片展示「养号方向」标签。
-#[tauri::command]
-fn account_niches(state: State<AppState>) -> Result<std::collections::HashMap<String, Vec<String>>, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    let mut stmt = conn.prepare("SELECT id, platform, gh_domains, x_niches, sf_domains FROM accounts").map_err(|e| e.to_string())?;
-    let rows = stmt.query_map([], |r| Ok((
-        r.get::<_, String>(0)?, r.get::<_, String>(1)?,
-        r.get::<_, Option<String>>(2)?, r.get::<_, Option<String>>(3)?,
-        r.get::<_, Option<String>>(4)?,
-    ))).map_err(|e| e.to_string())?;
-    let mut out = std::collections::HashMap::new();
-    for row in rows.flatten() {
-        let (id, platform, gh, x, sf) = row;
-        let raw = match platform.to_lowercase().as_str() {
-            "github" => gh,
-            "twitter" | "x" => x,
-            "segmentfault" => sf,
-            _ => None,
-        };
-        if let Some(keys) = raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok()) {
-            if !keys.is_empty() { out.insert(id, keys); }
-        }
-    }
-    Ok(out)
 }
 
 #[derive(Clone, Copy)]
@@ -12558,17 +12373,7 @@ pub fn run() {
             leads::reject_reply,
             get_nurture_overview,
             enqueue_nurture,
-            gh_domains_catalog,
-            get_account_gh_domains,
-            set_account_gh_domains,
-            x_niches_catalog,
-            get_account_x_niches,
-            set_account_x_niches,
-            sf_domains_catalog,
-            get_account_sf_domains,
-            set_account_sf_domains,
             platform_scenes,
-            account_niches,
             topics_catalog,
             get_account_topics,
             set_account_topics,
@@ -12731,17 +12536,6 @@ mod platform_meta_tests {
         }
     }
 
-    #[test]
-    fn gh_domain_topics_collects_and_dedups() {
-        let t = gh_domain_topics(&["frontend", "ai_coding"]);
-        assert!(t.contains(&"react"));
-        assert!(t.contains(&"claude"));
-        let t2 = gh_domain_topics(&["frontend", "unknown_xyz"]);
-        assert!(t2.contains(&"react"));
-        let t3 = gh_domain_topics(&["frontend", "frontend"]);
-        let uniq: std::collections::HashSet<_> = t3.iter().collect();
-        assert_eq!(uniq.len(), t3.len());
-    }
 
     #[test]
     fn gh_daily_quota_by_phase() {
@@ -12803,17 +12597,6 @@ mod platform_meta_tests {
         }
     }
 
-    #[test]
-    fn x_niche_keywords_collects_and_dedups() {
-        let kw = x_niche_keywords(&["technology", "science"]);
-        assert!(kw.contains(&"tech"));
-        assert!(kw.contains(&"science"));
-        let kw2 = x_niche_keywords(&["technology", "unknown_xyz"]);
-        assert!(kw2.contains(&"tech"));
-        let kw3 = x_niche_keywords(&["technology", "technology"]);
-        let uniq: std::collections::HashSet<_> = kw3.iter().collect();
-        assert_eq!(uniq.len(), kw3.len());
-    }
 
     #[test]
     fn x_daily_quota_by_phase() {
@@ -12919,15 +12702,6 @@ mod gh_db_tests {
         gh_record_action(&c, "acc2", "star", tgt).unwrap();
         assert_eq!(gh_target_persona_count(&c, tgt), 2);
     }
-
-    #[test]
-    fn read_account_domains() {
-        let c = setup();
-        c.execute("INSERT INTO accounts (id, gh_domains) VALUES ('acc1', '[\"frontend\",\"ai_coding\"]')", []).unwrap();
-        let d = account_gh_domains(&c, "acc1");
-        assert_eq!(d, vec!["frontend".to_string(), "ai_coding".to_string()]);
-        assert!(account_gh_domains(&c, "nope").is_empty());
-    }
 }
 
 #[cfg(test)]
@@ -12962,14 +12736,6 @@ mod x_db_tests {
         x_record_action(&c, "acc2", "like", tgt).unwrap();
         x_record_action(&c, "acc2", "like", tgt).unwrap();
         assert_eq!(x_target_persona_count(&c, tgt), 2);
-    }
-
-    #[test]
-    fn read_account_niches() {
-        let c = setup();
-        c.execute("INSERT INTO accounts (id, x_niches) VALUES ('acc1', '[\"technology\",\"science\"]')", []).unwrap();
-        assert_eq!(account_x_niches(&c, "acc1"), vec!["technology".to_string(), "science".to_string()]);
-        assert!(account_x_niches(&c, "nope").is_empty());
     }
 }
 
