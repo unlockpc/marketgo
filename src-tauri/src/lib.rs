@@ -12574,11 +12574,11 @@ mod platform_meta_tests {
     #[test]
     fn gh_benign_comment_is_nonpromotional() {
         for i in 0..6 {
-            let c = gh_benign_comment(i);
+            let c = nurture::gh_benign_comment(i);
             assert!(!c.is_empty());
             assert!(!c.contains("http")); // 不带链接/推广
         }
-        assert_ne!(gh_benign_comment(0), gh_benign_comment(1));
+        assert_ne!(nurture::gh_benign_comment(0), nurture::gh_benign_comment(1));
     }
 
     // ===== X 养号：纯逻辑单元测试 =====
@@ -12764,5 +12764,50 @@ mod x_db_tests {
         c.execute("INSERT INTO accounts (id, x_niches) VALUES ('acc1', '[\"technology\",\"science\"]')", []).unwrap();
         assert_eq!(account_x_niches(&c, "acc1"), vec!["technology".to_string(), "science".to_string()]);
         assert!(account_x_niches(&c, "nope").is_empty());
+    }
+}
+
+#[cfg(test)]
+mod topics_tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    fn setup() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch("
+            CREATE TABLE accounts (id TEXT PRIMARY KEY, platform TEXT, nurture_topics TEXT);
+            CREATE TABLE custom_topics (key TEXT PRIMARY KEY, platform TEXT NOT NULL, label TEXT NOT NULL, keywords TEXT);
+        ").unwrap();
+        c
+    }
+
+    #[test]
+    fn builtin_maps_each_platform() {
+        assert!(builtin_topics("github").iter().any(|t| t.key == "frontend" && !t.keywords.is_empty()));
+        assert!(builtin_topics("twitter").iter().any(|t| t.key == "technology"));
+        assert!(builtin_topics("segmentfault").iter().any(|t| t.key == "frontend"));
+        let beauty = builtin_topics("xiaohongshu").into_iter().find(|t| t.key == "beauty").unwrap();
+        assert_eq!(beauty.label, "美妆护肤");
+        assert_eq!(beauty.keywords, vec!["美妆护肤".to_string()]);
+        assert!(builtin_topics("unknown").is_empty());
+    }
+
+    #[test]
+    fn catalog_platform_isolated_builtin_first() {
+        let c = setup();
+        c.execute("INSERT INTO custom_topics (key,platform,label,keywords) VALUES ('u1','xiaohongshu','露营装备',NULL)", []).unwrap();
+        c.execute("INSERT INTO custom_topics (key,platform,label,keywords) VALUES ('u2','github','我的库',NULL)", []).unwrap();
+        let xhs = topics_catalog_from(&c, "xiaohongshu");
+        assert!(xhs[0].builtin);
+        assert!(xhs.iter().any(|i| i.key == "u1" && !i.builtin));
+        assert!(!xhs.iter().any(|i| i.key == "u2")); // 跨平台隔离
+    }
+
+    #[test]
+    fn read_account_topics_roundtrip() {
+        let c = setup();
+        c.execute("INSERT INTO accounts (id,platform,nurture_topics) VALUES ('a1','xiaohongshu','[\"beauty\",\"food\"]')", []).unwrap();
+        assert_eq!(account_topics(&c, "a1"), vec!["beauty".to_string(), "food".to_string()]);
+        assert!(account_topics(&c, "nope").is_empty());
     }
 }

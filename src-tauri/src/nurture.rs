@@ -615,7 +615,7 @@ fn gh_watch_repo_blocking(repo_url: &str) -> Result<(), String> {
 }
 
 /// 良性、不带推广意图的短评论（养号阶段建立真人感，绝不带链接/产品）。
-fn gh_benign_comment(seed: u64) -> String {
+pub(crate) fn gh_benign_comment(seed: u64) -> String {
     const POOL: &[&str] = &[
         "Ran into the same thing — thanks for documenting this.",
         "This worked for me, appreciate the write-up.",
