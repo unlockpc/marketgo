@@ -25,29 +25,28 @@ fn emit_nurture_step(app: &AppHandle, account_id: &str, note: &str) {
 pub(crate) async fn github_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Result<String, String> {
     let session_start = std::time::Instant::now();
     // 1) 读领域 + 分期
-    let (domains, phase) = {
+    let (domains, topics, phase) = {
         let st = app.state::<AppState>();
         let conn = st.db.lock().map_err(|e| e.to_string())?;
-        let domains = account_gh_domains(&conn, account_id);
+        let domains = account_topics(&conn, account_id);
+        let topics = account_topic_keywords(&conn, account_id);
         let created: Option<String> = conn.query_row("SELECT created_at FROM accounts WHERE id=?1", params![account_id], |r| r.get(0)).ok().flatten();
         let age = created.as_deref().and_then(parse_dt).map(|c| (Utc::now() - c).num_days()).unwrap_or(0);
         let strat = conn.query_row("SELECT warmup_days, COALESCE(growth_days, warmup_days), daily_sessions_min, daily_sessions_max FROM nurture_strategies WHERE platform='github'",
             [], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,i64>(1)?, r.get::<_,i64>(2)?, r.get::<_,i64>(3)?))).ok();
         let (warmup, growth, smin, smax) = strat.unwrap_or((3, 3, 2, 5));
         let (phase, _t) = nurture_phase_and_target(age, warmup, growth, smin, smax);
-        (domains, phase.to_string())
+        (domains, topics, phase.to_string())
     };
     if domains.is_empty() {
         return Ok("账号未选领域，跳过 GitHub 养号".to_string());
     }
     let (n_star, n_follow, n_watch) = gh_daily_quota(&phase);
 
-    // 2) 选领域 → topics → 选一个 topic（时间派生种子）
-    let dom_keys: Vec<&str> = domains.iter().map(|s| s.as_str()).collect();
-    let topics = gh_domain_topics(&dom_keys);
+    // 2) 选 topic（关键词已在首块按所选领域收集；时间派生种子）
     if topics.is_empty() { return Ok("领域无可用 topic".to_string()); }
     let seed = get_random_delay(1, 100_000);
-    let topic = topics[(seed as usize) % topics.len()];
+    let topic = &topics[(seed as usize) % topics.len()];
 
     // 3) 浏览器：导航 topic 页（按 star 排序）采 repo 链接
     let topic_owned = topic.to_string();
@@ -266,23 +265,22 @@ fn sf_nurture_browse_blocking(keywords: Vec<String>, n_search: i64, read_per_sea
 pub(crate) async fn segmentfault_nurture_run(app: &AppHandle, account_id: &str, duration: i64) -> Result<String, String> {
     let session_start = std::time::Instant::now();
     // 1) 读领域 + 分期
-    let (domains, phase) = {
+    let (domains, kws, phase) = {
         let st = app.state::<AppState>();
         let conn = st.db.lock().map_err(|e| e.to_string())?;
-        let domains = account_sf_domains(&conn, account_id);
+        let domains = account_topics(&conn, account_id);
+        let kws = account_topic_keywords(&conn, account_id);
         let created: Option<String> = conn.query_row("SELECT created_at FROM accounts WHERE id=?1", params![account_id], |r| r.get(0)).ok().flatten();
         let age = created.as_deref().and_then(parse_dt).map(|c| (Utc::now() - c).num_days()).unwrap_or(0);
         let strat = conn.query_row("SELECT warmup_days, COALESCE(growth_days, warmup_days), daily_sessions_min, daily_sessions_max FROM nurture_strategies WHERE platform='segmentfault'",
             [], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,i64>(1)?, r.get::<_,i64>(2)?, r.get::<_,i64>(3)?))).ok();
         let (warmup, growth, smin, smax) = strat.unwrap_or((3, 7, 1, 2));
         let (phase, _t) = nurture_phase_and_target(age, warmup, growth, smin, smax);
-        (domains, phase.to_string())
+        (domains, kws, phase.to_string())
     };
     if domains.is_empty() {
-        return Ok("账号未选领域，跳过 SegmentFault 养号（点卡片上「🎯 领域」选一下方向）".to_string());
+        return Ok("账号未选领域，跳过 SegmentFault 养号（点卡片上「🎯 主题」选一下方向）".to_string());
     }
-    let keys: Vec<&str> = domains.iter().map(|s| s.as_str()).collect();
-    let kws: Vec<String> = sf_domain_keywords(&keys).iter().map(|s| s.to_string()).collect();
     if kws.is_empty() { return Ok("领域无可用关键词".to_string()); }
     // 分期定强度：预热轻、成长重、成熟维持
     let (n_search, read_per_search) = match phase.as_str() {
@@ -322,29 +320,28 @@ pub(crate) async fn segmentfault_nurture_run(app: &AppHandle, account_id: &str, 
 pub(crate) async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Result<String, String> {
     let session_start = std::time::Instant::now();
     // 1) 读方向 + 分期
-    let (niches, phase, warmup) = {
+    let (niches, kws, phase, warmup) = {
         let st = app.state::<AppState>();
         let conn = st.db.lock().map_err(|e| e.to_string())?;
-        let niches = account_x_niches(&conn, account_id);
+        let niches = account_topics(&conn, account_id);
+        let kws = account_topic_keywords(&conn, account_id);
         let created: Option<String> = conn.query_row("SELECT created_at FROM accounts WHERE id=?1", params![account_id], |r| r.get(0)).ok().flatten();
         let age = created.as_deref().and_then(parse_dt).map(|c| (Utc::now() - c).num_days()).unwrap_or(0);
         let strat = conn.query_row("SELECT warmup_days, COALESCE(growth_days, warmup_days), daily_sessions_min, daily_sessions_max FROM nurture_strategies WHERE platform='twitter'",
             [], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,i64>(1)?, r.get::<_,i64>(2)?, r.get::<_,i64>(3)?))).ok();
         let (warmup, growth, smin, smax) = strat.unwrap_or((5, 5, 2, 4));
         let (phase, _t) = nurture_phase_and_target(age, warmup, growth, smin, smax);
-        (niches, phase.to_string(), warmup)
+        (niches, kws, phase.to_string(), warmup)
     };
     if niches.is_empty() {
         return Ok("账号未选方向，跳过 X 养号".to_string());
     }
     let (n_like, n_follow, n_engage) = x_daily_quota(&phase);
 
-    // 2) 选方向 → 关键词
-    let keys: Vec<&str> = niches.iter().map(|s| s.as_str()).collect();
-    let kws = x_niche_keywords(&keys);
+    // 2) 选方向 → 关键词（已在首块收集）
     if kws.is_empty() { return Ok("方向无可用关键词".to_string()); }
     let seed = get_random_delay(1, 100_000);
-    let kw = kws[(seed as usize) % kws.len()];
+    let kw = &kws[(seed as usize) % kws.len()];
 
     // 3) 浏览器：搜领域词，用「热门(Top)」标签——X 按互动热度排序，直接给该领域当下热门推。
     //    注意：高级运算符 min_faves 在 X 网页端已失效（会被当字面文本→0 结果），故不用运算符；
