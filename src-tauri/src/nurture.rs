@@ -349,7 +349,9 @@ pub(crate) async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: 
     // 3) 浏览器：搜领域词，用「热门(Top)」标签——X 按互动热度排序，直接给该领域当下热门推。
     //    注意：高级运算符 min_faves 在 X 网页端已失效（会被当字面文本→0 结果），故不用运算符；
     //    不带 f=live → 默认 Top(热门)；Top 本身偏向近期高互动，兼顾热度+新鲜。
-    let q_enc = kw.replace(' ', "%20");
+    // 关键词常是 hashtag(带 #)，必须整体 URL 编码：# 不编码会被浏览器当作 fragment 分隔符，
+    // 导致 q= 变成空查询 → 采到 0 条推文。.into_owned() 让其满足 spawn_blocking 的 'static 约束。
+    let q_enc = urlencoding::encode(kw).into_owned();
     let probe: (Option<String>, Vec<String>) = tauri::async_runtime::spawn_blocking(move || {
         let url = format!("https://x.com/search?q={}", q_enc);
         unzoo_navigate(&url)?;
@@ -481,41 +483,21 @@ pub(crate) async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: 
         }
     }
 
-    // 7a) L2：engage 预算内，对部分已点赞推文转推/回复（偶数转推、奇数回复）
+    // 7a) L2：engage 预算内，对部分已点赞推文转推（回复动作已移除——详情页正文抓取在养号场景不可靠，
+    //     且自动回复质量难保证；点赞/关注/转推/极少原创已足够养号）
     let mut engages = 0i64;
     if aborted_health.is_none() && n_engage > 0 {
         for (i, t) in chosen.iter().take(n_engage as usize).enumerate() {
             let key = format!("{}#engage", t);
             let acted = { let st = app.state::<AppState>(); let l = st.db.lock().map_err(|e| e.to_string())?; x_already_acted(&l, account_id, &key) };
             if acted { continue; }
-            emit_nurture_step(app, account_id, &format!("{} 互动 {}/{}", if i % 2 == 0 { "🔁 转推" } else { "💬 回复" }, i + 1, n_engage));
+            emit_nurture_step(app, account_id, &format!("🔁 转推 {}/{}", i + 1, n_engage));
             let tc = t.clone();
-            let r = if i % 2 == 0 {
-                tauri::async_runtime::spawn_blocking(move || x_retweet_blocking(&tc)).await.map_err(|e| e.to_string())?
-            } else {
-                // 抓推文正文 → AI 基于内容生成回复（无 AI / 不合格则跳过本次回复）
-                let tc_nav = tc.clone();
-                let tweet_text = tauri::async_runtime::spawn_blocking(move || {
-                    unzoo_navigate(&tc_nav)?;
-                    std::thread::sleep(std::time::Duration::from_millis(get_random_delay(2, 5)));
-                    unzoo_get_text_sel("[data-testid=\"tweetText\"]")
-                }).await.map_err(|e| e.to_string())?.unwrap_or_default();
-                if tweet_text.trim().is_empty() {
-                    // 抓不到正文（纯图/视频或加载失败）→ 没内容可依据，跳过，绝不发空泛套话
-                    emit_nurture_step(app, account_id, "抓不到推文正文（纯图/视频或加载失败），跳过本次回复");
-                    Err(String::new())
-                } else {
-                    match gen_nurture_text(app, "x_reply", &tweet_text).await {
-                        Some(txt) => tauri::async_runtime::spawn_blocking(move || x_reply_blocking(&tc, &txt)).await.map_err(|e| e.to_string())?,
-                        None => { emit_nurture_step(app, account_id, "未配置 AI 或生成失败，跳过本次回复"); Err(String::new()) }
-                    }
-                }
-            };
+            let r = tauri::async_runtime::spawn_blocking(move || x_retweet_blocking(&tc)).await.map_err(|e| e.to_string())?;
             if r.is_ok() {
                 let st = app.state::<AppState>(); let l = st.db.lock();
                 if let Ok(conn) = l {
-                    let at = if i % 2 == 0 { "retweet" } else { "reply" };
-                    let _ = x_record_action(&conn, account_id, at, &key);
+                    let _ = x_record_action(&conn, account_id, "retweet", &key);
                 }
                 engages += 1;
             }
@@ -673,7 +655,7 @@ fn x_like_blocking(tweet_url: &str) -> Result<(), String> {
 
 /// People 搜索：按领域词找该领域的账号，返回候选 profile URL 列表。
 fn x_search_users_blocking(kw: &str) -> Result<Vec<String>, String> {
-    let q = kw.replace(' ', "%20");
+    let q = urlencoding::encode(kw); // 同上：hashtag 的 # 必须编码成 %23，否则 q 变空 → 拿到的是无关推荐用户
     unzoo_navigate(&format!("https://x.com/search?q={}&f=user", q))?;
     std::thread::sleep(std::time::Duration::from_secs(4));
     let mut waited = 0;
@@ -736,23 +718,6 @@ fn x_retweet_blocking(tweet_url: &str) -> Result<(), String> {
     std::thread::sleep(std::time::Duration::from_millis(get_random_delay(1, 2)));
     unzoo_click("[data-testid=\"retweetConfirm\"]").map_err(|e| format!("retweet 确认失败: {}", e))?;
     std::thread::sleep(std::time::Duration::from_millis(800));
-    Ok(())
-}
-
-/// 回复某推文（正文走 unzoo_type → human_type）。
-fn x_reply_blocking(tweet_url: &str, text: &str) -> Result<(), String> {
-    unzoo_navigate(tweet_url)?;
-    std::thread::sleep(std::time::Duration::from_millis(get_random_delay(2, 5)));
-    log::info!("[X-ACTION] reply 目标={}", tweet_url);
-    if !unzoo_element_exists("[data-testid=\"reply\"]") {
-        return Err("未找到 reply 按钮".to_string());
-    }
-    unzoo_click("[data-testid=\"reply\"]").map_err(|e| format!("reply 打开失败: {}", e))?;
-    std::thread::sleep(std::time::Duration::from_millis(get_random_delay(1, 2)));
-    unzoo_type("[data-testid=\"tweetTextarea_0\"]", text).map_err(|e| format!("reply 输入失败: {}", e))?;
-    std::thread::sleep(std::time::Duration::from_millis(800));
-    unzoo_click("[data-testid=\"tweetButton\"]").map_err(|e| format!("reply 发布失败: {}", e))?;
-    std::thread::sleep(std::time::Duration::from_millis(1000));
     Ok(())
 }
 
