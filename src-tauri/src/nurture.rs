@@ -325,6 +325,51 @@ pub(crate) fn xhs_phase_intensity(phase: &str) -> (i64, i64, i64) {
     }
 }
 
+/// 轮询关键元素出现确认页面加载完（每秒一次，最多 max_secs 秒）。供"等加载再操作"。
+fn xhs_wait_loaded_blocking(selector: &str, max_secs: u64) -> bool {
+    use std::time::Duration;
+    let mut waited = 0;
+    while waited < max_secs {
+        if unzoo_element_exists(selector) { return true; }
+        std::thread::sleep(Duration::from_secs(1));
+        waited += 1;
+    }
+    false
+}
+
+/// 小红书登录检测：导航首页，轮询登录后入口出现 vs 登录入口。选择器为最佳猜测，实测可能需微调。
+fn xhs_logged_in_blocking() -> bool {
+    use std::time::Duration;
+    let _ = unzoo_navigate("https://www.xiaohongshu.com/");
+    let mut waited = 0;
+    while waited < 18 {
+        std::thread::sleep(Duration::from_secs(3));
+        waited += 3;
+        // 已登录确证：用户头像 / 侧栏「我」入口（实测可能需调整）
+        if unzoo_element_exists(".reds-avatar")
+            || unzoo_element_exists("a[href*=\"/user/profile/\"]")
+            || unzoo_element_exists(".side-bar .user") {
+            return true;
+        }
+        // 未登录确证：登录弹窗/按钮（实测可能需调整）
+        if unzoo_element_exists(".login-container") || unzoo_element_exists(".login-btn") {
+            return false;
+        }
+    }
+    false
+}
+
+/// 在当前笔记页点赞（最佳猜测选择器，实测可能需微调）。成功点击返回 true。
+fn xhs_like_blocking() -> bool {
+    let selectors = ["span.like-wrapper", ".interact-container .like-wrapper", "[class*=\"like-active\"]", ".like-wrapper"];
+    for s in selectors {
+        if unzoo_element_exists(s) {
+            return unzoo_click(s).is_ok();
+        }
+    }
+    false
+}
+
 /// X 养号：按方向取关键词→搜索采推文/用户→去重选取→点赞/关注/转推/回复 + 极少原创。
 pub(crate) async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Result<String, String> {
     let session_start = std::time::Instant::now();
