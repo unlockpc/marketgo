@@ -3654,6 +3654,14 @@ fn run_migrations(conn: &Connection) -> rusqlite::Result<()> {
     let _ = conn.execute("ALTER TABLE accounts ADD COLUMN x_niches TEXT", []);
     // SegmentFault 养号：所选领域（JSON 数组）
     let _ = conn.execute("ALTER TABLE accounts ADD COLUMN sf_domains TEXT", []);
+    // 统一养号主题：所选主题 keys（JSON 数组，平台无关，账号自带 platform）
+    let _ = conn.execute("ALTER TABLE accounts ADD COLUMN nurture_topics TEXT", []);
+    // 用户自定义主题（平台隔离）；keywords 可空，空则 runner 用 label 当关键词
+    let _ = conn.execute("CREATE TABLE IF NOT EXISTS custom_topics (key TEXT PRIMARY KEY, platform TEXT NOT NULL, label TEXT NOT NULL, keywords TEXT)", []);
+    // 一次性把旧三列方向迁入统一列（key 不变，直接搬 JSON）
+    let _ = conn.execute("UPDATE accounts SET nurture_topics = gh_domains WHERE platform='github' AND nurture_topics IS NULL AND gh_domains IS NOT NULL", []);
+    let _ = conn.execute("UPDATE accounts SET nurture_topics = x_niches WHERE platform IN ('twitter','x') AND nurture_topics IS NULL AND x_niches IS NOT NULL", []);
+    let _ = conn.execute("UPDATE accounts SET nurture_topics = sf_domains WHERE platform='segmentfault' AND nurture_topics IS NULL AND sf_domains IS NOT NULL", []);
     // 养号「成长期时长」独立可配；老库补列，NULL 时各查询用 COALESCE(growth_days, warmup_days) 兜底
     let _ = conn.execute("ALTER TABLE nurture_strategies ADD COLUMN growth_days INTEGER", []);
 
