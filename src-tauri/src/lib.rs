@@ -1184,6 +1184,60 @@ fn account_topic_keywords(conn: &Connection, account_id: &str) -> Vec<String> {
     out
 }
 
+#[tauri::command]
+fn topics_catalog(state: State<AppState>, platform: String) -> Result<Vec<TopicItem>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    Ok(topics_catalog_from(&conn, &platform))
+}
+
+#[tauri::command]
+fn get_account_topics(state: State<AppState>, account_id: String) -> Result<Vec<String>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    Ok(account_topics(&conn, &account_id))
+}
+
+#[tauri::command]
+fn set_account_topics(state: State<AppState>, account_id: String, keys: Vec<String>) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    set_account_topics_conn(&conn, &account_id, &keys)
+}
+
+#[tauri::command]
+fn add_custom_topic(state: State<AppState>, platform: String, label: String) -> Result<TopicItem, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    add_custom_topic_conn(&conn, &platform, &label)
+}
+
+#[tauri::command]
+fn delete_custom_topic(state: State<AppState>, key: String) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    delete_custom_topic_conn(&conn, &key)
+}
+
+/// account_id → 已选主题 label 列表（后端按 platform 解析 key→label），供卡片 chip 直接显示。
+#[tauri::command]
+fn account_topic_labels(state: State<AppState>) -> Result<std::collections::HashMap<String, Vec<String>>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let accts: Vec<(String, String)> = {
+        let mut stmt = conn.prepare("SELECT id, platform FROM accounts WHERE nurture_topics IS NOT NULL")
+            .map_err(|e| e.to_string())?;
+        let mapped = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(|e| e.to_string())?;
+        mapped.flatten().collect()
+    };
+    let mut out = std::collections::HashMap::new();
+    for (id, platform) in accts {
+        let keys = account_topics(&conn, &id);
+        if keys.is_empty() { continue; }
+        let catalog = topics_catalog_from(&conn, &platform);
+        let labels: Vec<String> = keys.iter()
+            .filter_map(|k| catalog.iter().find(|i| &i.key == k).map(|i| i.label.clone()))
+            .collect();
+        if !labels.is_empty() { out.insert(id, labels); }
+    }
+    Ok(out)
+}
+
 /// 按号龄分期返回当日 X 配额：(likes, follows, engages)。engages = 转推+回复预算。
 /// X 反自动化最严 → 量级极保守、关注最克制。
 fn x_daily_quota(phase: &str) -> (i64, i64, i64) {
@@ -12515,6 +12569,12 @@ pub fn run() {
             set_account_sf_domains,
             platform_scenes,
             account_niches,
+            topics_catalog,
+            get_account_topics,
+            set_account_topics,
+            add_custom_topic,
+            delete_custom_topic,
+            account_topic_labels,
             set_unzoo_input_mode,
             leads::list_leads,
             leads::update_lead_status,
