@@ -363,9 +363,10 @@ fn xhs_logged_in_blocking() -> bool {
     false
 }
 
-/// 在当前笔记弹框点赞（最佳猜测选择器，实测可能需微调）。成功点击返回 true。
+/// 在当前笔记弹框点赞。注意：弹框内有大量评论的 `.like-wrapper`(实测一篇 79 个)，
+/// 笔记主点赞精确选择器是 `.engage-bar .like-wrapper`(唯一)，必须优先，否则会误点评论赞。
 fn xhs_like_blocking() -> bool {
-    let selectors = ["span.like-wrapper", ".interact-container .like-wrapper", "[class*=\"like-active\"]", ".like-wrapper"];
+    let selectors = [".engage-bar .like-wrapper", ".note-detail-mask .engage-bar .like-wrapper", ".interaction-container > .left .like-wrapper"];
     for s in selectors {
         if unzoo_element_exists(s) {
             return unzoo_click(s).is_ok();
