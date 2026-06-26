@@ -9615,6 +9615,32 @@ pub(crate) fn normalize_proxy(input: &str) -> Result<Option<String>, String> {
     }
 }
 
+/// 设置单个账号的自定义代理（None/空=清除，走身份机场节点）。
+#[tauri::command]
+fn set_account_proxy(state: State<AppState>, account_id: String, proxy: Option<String>) -> Result<(), String> {
+    let normalized = normalize_proxy(proxy.as_deref().unwrap_or(""))?;
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE accounts SET custom_proxy = ?1 WHERE id = ?2",
+        params![normalized, account_id],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 批量设置多个账号的自定义代理（None/空=清除）。返回成功条数。
+#[tauri::command]
+fn set_accounts_proxy(state: State<AppState>, account_ids: Vec<String>, proxy: Option<String>) -> Result<usize, String> {
+    let normalized = normalize_proxy(proxy.as_deref().unwrap_or(""))?;
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let mut n = 0usize;
+    for id in &account_ids {
+        if conn.execute("UPDATE accounts SET custom_proxy = ?1 WHERE id = ?2", params![normalized, id]).unwrap_or(0) > 0 {
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
 /// 一键养号「开跑前登录预检」：检测某账号在其浏览器 profile 下是否已登录对应平台。
 /// 启动该账号的 profile → 导航平台首页轮询登录态。通用滚动平台（不强依赖登录）直接返回 true，不打扰。
 /// 前端据此在开跑前列出未登录账号，让用户先去登录、或跳过它们继续。
@@ -12453,6 +12479,8 @@ pub fn run() {
             quick_nurture,
             stop_nurture,
             check_account_login,
+            set_account_proxy,
+            set_accounts_proxy,
             // Nurture Strategy Management
             list_nurture_strategies,
             update_nurture_strategy,
