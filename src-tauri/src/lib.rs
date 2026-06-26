@@ -9595,6 +9595,68 @@ fn stop_nurture() -> Result<(), String> {
     Ok(())
 }
 
+/// 一键养号「开跑前登录预检」：检测某账号在其浏览器 profile 下是否已登录对应平台。
+/// 启动该账号的 profile → 导航平台首页轮询登录态。通用滚动平台（不强依赖登录）直接返回 true，不打扰。
+/// 前端据此在开跑前列出未登录账号，让用户先去登录、或跳过它们继续。
+#[tauri::command]
+async fn check_account_login(
+    state: State<'_, AppState>,
+    account_id: String,
+) -> Result<bool, String> {
+    let (platform, profile_id) = {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        let platform: String = conn
+            .query_row(
+                "SELECT platform FROM accounts WHERE id = ?1",
+                params![account_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Account not found: {}", e))?;
+        let profile_id: Option<String> = conn
+            .query_row(
+                "SELECT profile_id FROM accounts WHERE id = ?1",
+                params![account_id],
+                |row| row.get(0),
+            )
+            .ok()
+            .flatten();
+        (platform, profile_id)
+    };
+
+    // 通用滚动平台不强依赖登录 → 视为通过，不打扰预检。
+    if !nurture::nurture_requires_login(&platform) {
+        return Ok(true);
+    }
+
+    // 启动该账号的 profile（与 quick_nurture 同逻辑）。
+    let tab_id = if let Some(pid) = profile_id {
+        unzoo_launch_profile(pid).await?
+    } else {
+        let selected = {
+            let conn = state.db.lock().map_err(|e| e.to_string())?;
+            conn.query_row(
+                "SELECT value FROM config WHERE key = 'selected_browser_profile'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap_or_default()
+        };
+        if selected.is_empty() {
+            return Err("No browser profile selected.".to_string());
+        }
+        unzoo_launch_profile(selected).await?
+    };
+    set_active_tab(Some(tab_id));
+
+    let pf = platform.clone();
+    let logged = tauri::async_runtime::spawn_blocking(move || {
+        nurture::platform_logged_in_blocking(&pf)
+    })
+    .await
+    .map_err(|e| format!("登录检测异常: {}", e))?;
+    Ok(logged)
+}
+
 // ============================================================================
 // Nurture Strategy Management (养号策略管理)
 // ============================================================================
@@ -12370,6 +12432,7 @@ pub fn run() {
             list_accounts_with_nurture_status,
             quick_nurture,
             stop_nurture,
+            check_account_login,
             // Nurture Strategy Management
             list_nurture_strategies,
             update_nurture_strategy,
@@ -12948,5 +13011,25 @@ mod xhs_runner_tests {
             if q == "codex" { bare = true; } else if q.starts_with("codex ") { suffixed = true; }
         }
         assert!(bare && suffixed, "扩展应同时产出原词与带后缀形态");
+    }
+}
+
+#[cfg(test)]
+mod login_precheck_tests {
+    use crate::nurture::nurture_requires_login;
+
+    #[test]
+    fn requires_login_only_for_dedicated_runners() {
+        // 有专属 runner、未登录会直接报错的平台 → 预检
+        for p in ["github", "twitter", "x", "segmentfault", "xiaohongshu", "redbook"] {
+            assert!(nurture_requires_login(p), "{} 应纳入登录预检", p);
+        }
+        // 大小写不敏感
+        assert!(nurture_requires_login("GitHub"));
+        assert!(nurture_requires_login("XiaoHongShu"));
+        // 通用滚动平台不强依赖登录 → 不预检
+        for p in ["zhihu", "weibo", "reddit", "medium", "v2ex", "", "unknown"] {
+            assert!(!nurture_requires_login(p), "{} 不应纳入登录预检", p);
+        }
     }
 }

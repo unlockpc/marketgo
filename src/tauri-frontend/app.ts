@@ -3900,7 +3900,7 @@ async function startNurtureAll() {
     setNurtureAllProgressView();
     return;
   }
-  const { todo } = computeNurtureAllPlan();
+  let { todo } = computeNurtureAllPlan();
   if (!todo.length) {
     showToast('没有需要养号的账号（今日均已养 >5 次）', 'info');
     return;
@@ -3918,9 +3918,82 @@ async function startNurtureAll() {
   nurtureAllProfileKeys = new Set(todo.map(nurtureProfileKeyOf));
   renderAccounts();
 
+  // ===== 开跑前登录预检：检测各账号是否已登录其平台，列出未登录的让用户先去登录或跳过 =====
+  // 未登录账号养号会直接失败（GitHub/X/思否/小红书的专属 runner 会报「未登录」）。
+  const notLoggedIn: any[] = []; // 预检判定未登录的账号对象
+  const acctName = (a: any) => a.username || a.email || a.platform || a.id;
+  {
+    const preTextEl = document.getElementById('nurtureAllProgressText');
+    const preStatusEl = document.getElementById('nurtureAllStatusText');
+    let checked = 0;
+    const totalCheck = todo.length;
+    const setPrecheckText = () => {
+      if (preTextEl) preTextEl.textContent = `正在检测登录状态… ${checked}/${totalCheck}`;
+      if (preStatusEl) preStatusEl.textContent = notLoggedIn.length
+        ? `⚠️ 已发现未登录：${notLoggedIn.map(acctName).join('、')}`
+        : '检测各账号是否已登录其平台（未登录的账号养号会失败）';
+    };
+    setPrecheckText();
+    // 同一身份/profile 共用一个浏览器，不能并发检测；按 profile 分组，组内串行、组间并发。
+    const groups = new Map<string, any[]>();
+    for (const a of todo) {
+      const k = nurtureProfileKeyOf(a);
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k)!.push(a);
+    }
+    await Promise.all([...groups.values()].map(async (group) => {
+      for (const a of group) {
+        if (nurtureAllAborted) return; // 用户中途点了停止 → 不再检测
+        try {
+          const logged = await invoke<boolean>('check_account_login', { accountId: a.id });
+          if (!logged) notLoggedIn.push(a);
+        } catch (e) {
+          // 预检异常（如未绑定 profile）不武断判为未登录，交给养号阶段如实报错。
+          console.warn('登录预检失败', a.id, e);
+        } finally {
+          checked++;
+          setPrecheckText();
+        }
+      }
+    }));
+  }
+
+  // 中途停止：跳过确认，置空清单走正常完成态（显示「已手动停止」）。
+  if (nurtureAllAborted) {
+    todo = [];
+  } else if (notLoggedIn.length) {
+    const names = notLoggedIn.map(a => `· ${acctName(a)}（${a.platform}）`).join('\n');
+    const go = await uiConfirm(
+      `以下 ${notLoggedIn.length} 个账号未登录：\n${names}\n\n未登录账号养号会失败。是否跳过它们、继续养其余账号？`,
+      { title: '⚠️ 部分账号未登录', okText: '跳过并继续', cancelText: '先去登录' }
+    );
+    if (!go) {
+      // 用户选择先去登录 → 取消本轮，恢复按钮与设置态。
+      nurtureAllRunning = false;
+      nurtureInProgress = null;
+      nurtureAllProfileKeys = new Set();
+      renderAccounts();
+      resetNurtureAllModal();
+      showToast('已取消一键养号，请先在账号卡片上「✋ 手工登录」未登录的账号', 'info');
+      return;
+    }
+    const skip = new Set(notLoggedIn.map(a => a.id));
+    todo = todo.filter(a => !skip.has(a.id));
+    if (!todo.length) {
+      nurtureAllRunning = false;
+      nurtureInProgress = null;
+      nurtureAllProfileKeys = new Set();
+      renderAccounts();
+      resetNurtureAllModal();
+      showToast('所有待养账号都未登录，已全部跳过', 'warning');
+      return;
+    }
+  }
+
   const concurrency = getNurtureAllConcurrency();
   const total = todo.length;
   let ok = 0, fail = 0, done = 0, activeCount = 0;
+  const runtimeNotLoggedIn = new Set<string>(); // 运行中掉登录态/未登录的账号名（合并进完成汇总）
   const taken: boolean[] = new Array(total).fill(false);
   const inFlightKeys = new Set<string>();        // 正在跑的 unzoo profile —— 同 profile 不并发
   const startTimes = new Map<string, number>();  // 在跑账号 id -> 起始时间戳（实时进度用）
@@ -3965,6 +4038,7 @@ async function startNurtureAll() {
         ok++;
       } catch (e) {
         fail++;
+        if (String(e).includes('未登录')) runtimeNotLoggedIn.add(name);
         console.error('Nurture failed for', account.id, e);
       } finally {
         inFlightKeys.delete(key);
@@ -4014,13 +4088,24 @@ async function startNurtureAll() {
   const skippedCount = accounts.length - total;
   const stoppedNote = nurtureAllAborted ? '（已手动停止）' : '';
   const summary = `✅ 成功 ${ok} · ⏭ 跳过 ${skippedCount} · ❌ 失败 ${fail}${stoppedNote}`;
-  if (summaryEl) summaryEl.textContent = summary;
+  // 汇总未登录账号：预检发现的（已跳过）+ 运行中报「未登录」的，去重后单列提示。
+  const notLoggedNames = [...new Set([...notLoggedIn.map(acctName), ...runtimeNotLoggedIn])];
+  const loginNote = notLoggedNames.length
+    ? `⚠️ 未登录账号 ${notLoggedNames.length} 个：${notLoggedNames.join('、')}（请在账号卡片上「✋ 手工登录」后再养）`
+    : '';
+  if (summaryEl) {
+    summaryEl.textContent = summary;
+    // 未登录清单另起一行，醒目展示。
+    summaryEl.innerHTML = loginNote
+      ? `${escapeHtml(summary)}<br><span style="color: var(--warning, #d97706);">${escapeHtml(loginNote)}</span>`
+      : escapeHtml(summary);
+  }
   if (completeDiv) {
     const title = completeDiv.querySelector('p');
     if (title) title.textContent = nurtureAllAborted ? '一键养号已停止' : '一键养号完成';
   }
   // 弹框可能被关掉了，用 toast 兜底通知后台跑完了。
-  showToast(`一键养号完成 · ${summary}`, nurtureAllAborted ? 'info' : 'success');
+  showToast(`一键养号完成 · ${summary}${loginNote ? ' · ' + loginNote : ''}`, nurtureAllAborted ? 'info' : (loginNote ? 'warning' : 'success'));
 
   await loadAccounts();
 }

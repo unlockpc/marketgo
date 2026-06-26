@@ -3585,7 +3585,7 @@
       setNurtureAllProgressView();
       return;
     }
-    const { todo } = computeNurtureAllPlan();
+    let { todo } = computeNurtureAllPlan();
     if (!todo.length) {
       showToast("\u6CA1\u6709\u9700\u8981\u517B\u53F7\u7684\u8D26\u53F7\uFF08\u4ECA\u65E5\u5747\u5DF2\u517B >5 \u6B21\uFF09", "info");
       return;
@@ -3597,9 +3597,75 @@
     nurtureInProgress = "__nurture_all__";
     nurtureAllProfileKeys = new Set(todo.map(nurtureProfileKeyOf));
     renderAccounts();
+    const notLoggedIn = [];
+    const acctName = (a) => a.username || a.email || a.platform || a.id;
+    {
+      const preTextEl = document.getElementById("nurtureAllProgressText");
+      const preStatusEl = document.getElementById("nurtureAllStatusText");
+      let checked = 0;
+      const totalCheck = todo.length;
+      const setPrecheckText = () => {
+        if (preTextEl) preTextEl.textContent = `\u6B63\u5728\u68C0\u6D4B\u767B\u5F55\u72B6\u6001\u2026 ${checked}/${totalCheck}`;
+        if (preStatusEl) preStatusEl.textContent = notLoggedIn.length ? `\u26A0\uFE0F \u5DF2\u53D1\u73B0\u672A\u767B\u5F55\uFF1A${notLoggedIn.map(acctName).join("\u3001")}` : "\u68C0\u6D4B\u5404\u8D26\u53F7\u662F\u5426\u5DF2\u767B\u5F55\u5176\u5E73\u53F0\uFF08\u672A\u767B\u5F55\u7684\u8D26\u53F7\u517B\u53F7\u4F1A\u5931\u8D25\uFF09";
+      };
+      setPrecheckText();
+      const groups = /* @__PURE__ */ new Map();
+      for (const a of todo) {
+        const k = nurtureProfileKeyOf(a);
+        if (!groups.has(k)) groups.set(k, []);
+        groups.get(k).push(a);
+      }
+      await Promise.all([...groups.values()].map(async (group) => {
+        for (const a of group) {
+          if (nurtureAllAborted) return;
+          try {
+            const logged = await invoke2("check_account_login", { accountId: a.id });
+            if (!logged) notLoggedIn.push(a);
+          } catch (e) {
+            console.warn("\u767B\u5F55\u9884\u68C0\u5931\u8D25", a.id, e);
+          } finally {
+            checked++;
+            setPrecheckText();
+          }
+        }
+      }));
+    }
+    if (nurtureAllAborted) {
+      todo = [];
+    } else if (notLoggedIn.length) {
+      const names = notLoggedIn.map((a) => `\xB7 ${acctName(a)}\uFF08${a.platform}\uFF09`).join("\n");
+      const go = await uiConfirm(
+        `\u4EE5\u4E0B ${notLoggedIn.length} \u4E2A\u8D26\u53F7\u672A\u767B\u5F55\uFF1A
+${names}
+
+\u672A\u767B\u5F55\u8D26\u53F7\u517B\u53F7\u4F1A\u5931\u8D25\u3002\u662F\u5426\u8DF3\u8FC7\u5B83\u4EEC\u3001\u7EE7\u7EED\u517B\u5176\u4F59\u8D26\u53F7\uFF1F`,
+        { title: "\u26A0\uFE0F \u90E8\u5206\u8D26\u53F7\u672A\u767B\u5F55", okText: "\u8DF3\u8FC7\u5E76\u7EE7\u7EED", cancelText: "\u5148\u53BB\u767B\u5F55" }
+      );
+      if (!go) {
+        nurtureAllRunning = false;
+        nurtureInProgress = null;
+        nurtureAllProfileKeys = /* @__PURE__ */ new Set();
+        renderAccounts();
+        resetNurtureAllModal();
+        showToast("\u5DF2\u53D6\u6D88\u4E00\u952E\u517B\u53F7\uFF0C\u8BF7\u5148\u5728\u8D26\u53F7\u5361\u7247\u4E0A\u300C\u270B \u624B\u5DE5\u767B\u5F55\u300D\u672A\u767B\u5F55\u7684\u8D26\u53F7", "info");
+        return;
+      }
+      const skip = new Set(notLoggedIn.map((a) => a.id));
+      todo = todo.filter((a) => !skip.has(a.id));
+      if (!todo.length) {
+        nurtureAllRunning = false;
+        nurtureInProgress = null;
+        nurtureAllProfileKeys = /* @__PURE__ */ new Set();
+        renderAccounts();
+        resetNurtureAllModal();
+        showToast("\u6240\u6709\u5F85\u517B\u8D26\u53F7\u90FD\u672A\u767B\u5F55\uFF0C\u5DF2\u5168\u90E8\u8DF3\u8FC7", "warning");
+        return;
+      }
+    }
     const concurrency = getNurtureAllConcurrency();
     const total = todo.length;
     let ok = 0, fail = 0, done = 0, activeCount = 0;
+    const runtimeNotLoggedIn = /* @__PURE__ */ new Set();
     const taken = new Array(total).fill(false);
     const inFlightKeys = /* @__PURE__ */ new Set();
     const startTimes = /* @__PURE__ */ new Map();
@@ -3634,6 +3700,7 @@
           ok++;
         } catch (e) {
           fail++;
+          if (String(e).includes("\u672A\u767B\u5F55")) runtimeNotLoggedIn.add(name);
           console.error("Nurture failed for", account.id, e);
         } finally {
           inFlightKeys.delete(key);
@@ -3685,12 +3752,17 @@
     const skippedCount = accounts.length - total;
     const stoppedNote = nurtureAllAborted ? "\uFF08\u5DF2\u624B\u52A8\u505C\u6B62\uFF09" : "";
     const summary = `\u2705 \u6210\u529F ${ok} \xB7 \u23ED \u8DF3\u8FC7 ${skippedCount} \xB7 \u274C \u5931\u8D25 ${fail}${stoppedNote}`;
-    if (summaryEl) summaryEl.textContent = summary;
+    const notLoggedNames = [.../* @__PURE__ */ new Set([...notLoggedIn.map(acctName), ...runtimeNotLoggedIn])];
+    const loginNote = notLoggedNames.length ? `\u26A0\uFE0F \u672A\u767B\u5F55\u8D26\u53F7 ${notLoggedNames.length} \u4E2A\uFF1A${notLoggedNames.join("\u3001")}\uFF08\u8BF7\u5728\u8D26\u53F7\u5361\u7247\u4E0A\u300C\u270B \u624B\u5DE5\u767B\u5F55\u300D\u540E\u518D\u517B\uFF09` : "";
+    if (summaryEl) {
+      summaryEl.textContent = summary;
+      summaryEl.innerHTML = loginNote ? `${escapeHtml(summary)}<br><span style="color: var(--warning, #d97706);">${escapeHtml(loginNote)}</span>` : escapeHtml(summary);
+    }
     if (completeDiv) {
       const title = completeDiv.querySelector("p");
       if (title) title.textContent = nurtureAllAborted ? "\u4E00\u952E\u517B\u53F7\u5DF2\u505C\u6B62" : "\u4E00\u952E\u517B\u53F7\u5B8C\u6210";
     }
-    showToast(`\u4E00\u952E\u517B\u53F7\u5B8C\u6210 \xB7 ${summary}`, nurtureAllAborted ? "info" : "success");
+    showToast(`\u4E00\u952E\u517B\u53F7\u5B8C\u6210 \xB7 ${summary}${loginNote ? " \xB7 " + loginNote : ""}`, nurtureAllAborted ? "info" : loginNote ? "warning" : "success");
     await loadAccounts();
   }
   function stopNurtureAll() {

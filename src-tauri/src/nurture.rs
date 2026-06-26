@@ -363,6 +363,57 @@ fn xhs_logged_in_blocking() -> bool {
     false
 }
 
+/// X/Twitter 登录检测（DOM 法）：X 是窄窗重 SPA，通用文本法常误判未登录，故走登录标记元素。
+/// 导航首页 → 轮询「账号切换 / Home / 发推」标记(=已登录) vs 登录按钮(=未登录)。在 spawn_blocking 中调用。
+fn x_logged_in_blocking() -> bool {
+    use std::time::Duration;
+    let _ = unzoo_navigate("https://x.com/home");
+    let mut waited = 0;
+    while waited < 18 {
+        std::thread::sleep(Duration::from_secs(3));
+        waited += 3;
+        let logged_in = unzoo_element_exists("[data-testid=\"SideNav_AccountSwitcher_Button\"]")
+            || unzoo_element_exists("[data-testid=\"AppTabBar_Home_Link\"]")
+            || unzoo_element_exists("[data-testid=\"SideNav_NewTweet_Button\"]");
+        if logged_in {
+            return true;
+        }
+        let logged_out = unzoo_element_exists("[data-testid=\"loginButton\"]")
+            || unzoo_element_exists("a[href=\"/login\"]");
+        if logged_out {
+            return false;
+        }
+    }
+    false
+}
+
+/// GitHub 登录检测：导航首页 + 通用文本法（GitHub 文本信号可靠，见 check_platform_login_status）。
+fn gh_logged_in_blocking() -> bool {
+    let _ = unzoo_navigate("https://github.com/");
+    check_platform_login_status("github").unwrap_or(false)
+}
+
+/// 一键养号「未登录预检」覆盖的平台：这些平台的专属 runner 未登录会直接报错失败，
+/// 值得开跑前先检测并提示。其它平台走通用滚动、不强依赖登录，不预检。纯逻辑，可单测。
+pub(crate) fn nurture_requires_login(platform: &str) -> bool {
+    matches!(
+        platform.to_lowercase().as_str(),
+        "github" | "twitter" | "x" | "segmentfault" | "xiaohongshu" | "redbook"
+    )
+}
+
+/// 一键养号预检入口：检测账号是否已登录其平台。复用各 runner 自己的登录判定（比通用文本法准），
+/// 无专属检测的平台走通用文本法兜底。内部导航站点 + 轮询，需在 spawn_blocking 中调用。
+pub(crate) fn platform_logged_in_blocking(platform: &str) -> bool {
+    match platform.to_lowercase().as_str() {
+        "segmentfault" => sf_logged_in_blocking(),
+        "xiaohongshu" | "redbook" => xhs_logged_in_blocking(),
+        "twitter" | "x" => x_logged_in_blocking(),
+        "github" => gh_logged_in_blocking(),
+        other => verify_login_blocking(other),
+    }
+}
+
 /// 强制 human 点击：小红书很多元素(封面 a.cover 被自身 mask 遮挡、搜索图标含 svg、点赞 wrapper、
 /// 轮播箭头)会被遮挡检测拦下，需 force 才能点中。成功返回 true。
 fn xhs_force_click(selector: &str) -> bool {
