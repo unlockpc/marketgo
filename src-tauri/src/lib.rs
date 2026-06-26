@@ -3246,6 +3246,8 @@ pub struct Account {
     pub persona_email: Option<String>,   // 所属身份的 Gmail（展示用）
     #[serde(default)]
     pub login_method: Option<String>,    // google | phone | password（判断是否可转移归属）
+    #[serde(default)]
+    pub custom_proxy: Option<String>,    // 账号级自定义 SOCKS5/HTTP 代理（空=走身份机场节点）
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -3693,6 +3695,7 @@ fn run_migrations(conn: &Connection) -> rusqlite::Result<()> {
     let _ = conn.execute("ALTER TABLE accounts ADD COLUMN sf_domains TEXT", []);
     // 统一养号主题：所选主题 keys（JSON 数组，平台无关，账号自带 platform）
     let _ = conn.execute("ALTER TABLE accounts ADD COLUMN nurture_topics TEXT", []);
+    let _ = conn.execute("ALTER TABLE accounts ADD COLUMN custom_proxy TEXT", []);
     // 用户自定义主题（平台隔离）；keywords 可空，空则 runner 用 label 当关键词
     let _ = conn.execute("CREATE TABLE IF NOT EXISTS custom_topics (key TEXT PRIMARY KEY, platform TEXT NOT NULL, label TEXT NOT NULL, keywords TEXT)", []);
     // 小红书养号动作日志（点赞去重，与 x_actions_log 同构）
@@ -4088,7 +4091,7 @@ fn list_accounts(state: State<AppState>) -> Result<Vec<Account>, String> {
     let mut stmt = conn.prepare(
         "SELECT a.id, a.platform, a.username, a.email, a.status, a.created_at, a.profile_id, \
                 COALESCE(a.health_status,'unknown'), COALESCE(a.total_nurture_seconds,0), a.last_nurture_at, \
-                a.persona_id, p.email \
+                a.persona_id, p.email, a.custom_proxy \
          FROM accounts a LEFT JOIN personas p ON p.id = a.persona_id ORDER BY a.created_at DESC")
         .map_err(|e| e.to_string())?;
 
@@ -4110,6 +4113,7 @@ fn list_accounts(state: State<AppState>) -> Result<Vec<Account>, String> {
             persona_id: row.get(10)?,
             persona_email: row.get(11)?,
             login_method,
+            custom_proxy: row.get(12)?,
         })
     }).map_err(|e| e.to_string())?;
 
@@ -4154,6 +4158,7 @@ fn add_account(state: State<AppState>, platform: String, username: String, passw
         persona_id: None,
         persona_email: None,
         login_method,
+        custom_proxy: None,
     })
 }
 
