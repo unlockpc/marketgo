@@ -9641,6 +9641,12 @@ fn set_accounts_proxy(state: State<AppState>, account_ids: Vec<String>, proxy: O
     Ok(n)
 }
 
+/// 测试账号当前出口 IP（按账号 apply 代理后查 IP）。
+#[tauri::command]
+async fn test_account_proxy(app: AppHandle, account_id: String) -> Result<String, String> {
+    multi_account::test_account_proxy(app, account_id).await
+}
+
 /// 一键养号「开跑前登录预检」：检测某账号在其浏览器 profile 下是否已登录对应平台。
 /// 启动该账号的 profile → 导航平台首页轮询登录态。通用滚动平台（不强依赖登录）直接返回 true，不打扰。
 /// 前端据此在开跑前列出未登录账号，让用户先去登录、或跳过它们继续。
@@ -12481,6 +12487,7 @@ pub fn run() {
             check_account_login,
             set_account_proxy,
             set_accounts_proxy,
+            test_account_proxy,
             // Nurture Strategy Management
             list_nurture_strategies,
             update_nurture_strategy,

@@ -616,3 +616,74 @@ pub(crate) async fn persona_test_ip(app: AppHandle, id: String) -> Result<String
     let city = v.get("city").and_then(|x| x.as_str()).unwrap_or("");
     Ok(format!("出口 IP：{}  ({} {})", ip, country, city))
 }
+
+/// 启动账号 profile 后、操作前调用：按账号决定 profile 出口代理。
+/// 有 custom_proxy → 用它；否则身份是机场(local_port 非空) → 设回机场端口；都没有 → 不动。
+/// 设代理失败仅记日志、不阻断操作（退回 profile 当前代理）。
+pub(crate) async fn apply_account_proxy(app: &AppHandle, account_id: &str) -> Result<(), String> {
+    let (custom, profile_id, local_port): (Option<String>, Option<String>, Option<i64>) = {
+        let state = app.state::<AppState>();
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        conn.query_row(
+            "SELECT a.custom_proxy, COALESCE(p.profile_id, a.profile_id), p.local_port \
+             FROM accounts a LEFT JOIN personas p ON p.id = a.persona_id WHERE a.id = ?1",
+            params![account_id],
+            |r| Ok((
+                r.get::<_, Option<String>>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, Option<i64>>(2)?,
+            )),
+        ).map_err(|e| e.to_string())?
+    };
+    let pid = match profile_id { Some(p) if !p.is_empty() => p, _ => return Ok(()) }; // 无 profile 不处理
+    let path = match resolve_profile_path(&pid).await { Some(p) => p, None => return Ok(()) };
+    let proxy = if let Some(cp) = custom.filter(|s| !s.trim().is_empty()) {
+        cp
+    } else if let Some(port) = local_port {
+        format!("socks5://127.0.0.1:{}", port)
+    } else {
+        return Ok(()); // 未归属且无自定义 → 不动
+    };
+    if let Err(e) = unzoo_set_profile_proxy2(&path, &proxy).await {
+        log::warn!("[PROXY] 账号 {} 设代理失败: {}", account_id, e);
+    } else {
+        log::info!("[PROXY] 账号 {} 出口 → {}", account_id, proxy);
+    }
+    Ok(())
+}
+
+/// 测试账号当前出口 IP：先按账号 apply 代理，再开 profile 导航 IP 服务。供前端「测试出口IP」按钮用。
+pub(crate) async fn test_account_proxy(app: AppHandle, account_id: String) -> Result<String, String> {
+    apply_account_proxy(&app, &account_id).await?;
+    let profile_id: String = {
+        let state = app.state::<AppState>();
+        let conn = state.db.lock().map_err(|_| "db".to_string())?;
+        conn.query_row(
+            "SELECT COALESCE(p.profile_id, a.profile_id) FROM accounts a \
+             LEFT JOIN personas p ON p.id = a.persona_id WHERE a.id = ?1",
+            params![account_id], |r| r.get::<_, Option<String>>(0))
+            .map_err(|_| "账号不存在".to_string())?
+            .ok_or("账号无可用 profile".to_string())?
+    };
+    let path = resolve_profile_path(&profile_id).await.ok_or("找不到 profile 路径".to_string())?;
+    let tab_id = {
+        let client = get_http_client();
+        let resp = client.post(format!("{}/profiles/launch", UNZOO_API_BASE))
+            .json(&serde_json::json!({"profile_path": path})).send().await.map_err(|e| e.to_string())?;
+        let v: serde_json::Value = resp.json().await.unwrap_or_default();
+        v.get("data").and_then(|d| d.get("tab_id")).map(|t| if let Some(n)=t.as_i64(){n.to_string()}else if let Some(s)=t.as_str(){s.to_string()}else{String::new()}).unwrap_or_default()
+    };
+    if tab_id.is_empty() { return Err("启动 profile 失败".into()); }
+    let tid = tab_id.clone();
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        metrics::metrics_navigate(&tid, "https://api.ip.sb/geoip")?;
+        std::thread::sleep(std::time::Duration::from_millis(2500));
+        metrics::metrics_evaluate(&tid, "(document.body&&document.body.innerText)||''")
+    }).await.map_err(|e| e.to_string())??;
+    let txt = serde_json::from_str::<String>(&res).unwrap_or(res);
+    let v: serde_json::Value = serde_json::from_str(&txt).unwrap_or(serde_json::json!({}));
+    let ip = v.get("ip").and_then(|x| x.as_str()).unwrap_or("?");
+    let country = v.get("country").and_then(|x| x.as_str()).unwrap_or("");
+    let city = v.get("city").and_then(|x| x.as_str()).unwrap_or("");
+    Ok(format!("出口 IP：{}  ({} {})", ip, country, city))
+}
