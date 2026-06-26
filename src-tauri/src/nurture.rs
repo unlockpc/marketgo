@@ -459,9 +459,8 @@ fn xhs_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec<S
             // 弹框打开后小红书会把 URL 更新为 /explore/<id>，取来做跨 session 点赞去重
             let note_url = unzoo_evaluate("location.href").unwrap_or_default();
             let dedup_key = if note_url.contains("/explore/") { note_url } else { String::new() };
-            // 拟人滚动阅读（弹框内）
-            for _ in 0..get_human_delay(3, 6) {
-                let _ = unzoo_scroll("down", get_human_delay(250, 600) as i32);
+            // 弹框内「停留阅读」——不滚动（弹窗里滚动不像真人），只随机停几秒 + 少量鼠标移动
+            for _ in 0..get_human_delay(2, 4) {
                 std::thread::sleep(Duration::from_millis(get_human_delay(1800, 4000)));
                 random_mouse_movement();
             }
