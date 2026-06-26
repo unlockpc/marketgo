@@ -307,6 +307,8 @@ pub struct PersonaDto {
     /// #13 IP 来源类型：airport(机场轮换) | fixed(固定IP)
     pub ip_mode: String,
     pub fixed_proxy: Option<String>,
+    /// 身份显示名称（用户可填/改；空则前端回退显示邮箱）
+    pub name: Option<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -316,7 +318,8 @@ fn persona_row_to_dto(conn: &Connection, id: &str, email: &str, profile_id: Opti
     // 固定IP身份用存库的 region；机场身份从节点名推导
     let region = if ip_mode == "fixed" { stored_region } else { node_name.as_ref().map(|n| node_region(n)) };
     let account_count: i64 = conn.query_row("SELECT COUNT(*) FROM accounts WHERE persona_id=?1", params![id], |r| r.get(0)).unwrap_or(0);
-    PersonaDto { id: id.to_string(), email: email.to_string(), profile_id, node_name, region, local_port, status, created_at, account_count, ip_mode, fixed_proxy }
+    let name: Option<String> = conn.query_row("SELECT name FROM personas WHERE id=?1", params![id], |r| r.get(0)).ok().flatten();
+    PersonaDto { id: id.to_string(), email: email.to_string(), profile_id, node_name, region, local_port, status, created_at, account_count, ip_mode, fixed_proxy, name }
 }
 
 #[tauri::command]
@@ -335,9 +338,10 @@ pub(crate) fn persona_list(state: State<AppState>) -> Result<Vec<PersonaDto>, St
 
 /// 创建 persona：分配节点+端口 → 建 profile → 随机指纹 → 加 listener+reload → profile 绑代理。
 #[tauri::command]
-pub(crate) async fn persona_create(app: AppHandle, email: String) -> Result<PersonaDto, String> {
+pub(crate) async fn persona_create(app: AppHandle, email: String, name: Option<String>) -> Result<PersonaDto, String> {
     let email = email.trim().to_string();
     if !email.contains('@') || email.len() < 5 { return Err("请输入有效的 Gmail 地址".into()); }
+    let name: Option<String> = name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
 
     // 唯一性 + 分配节点/端口（锁内快进快出）
     let (id, node, port): (String, String, u16) = {
@@ -380,9 +384,9 @@ pub(crate) async fn persona_create(app: AppHandle, email: String) -> Result<Pers
         let state = app.state::<AppState>();
         let conn = state.db.lock().map_err(|_| "db".to_string())?;
         conn.execute(
-            "INSERT INTO personas (id, email, profile_id, node_name, local_port, status, created_at) \
-             VALUES (?1,?2,?3,?4,?5,'active',datetime('now'))",
-            params![id, email, profile_id, node, port as i64]).map_err(|e| e.to_string())?;
+            "INSERT INTO personas (id, email, profile_id, node_name, local_port, status, created_at, name) \
+             VALUES (?1,?2,?3,?4,?5,'active',datetime('now'),?6)",
+            params![id, email, profile_id, node, port as i64, name]).map_err(|e| e.to_string())?;
         regenerate_mihomo_config(&conn)?;
     }
     mihomo_reload().await?;
@@ -398,6 +402,16 @@ pub(crate) async fn persona_create(app: AppHandle, email: String) -> Result<Pers
     let state = app.state::<AppState>();
     let conn = state.db.lock().map_err(|_| "db".to_string())?;
     Ok(persona_row_to_dto(&conn, &id, &email, Some(profile_id), Some(node), Some(port as i64), "active".into(), None, "airport".into(), None, None))
+}
+
+/// 给身份改名（空=清除名称，前端回退显示邮箱）。
+#[tauri::command]
+pub(crate) async fn persona_rename(app: AppHandle, id: String, name: Option<String>) -> Result<(), String> {
+    let name: Option<String> = name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let state = app.state::<AppState>();
+    let conn = state.db.lock().map_err(|_| "db".to_string())?;
+    conn.execute("UPDATE personas SET name=?1 WHERE id=?2", params![name, id]).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// #13 创建「固定 IP 身份」：不分配机场节点、不走 mihomo，直接给独立 profile 绑用户填的固定代理。

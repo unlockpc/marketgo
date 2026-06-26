@@ -2500,8 +2500,8 @@
   </div>`;
     const tabsHtml = personas.map((p2) => {
       const active = p2.id === sel;
-      const label = `${personaIcon(p2)} ${p2?.email || "\u8EAB\u4EFD"}`;
-      return `<button class="email-tab ${active ? "active" : ""}" onclick="selectEmail('${p2.id}')" title="${escapeHtml(label)}">${escapeHtml(label)}</button>`;
+      const label = `${personaIcon(p2)} ${personaLabel(p2)}`;
+      return `<button class="email-tab ${active ? "active" : ""}" onclick="selectEmail('${p2.id}')" title="${escapeHtml(p2?.email || "")}">${escapeHtml(label)}</button>`;
     }).join("");
     const groupHead = `<div class="email-group-head">
     <div class="email-tabs">${tabsHtml}</div>
@@ -2513,6 +2513,8 @@
     const cardsHtml = collapsed ? `<div class="text-muted" style="text-align:center;padding:6px 0;">${escapeHtml(tf("accounts.collapsedHint", { n: accts.length }))}</div>` : accts.length ? accts.map((x) => renderAccountCard(x)).join("") : `<div class="text-muted" style="text-align:center;padding:8px 0;">${escapeHtml(t(emptyHintKey))}</div>`;
     const pname = profileNameOf(p);
     const meta = [
+      p?.name ? `\u{1F4E7} ${escapeHtml(p.email || "")}` : "",
+      // 有名称时邮箱作小字
       personaIpBadge(p),
       // #13 IP 类型徽章
       isFixed ? p?.fixed_proxy ? `${t("accounts.proxy")}: ${escapeHtml(maskProxy(p.fixed_proxy))}` : "" : p?.region ? escapeHtml(p.region) : t("accounts.noNode"),
@@ -2528,6 +2530,7 @@
     </div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
       ${actions}
+      <button class="btn btn-small btn-secondary" onclick="personaRename('${sel}')" title="\u7ED9\u8FD9\u4E2A\u8EAB\u4EFD\u6539\u540D">\u270F\uFE0F \u6539\u540D</button>
       <button class="btn btn-small btn-secondary" style="margin-left:auto;color:#e55;" onclick="deletePersonaAcct('${sel}','${escapeHtml(p?.email || "")}')" title="\u5220\u9664\u8FD9\u4E2A\u8EAB\u4EFD">${escapeHtml(t("accounts.deleteEmail"))}</button>
     </div>`;
     const emailGroup = `<div class="email-group">${groupHead}<div class="email-group-body">${infoBar}${cardsHtml}</div></div>`;
@@ -2535,6 +2538,9 @@
   }
   function collapseBtnHtml(onclick, collapsed, label) {
     return `<button class="collapse-btn ${collapsed ? "is-collapsed" : ""}" onclick="${onclick}"><span class="chev">\u25BE</span>${escapeHtml(label)}</button>`;
+  }
+  function personaLabel(p) {
+    return p?.name && String(p.name).trim() || p?.email || "\u8EAB\u4EFD";
   }
   function personaIcon(persona) {
     if ((persona?.ip_mode || "airport") !== "fixed") return "\u{1F4E7}";
@@ -2616,6 +2622,24 @@
       showToast(t("airport.subFailed") + e, "error");
     }
   };
+  window.personaRename = async function(id) {
+    const p = personasCache.find((x) => x.id === id);
+    const cur = p?.name || "";
+    const name = await uiPrompt({
+      title: "\u8EAB\u4EFD\u6539\u540D",
+      label: `\u7ED9\u300C${p?.email || "\u8EAB\u4EFD"}\u300D\u8D77\u4E2A\u540D\u5B57\uFF08\u7559\u7A7A=\u6E05\u9664\uFF0C\u663E\u793A\u90AE\u7BB1\uFF09`,
+      placeholder: "\u5982\uFF1A\u5C0F\u7EA2\u4E66\u4E3B\u53F7 / \u6570\u7801\u79D1\u6280",
+      value: cur
+    });
+    if (name === null) return;
+    try {
+      await invoke2("persona_rename", { id, name: name.trim() || null });
+      showToast(name.trim() ? "\u5DF2\u6539\u540D" : "\u5DF2\u6E05\u9664\u540D\u79F0", "success");
+      await loadAccounts();
+    } catch (e) {
+      showToast("\u6539\u540D\u5931\u8D25\uFF1A" + e, "error");
+    }
+  };
   window.createPersonaPrompt = async function() {
     const email = (await uiPrompt({
       title: t("persona.createTitle"),
@@ -2628,9 +2652,14 @@
       showToast(t("persona.invalidEmail"), "error");
       return;
     }
+    const name = (await uiPrompt({
+      title: "\u8EAB\u4EFD\u540D\u79F0\uFF08\u53EF\u9009\uFF09",
+      label: "\u7ED9\u8FD9\u4E2A\u8EAB\u4EFD\u8D77\u4E2A\u540D\u5B57\uFF0C\u4FBF\u4E8E\u8FA8\u8BA4\uFF08\u7559\u7A7A\u5219\u663E\u793A\u90AE\u7BB1\uFF09",
+      placeholder: "\u5982\uFF1A\u5C0F\u7EA2\u4E66\u4E3B\u53F7 / \u6570\u7801\u79D1\u6280"
+    }) || "").trim();
     showToast(t("persona.creating"), "info");
     try {
-      const dto = await invoke2("persona_create", { email });
+      const dto = await invoke2("persona_create", { email, name: name || null });
       selectedIdentityCategory = "gmail";
       if (dto && dto.id) selectedPersonaId = dto.id;
       showToast(tf("persona.created", { email }), "info");
@@ -2934,7 +2963,7 @@
     </button>`;
     };
     const rows = [
-      ...personasCache.map((p) => optionRow(p.id, `\u{1F4E7} ${p.email}`)),
+      ...personasCache.map((p) => optionRow(p.id, `\u{1F4E7} ${p.name ? `${p.name}\uFF08${p.email}\uFF09` : p.email}`)),
       optionRow("", `\u{1F9E9} ${t("transfer.unassigned")}`)
     ].join("");
     overlay.innerHTML = `
@@ -7906,9 +7935,9 @@ ${a.body}`,
     box.innerHTML = rows.map((p) => `
     <div class="card" style="margin:0 0 8px;padding:12px 14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
       <div style="flex:1;min-width:200px;">
-        <div style="font-weight:600;">${escapeHtml(p.email)}</div>
+        <div style="font-weight:600;">${escapeHtml(personaLabel(p))}</div>
         <div class="text-muted" style="font-size:12px;margin-top:2px;">
-          ${p.region ? escapeHtml(p.region) : "\u{1F310} \u8282\u70B9\u672A\u5206\u914D"}
+          ${p.name ? `\u{1F4E7} ${escapeHtml(p.email)} \xB7 ` : ""}${p.region ? escapeHtml(p.region) : "\u{1F310} \u8282\u70B9\u672A\u5206\u914D"}
           ${p.node_name ? `\xB7 <span title="${escapeHtml(p.node_name)}">${escapeHtml(p.node_name.slice(0, 18))}</span>` : ""}
           ${p.local_port ? `\xB7 \u7AEF\u53E3 ${p.local_port}` : ""}
           \xB7 \u8D26\u53F7 ${p.account_count}

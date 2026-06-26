@@ -4065,6 +4065,7 @@ fn run_migrations(conn: &Connection) -> rusqlite::Result<()> {
         ("ip_mode",     "ALTER TABLE personas ADD COLUMN ip_mode TEXT DEFAULT 'airport'"),
         ("fixed_proxy", "ALTER TABLE personas ADD COLUMN fixed_proxy TEXT"),
         ("region",      "ALTER TABLE personas ADD COLUMN region TEXT"),
+        ("name",        "ALTER TABLE personas ADD COLUMN name TEXT"),
     ] {
         if conn.prepare(&format!("SELECT {} FROM personas LIMIT 1", col)).is_err() {
             let _ = conn.execute(ddl, []);
@@ -12546,6 +12547,7 @@ pub fn run() {
             persona_provision_all,
             multi_account::persona_list,
             multi_account::persona_create,
+            multi_account::persona_rename,
             multi_account::persona_open_gmail_login,
             multi_account::persona_open_browser,
             multi_account::persona_delete,

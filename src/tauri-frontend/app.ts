@@ -2672,8 +2672,8 @@ function renderAccounts() {
   // 身份 sub-tabs（同分类）与「收起平台」同一行
   const tabsHtml = personas.map((p: any) => {
     const active = p.id === sel;
-    const label = `${personaIcon(p)} ${p?.email || '身份'}`;
-    return `<button class="email-tab ${active ? 'active' : ''}" onclick="selectEmail('${p.id}')" title="${escapeHtml(label)}">${escapeHtml(label)}</button>`;
+    const label = `${personaIcon(p)} ${personaLabel(p)}`;
+    return `<button class="email-tab ${active ? 'active' : ''}" onclick="selectEmail('${p.id}')" title="${escapeHtml(p?.email || '')}">${escapeHtml(label)}</button>`;
   }).join('');
   const groupHead = `<div class="email-group-head">
     <div class="email-tabs">${tabsHtml}</div>
@@ -2690,6 +2690,7 @@ function renderAccounts() {
 
   const pname = profileNameOf(p);                       // #6 可读 profile 名
   const meta = [
+    p?.name ? `📧 ${escapeHtml(p.email || '')}` : '',  // 有名称时邮箱作小字
     personaIpBadge(p),                                  // #13 IP 类型徽章
     isFixed
       ? (p?.fixed_proxy ? `${t('accounts.proxy')}: ${escapeHtml(maskProxy(p.fixed_proxy))}` : '')
@@ -2709,6 +2710,7 @@ function renderAccounts() {
     </div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
       ${actions}
+      <button class="btn btn-small btn-secondary" onclick="personaRename('${sel}')" title="给这个身份改名">✏️ 改名</button>
       <button class="btn btn-small btn-secondary" style="margin-left:auto;color:#e55;" onclick="deletePersonaAcct('${sel}','${escapeHtml(p?.email || '')}')" title="删除这个身份">${escapeHtml(t('accounts.deleteEmail'))}</button>
     </div>`;
 
@@ -2719,6 +2721,11 @@ function renderAccounts() {
 // #8 收起/展开按钮：胶囊 + 旋转 chevron，统一好看的样式
 function collapseBtnHtml(onclick: string, collapsed: boolean, label: string): string {
   return `<button class="collapse-btn ${collapsed ? 'is-collapsed' : ''}" onclick="${onclick}"><span class="chev">▾</span>${escapeHtml(label)}</button>`;
+}
+
+// 身份主显示名：有名称用名称，否则回退邮箱。
+function personaLabel(p: any): string {
+  return (p?.name && String(p.name).trim()) || p?.email || '身份';
 }
 
 // #13 身份类型 → 图标 / 徽章文案 / 代理脱敏
@@ -2804,6 +2811,24 @@ let collapsedPersonas: Set<string> = new Set();
 };
 
 // 在邮箱账号页直接新建一个 Gmail 身份（自动建 profile+指纹+分配节点）
+// 给身份改名（留空=清除名称，回退显示邮箱）。
+(window as any).personaRename = async function(id: string) {
+  const p = personasCache.find((x: any) => x.id === id);
+  const cur = (p?.name as string) || '';
+  const name = await uiPrompt({
+    title: '身份改名',
+    label: `给「${p?.email || '身份'}」起个名字（留空=清除，显示邮箱）`,
+    placeholder: '如：小红书主号 / 数码科技',
+    value: cur,
+  });
+  if (name === null) return;   // 取消
+  try {
+    await invoke('persona_rename', { id, name: name.trim() || null });
+    showToast(name.trim() ? '已改名' : '已清除名称', 'success');
+    await loadAccounts();
+  } catch (e) { showToast('改名失败：' + e, 'error'); }
+};
+
 (window as any).createPersonaPrompt = async function() {
   const email = ((await uiPrompt({
     title: t('persona.createTitle'),
@@ -2813,9 +2838,15 @@ let collapsedPersonas: Set<string> = new Set();
   })) || '').trim();
   if (!email) return;
   if (!email.includes('@')) { showToast(t('persona.invalidEmail'), 'error'); return; }
+  // 名称（可选，主显示；留空则显示邮箱）
+  const name = ((await uiPrompt({
+    title: '身份名称（可选）',
+    label: '给这个身份起个名字，便于辨认（留空则显示邮箱）',
+    placeholder: '如：小红书主号 / 数码科技',
+  })) || '').trim();
   showToast(t('persona.creating'), 'info');
   try {
-    const dto: any = await invoke('persona_create', { email });
+    const dto: any = await invoke('persona_create', { email, name: name || null });
     selectedIdentityCategory = 'gmail';
     if (dto && dto.id) selectedPersonaId = dto.id; // 建好自动切到这个新邮箱
     showToast(tf('persona.created', { email }), 'info');
@@ -2901,7 +2932,7 @@ let collapsedPersonas: Set<string> = new Set();
 
 function personaSelectOptions(selectedId?: string | null): string {
   const opts = personasCache.map((p: any) =>
-    `<option value="${p.id}" ${p.id === selectedId ? 'selected' : ''}>${escapeHtml(p.email)}</option>`).join('');
+    `<option value="${p.id}" ${p.id === selectedId ? 'selected' : ''}>${escapeHtml(p.name ? `${p.name}（${p.email}）` : p.email)}</option>`).join('');
   return `<option value="">未归属（用全局 Profile）</option>${opts}`;
 }
 
@@ -3138,7 +3169,7 @@ async function applyBatchProxy(clear: boolean) {
     </button>`;
   };
   const rows = [
-    ...personasCache.map((p: any) => optionRow(p.id, `📧 ${p.email}`)),
+    ...personasCache.map((p: any) => optionRow(p.id, `📧 ${p.name ? `${p.name}（${p.email}）` : p.email}`)),
     optionRow('', `🧩 ${t('transfer.unassigned')}`),
   ].join('');
   overlay.innerHTML = `
@@ -8772,6 +8803,7 @@ interface PersonaDto {
   id: string; email: string; profile_id: string | null;
   node_name: string | null; region: string | null;
   local_port: number | null; status: string; created_at: string | null; account_count: number;
+  name?: string | null;
 }
 let personasWired = false;
 
@@ -8853,9 +8885,9 @@ async function refreshPersonas() {
   box.innerHTML = rows.map(p => `
     <div class="card" style="margin:0 0 8px;padding:12px 14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
       <div style="flex:1;min-width:200px;">
-        <div style="font-weight:600;">${escapeHtml(p.email)}</div>
+        <div style="font-weight:600;">${escapeHtml(personaLabel(p))}</div>
         <div class="text-muted" style="font-size:12px;margin-top:2px;">
-          ${p.region ? escapeHtml(p.region) : '🌐 节点未分配'}
+          ${p.name ? `📧 ${escapeHtml(p.email)} · ` : ''}${p.region ? escapeHtml(p.region) : '🌐 节点未分配'}
           ${p.node_name ? `· <span title="${escapeHtml(p.node_name)}">${escapeHtml(p.node_name.slice(0, 18))}</span>` : ''}
           ${p.local_port ? `· 端口 ${p.local_port}` : ''}
           · 账号 ${p.account_count}
