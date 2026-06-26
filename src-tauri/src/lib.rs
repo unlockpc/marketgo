@@ -12932,4 +12932,21 @@ mod xhs_runner_tests {
         assert_eq!(crate::nurture::xhs_phase_intensity("mature"), (2, true)); // 成熟维持
         assert_eq!(crate::nurture::xhs_phase_intensity("other"), (2, true));  // 兜底=预热
     }
+
+    #[test]
+    fn expand_query_keeps_topic_and_varies() {
+        use crate::nurture::xhs_expand_query;
+        // 扩展词始终以原主题开头（要么原词，要么"原词 后缀"）
+        for seed in 1u64..200 {
+            let q = xhs_expand_query("数码科技", seed);
+            assert!(q == "数码科技" || q.starts_with("数码科技 "), "意外的扩展词: {}", q);
+        }
+        // 至少能产出原词 + 带后缀两种形态（覆盖 MODS 全表）
+        let mut bare = false; let mut suffixed = false;
+        for seed in 0u64..12 {
+            let q = xhs_expand_query("codex", seed);
+            if q == "codex" { bare = true; } else if q.starts_with("codex ") { suffixed = true; }
+        }
+        assert!(bare && suffixed, "扩展应同时产出原词与带后缀形态");
+    }
 }

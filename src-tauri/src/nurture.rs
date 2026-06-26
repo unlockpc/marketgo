@@ -454,6 +454,14 @@ fn xhs_search_box_blocking(kw: &str) -> bool {
     unzoo_mcp("human_click", serde_json::json!({ "tab_id": tab_id, "selector": ".input-box .search-icon", "force": true })).is_ok()
 }
 
+/// 主题扩展：在主题词后随机叠加一个意图后缀(推荐/测评/教程…)，约 1/6 概率用原词。
+/// 让每次搜索更自然多样，不总搜同一个词；对内置和自定义主题都通用。空后缀时返回原词。
+pub(crate) fn xhs_expand_query(topic: &str, seed: u64) -> String {
+    const MODS: &[&str] = &["", "", "推荐", "测评", "教程", "分享", "好物", "攻略", "干货", "盘点", "种草", "怎么样"];
+    let m = MODS[(seed as usize) % MODS.len()];
+    if m.is_empty() { topic.to_string() } else { format!("{} {}", topic, m) }
+}
+
 /// 小红书养号（搜索驱动）：按主题关键词搜索→拟人浏览→点进笔记阅读；成长期对少量笔记点赞。
 /// 全程"等加载+随机延迟"再操作。返回 (searched, read, liked)。
 /// app/account_id 用于点赞去重(xhs_actions_log)与进度推送。
@@ -477,18 +485,22 @@ fn xhs_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec<S
     for (si, kw) in kw_order.iter().enumerate() {
         if nurture_should_stop() { break; }
         if start.elapsed().as_secs() as i64 >= duration_secs { break; }
+        // 主题扩展：随机叠加意图后缀(推荐/测评/教程…)，让搜索词更自然多样，不千篇一律搜同一个词。
+        seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17;
+        let query = xhs_expand_query(kw, seed);
         if si == 0 {
             // 首次搜索：从 explore 首页出发，其搜索框是「问点」AI 框、提交图标也不同，box 流程不适用。
             // 先用 URL 落到搜索结果页(建立一致的搜索栏 UI)，之后换主题都走搜索框。
-            emit_nurture_step(&app, account_id, &format!("🔍 搜索主题「{}」", kw));
-            let url = format!("https://www.xiaohongshu.com/search_result?keyword={}", kw.replace(' ', "%20"));
+            // 带 source=web_search_result_notes：与 box 搜索一致，避免被小红书重定向补 type=51。
+            emit_nurture_step(&app, account_id, &format!("🔍 搜索「{}」", query));
+            let url = format!("https://www.xiaohongshu.com/search_result?keyword={}&source=web_search_result_notes", query.replace(' ', "%20"));
             if unzoo_navigate(&url).is_err() { continue; }
         } else {
             // 换主题 → 在当前搜索结果页的搜索框输入并提交（同一 tab、不开新 tab、URL 不带 type）
-            emit_nurture_step(&app, account_id, &format!("🔍 搜索框搜索「{}」", kw));
-            if !xhs_search_box_blocking(kw) {
-                // 搜索框兜底：极少数情况下搜索框不可用时，退回 URL 导航（保证不整体卡死）
-                let url = format!("https://www.xiaohongshu.com/search_result?keyword={}", kw.replace(' ', "%20"));
+            emit_nurture_step(&app, account_id, &format!("🔍 搜索框搜索「{}」", query));
+            if !xhs_search_box_blocking(&query) {
+                // 搜索框兜底：搜索框不可用时退回 URL 导航(同样带 source,不带 type)，保证不整体卡死
+                let url = format!("https://www.xiaohongshu.com/search_result?keyword={}&source=web_search_result_notes", query.replace(' ', "%20"));
                 if unzoo_navigate(&url).is_err() { continue; }
             }
         }
