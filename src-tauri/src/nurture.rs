@@ -440,16 +440,22 @@ fn xhs_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec<S
         }
         // 本轮随机阅读 3-8 篇；各阶段配额内点赞。卡片数量用于限定上界，避免点到不存在的序号。
         let card_count = unzoo_get_links("a[href*=\"/explore/\"]").map(|v| v.len() as i64).unwrap_or(0);
-        let read_per_search = get_human_delay(3, 8).min(card_count.max(1) as u64) as i64;
+        let total_cards = card_count.max(1);
+        let read_per_search = get_human_delay(3, 8).min(total_cards as u64) as i64;
+        // 打乱卡片顺序（Fisher-Yates，复用 xorshift seed），别每次都从第 1 张顺序点 —— 真人是随机翻看。
+        let mut order: Vec<i64> = (1..=total_cards).collect();
+        for i in (1..order.len()).rev() {
+            seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17;
+            let j = (seed as usize) % (i + 1);
+            order.swap(i, j);
+        }
         let mut opened = 0i64;
-        let mut idx = 1i64;
-        while opened < read_per_search {
+        for &idx in &order {
+            if opened >= read_per_search { break; }
             if nurture_should_stop() { break; }
             if start.elapsed().as_secs() as i64 >= duration_secs { break; }
-            if idx > card_count.max(1) { break; }
             // 在搜索页上「点击」第 idx 张卡片打开弹框（human 真实点击，触发小红书弹框逻辑）
-            if !xhs_open_note_blocking(idx) { idx += 1; continue; }
-            idx += 1;
+            if !xhs_open_note_blocking(idx) { continue; }
             // 等弹框加载完再操作；加载不出就关掉跳过这篇
             if !xhs_wait_loaded_blocking(".note-detail-mask, #noteContainer, .note-content", 8) {
                 xhs_close_note_blocking();
