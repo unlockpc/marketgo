@@ -12613,6 +12613,14 @@ pub fn run() {
                 std::thread::spawn(move || { multi_account::mihomo_boot(&handle); });
             }
 
+            // 一次性：删除已有「国内/国外固定IP」身份（账号转为未归属），身份统一为 Gmail(机场)。
+            {
+                let handle2 = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    multi_account::drop_fixed_personas_once(&handle2).await;
+                });
+            }
+
             // #11 后台定时（10 分钟）刷新机场订阅，自动替换失效节点
             {
                 let handle = app.handle().clone();
@@ -13122,5 +13130,46 @@ mod proxy_normalize_tests {
         assert_eq!(normalize_proxy("socks5://h:1080").unwrap(), Some("socks5://h:1080".to_string()));
         // 非法协议 → Err
         assert!(normalize_proxy("ftp://h:21").is_err());
+    }
+}
+
+#[cfg(test)]
+mod drop_fixed_personas_tests {
+    use rusqlite::{params, Connection};
+
+    /// 模拟 drop_fixed_personas_once 的纯 DB 部分：fixed persona 删除 + 账号解除关联。
+    fn drop_fixed_sql(conn: &Connection) {
+        let ids: Vec<String> = {
+            let mut stmt = conn.prepare("SELECT id FROM personas WHERE ip_mode='fixed'").unwrap();
+            stmt.query_map([], |r| r.get::<_, String>(0)).unwrap().filter_map(|x| x.ok()).collect()
+        };
+        for id in &ids {
+            conn.execute("UPDATE accounts SET persona_id=NULL WHERE persona_id=?1", params![id]).unwrap();
+            conn.execute("DELETE FROM personas WHERE id=?1", params![id]).unwrap();
+        }
+    }
+
+    #[test]
+    fn fixed_personas_dropped_accounts_unlinked_but_kept() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch("
+            CREATE TABLE personas (id TEXT PRIMARY KEY, ip_mode TEXT);
+            CREATE TABLE accounts (id TEXT PRIMARY KEY, persona_id TEXT);
+            INSERT INTO personas (id, ip_mode) VALUES ('gm1','airport'), ('fx1','fixed'), ('fx2','fixed');
+            INSERT INTO accounts (id, persona_id) VALUES ('a1','gm1'), ('a2','fx1'), ('a3','fx2');
+        ").unwrap();
+        drop_fixed_sql(&c);
+        // fixed 身份被删，airport 保留
+        let persona_n: i64 = c.query_row("SELECT COUNT(*) FROM personas", [], |r| r.get(0)).unwrap();
+        assert_eq!(persona_n, 1);
+        // 账号全部保留
+        let acct_n: i64 = c.query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0)).unwrap();
+        assert_eq!(acct_n, 3);
+        // 原挂 fixed 的账号变未归属
+        let unlinked: i64 = c.query_row("SELECT COUNT(*) FROM accounts WHERE persona_id IS NULL", [], |r| r.get(0)).unwrap();
+        assert_eq!(unlinked, 2);
+        // 挂 airport 的账号关联不变
+        let a1: Option<String> = c.query_row("SELECT persona_id FROM accounts WHERE id='a1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(a1, Some("gm1".to_string()));
     }
 }

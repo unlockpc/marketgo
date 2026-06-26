@@ -652,6 +652,37 @@ pub(crate) async fn apply_account_proxy(app: &AppHandle, account_id: &str) -> Re
     Ok(())
 }
 
+/// 一次性：删除所有「固定 IP 身份」(ip_mode='fixed')。删其 unzoo profile、解除账号关联(账号保留为未归属)、
+/// 删 persona。受 config flag `migrated_drop_fixed_personas` 守护，只跑一次。
+pub(crate) async fn drop_fixed_personas_once(app: &AppHandle) {
+    let ids: Vec<String> = {
+        let state = app.state::<AppState>();
+        let conn = match state.db.lock() { Ok(c) => c, Err(_) => return };
+        if crate::engine_cfg_get(&conn, "migrated_drop_fixed_personas").is_some() {
+            return;
+        }
+        let mut stmt = match conn.prepare("SELECT id FROM personas WHERE ip_mode='fixed'") { Ok(s) => s, Err(_) => return };
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))
+            .map(|it| it.filter_map(|x| x.ok()).collect())
+            .unwrap_or_default();
+        rows
+    };
+    for id in &ids {
+        // 复用 persona_delete：删 profile + 解除账号关联 + 删 persona + 重建 mihomo。
+        let _ = persona_delete(app.clone(), id.clone()).await;
+    }
+    {
+        let state = app.state::<AppState>();
+        let guard = state.db.lock();
+        if let Ok(conn) = guard {
+            crate::engine_cfg_set(&conn, "migrated_drop_fixed_personas", "1");
+        }
+    }
+    if !ids.is_empty() {
+        log::info!("[MIGRATE] 已删除 {} 个固定 IP 身份（账号转为未归属）", ids.len());
+    }
+}
+
 /// 测试账号当前出口 IP：先按账号 apply 代理，再开 profile 导航 IP 服务。供前端「测试出口IP」按钮用。
 pub(crate) async fn test_account_proxy(app: AppHandle, account_id: String) -> Result<String, String> {
     apply_account_proxy(&app, &account_id).await?;
