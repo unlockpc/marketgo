@@ -363,21 +363,43 @@ fn xhs_logged_in_blocking() -> bool {
     false
 }
 
+/// 强制 human 点击：小红书很多元素(封面 a.cover 被自身 mask 遮挡、搜索图标含 svg、点赞 wrapper、
+/// 轮播箭头)会被遮挡检测拦下，需 force 才能点中。成功返回 true。
+fn xhs_force_click(selector: &str) -> bool {
+    let tab_id = match get_active_tab() { Some(t) if !t.is_empty() => t, _ => return false };
+    ensure_human_profile();
+    unzoo_mcp("human_click", serde_json::json!({ "tab_id": tab_id, "selector": selector, "force": true })).is_ok()
+}
+
 /// 在当前笔记弹框点赞。注意：弹框内有大量评论的 `.like-wrapper`(实测一篇 79 个)，
 /// 笔记主点赞精确选择器是 `.engage-bar .like-wrapper`(唯一)，必须优先，否则会误点评论赞。
 fn xhs_like_blocking() -> bool {
     let selectors = [".engage-bar .like-wrapper", ".note-detail-mask .engage-bar .like-wrapper", ".interaction-container > .left .like-wrapper"];
     for s in selectors {
         if unzoo_element_exists(s) {
-            return unzoo_click(s).is_ok();
+            return xhs_force_click(s);
         }
     }
     false
 }
 
-/// 在搜索结果页上「点击」第 idx 张笔记卡片（idx 从 1 起）打开弹框——走 human 模式真实点击，
-/// 触发小红书的弹框逻辑（直接 navigate /explore/ 会跳独立页 + 开新 tab，既不拟人又错位）。
-/// 卡片选择器为最佳猜测，实测可能需微调。点击成功返回 true。
+/// 多图笔记：随机点几下「下一张」翻图，更像真人。单图/视频笔记没有箭头(.arrow-controller.right)→直接跳过。
+/// 到末张箭头变 .arrow-controller.right.forbidden，命中即停。
+fn xhs_browse_images_blocking() {
+    use std::time::Duration;
+    if !unzoo_element_exists(".arrow-controller.right") { return; } // 非多图(单图/视频)
+    let times = get_human_delay(1, 3); // 随机翻 1~3 张
+    for _ in 0..times {
+        if !unzoo_element_exists(".arrow-controller.right") { break; }
+        if unzoo_element_exists(".arrow-controller.right.forbidden") { break; } // 已到末张
+        if !xhs_force_click(".arrow-controller.right") { break; }
+        std::thread::sleep(Duration::from_millis(get_human_delay(1500, 3500))); // 看一张图停一会
+        random_mouse_movement();
+    }
+}
+
+/// 在搜索结果页上「点击」第 idx 张笔记卡片（idx 从 1 起）打开弹框——human force 点击
+/// (封面 a.cover 常被自身 mask 遮挡，必须 force)，触发小红书弹框逻辑。点击成功返回 true。
 fn xhs_open_note_blocking(idx: i64) -> bool {
     let cands = [
         format!("section.note-item:nth-of-type({}) a.cover", idx),
@@ -386,18 +408,18 @@ fn xhs_open_note_blocking(idx: i64) -> bool {
         format!(".note-item:nth-of-type({})", idx),
     ];
     for c in &cands {
-        if unzoo_element_exists(c) && unzoo_human_click(c).is_ok() {
+        if unzoo_element_exists(c) && xhs_force_click(c) {
             return true;
         }
     }
     false
 }
 
-/// 关闭当前笔记弹框：优先点关闭按钮，兜底按 Esc。关后回到搜索结果页（不丢上下文）。
+/// 关闭当前笔记弹框：优先 force 点关闭按钮，兜底按 Esc。关后回到搜索结果页（不丢上下文）。
 fn xhs_close_note_blocking() {
-    let close_sels = [".close-circle", ".note-detail-mask .close", ".close-box .close", "div[class*=\"close-circle\"]"];
+    let close_sels = [".close-circle", ".note-detail-mask .close", ".close-box .close"];
     for s in &close_sels {
-        if unzoo_element_exists(s) && unzoo_click(s).is_ok() {
+        if unzoo_element_exists(s) && xhs_force_click(s) {
             return;
         }
     }
@@ -452,9 +474,19 @@ fn xhs_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec<S
         if kw == last_kw {
             // 主题与上次相同 → 不重新搜索，直接在当前结果里继续往下翻看（滚动加载更多）
             emit_nurture_step(&app, account_id, &format!("📖 继续翻看「{}」（同主题不重复搜索）", kw));
-        } else {
-            // 换主题 → 在当前页搜索框输入并提交（不导航 URL、不开新 tab）
+        } else if last_kw.is_empty() {
+            // 首次搜索：从 explore 首页出发，其搜索框是「问点」AI 框、提交图标也不同，box 流程不适用。
+            // 先用 URL 落到搜索结果页(建立一致的搜索栏 UI)，之后换主题都走搜索框。
             emit_nurture_step(&app, account_id, &format!("🔍 搜索主题「{}」", kw));
+            let url = format!("https://www.xiaohongshu.com/search_result?keyword={}", kw.replace(' ', "%20"));
+            if unzoo_navigate(&url).is_err() { continue; }
+            if !xhs_wait_loaded_blocking("a[href*=\"/explore/\"]", 8) { continue; }
+            std::thread::sleep(Duration::from_millis(get_human_delay(2000, 4000)));
+            last_kw = kw.clone();
+            searched += 1;
+        } else {
+            // 换主题 → 在当前搜索结果页的搜索框输入并提交（同一 tab、不开新 tab、URL 不带 type）
+            emit_nurture_step(&app, account_id, &format!("🔍 搜索框搜索「{}」", kw));
             if !xhs_search_box_blocking(&kw) {
                 // 搜索框兜底：极少数情况下搜索框不可用时，退回 URL 导航（保证不整体卡死）
                 let url = format!("https://www.xiaohongshu.com/search_result?keyword={}", kw.replace(' ', "%20"));
@@ -505,9 +537,13 @@ fn xhs_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec<S
                 std::thread::sleep(Duration::from_millis(get_human_delay(1800, 4000)));
                 random_mouse_movement();
             }
+            // 多图笔记：随机翻几张图（单图/视频自动跳过）
+            xhs_browse_images_blocking();
             read += 1; opened += 1;
-            // 配额内点赞：未赞过（去重避免重复点赞导致取消赞）+ 等加载后随机停 2~5s 才点
-            if liked < n_like {
+            // 点赞：不是每篇都点（约 40% 概率），且配额内 + 未赞过；点赞要随机分散更像真人。
+            seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17;
+            let like_roll = (seed % 100) as i64;
+            if liked < n_like && like_roll < 40 {
                 let already = if dedup_key.is_empty() { false } else {
                     let st = app.state::<AppState>();
                     let locked = st.db.lock();
