@@ -400,12 +400,13 @@ fn xhs_browse_images_blocking() {
 
 /// 在搜索结果页上「点击」第 idx 张笔记卡片（idx 从 1 起）打开弹框——human force 点击
 /// (封面 a.cover 常被自身 mask 遮挡，必须 force)，触发小红书弹框逻辑。点击成功返回 true。
+///
+/// 只认含 `a.cover` 的「真笔记」：瀑布流里混着 `.query-note-wrapper`(「大家都在搜/相关搜索」卡片，
+/// 同为 section.note-item 但无 a.cover)，绝不能点——点中会触发搜索而非开帖。命中这种索引直接返回 false 跳过。
 fn xhs_open_note_blocking(idx: i64) -> bool {
     let cands = [
         format!("section.note-item:nth-of-type({}) a.cover", idx),
         format!(".feeds-container section:nth-of-type({}) a.cover", idx),
-        format!("section.note-item:nth-of-type({})", idx),
-        format!(".note-item:nth-of-type({})", idx),
     ];
     for c in &cands {
         if unzoo_element_exists(c) && xhs_force_click(c) {
