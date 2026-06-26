@@ -9551,6 +9551,9 @@ async fn quick_nurture(
 
     set_active_tab(Some(tab_id));
 
+    // 账号级代理覆盖：有 custom_proxy 走它，否则走身份机场节点。
+    let _ = multi_account::apply_account_proxy(&app, &account_id).await;
+
     // GitHub 走专属领域社交养号（按领域 star/follow/watch + L2），不走通用滚动。
     if platform.eq_ignore_ascii_case("github") {
         return nurture::github_nurture_run(&app, &account_id, seconds).await;
@@ -9652,6 +9655,7 @@ async fn test_account_proxy(app: AppHandle, account_id: String) -> Result<String
 /// 前端据此在开跑前列出未登录账号，让用户先去登录、或跳过它们继续。
 #[tauri::command]
 async fn check_account_login(
+    app: AppHandle,
     state: State<'_, AppState>,
     account_id: String,
 ) -> Result<bool, String> {
@@ -9699,6 +9703,9 @@ async fn check_account_login(
         unzoo_launch_profile(selected).await?
     };
     set_active_tab(Some(tab_id));
+
+    // 账号级代理覆盖：登录预检也按账号 apply 代理。
+    let _ = multi_account::apply_account_proxy(&app, &account_id).await;
 
     let pf = platform.clone();
     let logged = tauri::async_runtime::spawn_blocking(move || {
@@ -10830,6 +10837,10 @@ async fn engine_select_profile(app: &AppHandle, platform: &str, account_id: &Opt
         guard.as_deref() == Some(profile_id.as_str())
     };
     if same_profile && get_active_tab().is_some() {
+        // 复用同一 profile 也要按当前账号 apply 代理（同 profile 多账号可能各自有 custom_proxy）。
+        if let Some(aid) = account_id.as_ref().filter(|s| !s.is_empty()) {
+            let _ = multi_account::apply_account_proxy(app, aid).await;
+        }
         log::info!("[ENGINE] reuse profile {} for {} (tab kept)", profile_id, platform);
         return Ok(());
     }
@@ -10838,6 +10849,10 @@ async fn engine_select_profile(app: &AppHandle, platform: &str, account_id: &Opt
     set_active_tab(Some(tab_id));
     if let Ok(mut guard) = ENGINE_CURRENT_PROFILE.get_or_init(|| std::sync::Mutex::new(None)).lock() {
         *guard = Some(profile_id.clone());
+    }
+    // 账号级代理覆盖：任务引擎启动 profile 后按账号 apply 代理。
+    if let Some(aid) = account_id.as_ref().filter(|s| !s.is_empty()) {
+        let _ = multi_account::apply_account_proxy(app, aid).await;
     }
     log::info!("[ENGINE] launched profile {} for {}", profile_id, platform);
     Ok(())
