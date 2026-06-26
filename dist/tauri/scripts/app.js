@@ -1311,8 +1311,8 @@
       icon: "\u{1F6CD}\uFE0F",
       zh: "\u56FD\u5185\u79CD\u8349 / \u751F\u6D3B",
       en: "China lifestyle / recommendation",
-      descZh: "\u56FD\u5185\u751F\u6D3B\u3001\u79CD\u8349\u3001\u793E\u4EA4\uFF08\u9700\u56FD\u5185\u56FA\u5B9A IP\uFF09",
-      descEn: "China lifestyle & recommendation (needs CN fixed IP)",
+      descZh: "\u56FD\u5185\u751F\u6D3B\u3001\u79CD\u8349\u3001\u793E\u4EA4\uFF08\u4E2A\u522B\u8D26\u53F7\u9700\u4E13\u7528 IP \u65F6\u5728\u5361\u7247\u914D SOCKS5\uFF09",
+      descEn: "China lifestyle & social (set per-account SOCKS5 when a dedicated IP is needed)",
       platforms: ["\u5C0F\u7EA2\u4E66", "\u5FAE\u535A", "\u77E5\u4E4E", "\u5373\u523B"]
     },
     {
@@ -1328,7 +1328,7 @@
     const el = document.getElementById("guideScenariosBody");
     if (!el) return;
     const isZh = currentLanguage === "zh";
-    const intro = isZh ? "\u6309\u4F60\u7684\u8425\u9500\u76EE\u6807 / \u573A\u666F\u6311\u5E73\u53F0\u3002\u51FA\u53E3 IP \u5EFA\u8BAE\uFF1A\u6D77\u5916\u5E73\u53F0\u7528\u300C\u{1F4E7} Gmail \u8EAB\u4EFD\u300D\uFF08\u673A\u573A IP\uFF09\uFF1B\u5C0F\u7EA2\u4E66 / \u5FAE\u535A\u7B49\u7528\u300C\u{1F1E8}\u{1F1F3} \u56FD\u5185\u56FA\u5B9A IP \u8EAB\u4EFD\u300D\uFF1BTwitter / Reddit / LinkedIn / Facebook \u7528\u300C\u{1F30D} \u56FD\u5916\u56FA\u5B9A IP \u8EAB\u4EFD\u300D\u3002" : 'Pick platforms by your marketing scenario. Exit-IP tip: overseas \u2192 "\u{1F4E7} Gmail identity" (airport IP); Xiaohongshu/Weibo \u2192 "\u{1F1E8}\u{1F1F3} CN fixed-IP identity"; Twitter/Reddit/LinkedIn/Facebook \u2192 "\u{1F30D} Overseas fixed-IP identity".';
+    const intro = isZh ? "\u6309\u4F60\u7684\u8425\u9500\u76EE\u6807 / \u573A\u666F\u6311\u5E73\u53F0\u3002\u51FA\u53E3 IP\uFF1A\u9ED8\u8BA4\u8D70\u300C\u{1F4E7} Gmail \u8EAB\u4EFD\u300D\u7684\u673A\u573A\u8282\u70B9\uFF1B\u4E2A\u522B\u8D26\u53F7\u9700\u8981\u4E13\u7528 IP\uFF0C\u5728\u8D26\u53F7\u5361\u7247\u4E0A\u70B9\u300C\u{1F9E6} SOCKS5\u300D\u5355\u72EC\u914D\u7F6E\u5373\u53EF\u3002" : `Pick platforms by your marketing scenario. Exit IP: accounts use their Gmail identity's airport node by default; for an account that needs a dedicated IP, set a per-account SOCKS5 via the "\u{1F9E6} SOCKS5" button on its card.`;
     const cards = GUIDE_SCENARIOS.map((s) => {
       const chips = s.platforms.map((p) => `<span class="guide-chip">${escapeHtml(p)}</span>`).join("");
       return `<div class="card guide-card">
@@ -2424,9 +2424,7 @@
   var selectedPersonaId = null;
   var selectedIdentityCategory = "gmail";
   var ID_CATEGORIES = [
-    { key: "gmail", labelKey: "idcat.gmail", match: (p) => (p?.ip_mode || "airport") === "airport" },
-    { key: "fixed_cn", labelKey: "idcat.fixedCn", match: (p) => p?.ip_mode === "fixed" && (p?.region || "") === "cn" },
-    { key: "fixed_overseas", labelKey: "idcat.fixedOverseas", match: (p) => p?.ip_mode === "fixed" && (p?.region || "") !== "cn" }
+    { key: "gmail", labelKey: "idcat.gmail", match: (p) => (p?.ip_mode || "airport") === "airport" }
   ];
   function personasInCategory(cat) {
     const c = ID_CATEGORIES.find((x) => x.key === cat);
@@ -2481,9 +2479,9 @@
     }
     const cat = selectedIdentityCategory;
     const personas = personasInCategory(cat);
-    const newBtn = cat === "gmail" ? `<button class="btn btn-small btn-primary" onclick="createPersonaPrompt()" title="\u7528\u4E00\u4E2A\u771F\u5B9E Gmail \u65B0\u5EFA\u4E00\u5957\u72EC\u7ACB\u8EAB\u4EFD">${escapeHtml(t("accounts.newGmail"))}</button>` : cat === "fixed_cn" ? `<button class="btn btn-small btn-primary" onclick="createFixedPersonaPrompt('cn')" title="\u65B0\u5EFA\u56FD\u5185\u56FA\u5B9A IP \u8EAB\u4EFD">${escapeHtml(t("accounts.newFixedCn"))}</button>` : `<button class="btn btn-small btn-primary" onclick="createFixedPersonaPrompt('overseas')" title="\u65B0\u5EFA\u56FD\u5916\u56FA\u5B9A IP \u8EAB\u4EFD">${escapeHtml(t("accounts.newFixedOverseas"))}</button>`;
+    const newBtn = `<button class="btn btn-small btn-primary" onclick="createPersonaPrompt()" title="\u7528\u4E00\u4E2A\u771F\u5B9E Gmail \u65B0\u5EFA\u4E00\u5957\u72EC\u7ACB\u8EAB\u4EFD">${escapeHtml(t("accounts.newGmail"))}</button>`;
     if (!personas.length) {
-      const emptyKey = cat === "gmail" ? "idcat.emptyGmail" : cat === "fixed_cn" ? "idcat.emptyFixedCn" : "idcat.emptyFixedOverseas";
+      const emptyKey = "idcat.emptyGmail";
       list.innerHTML = categoryBar + airportBar + `<div class="card" style="padding:18px;text-align:center;">
       <div class="text-muted" style="margin-bottom:10px;">${escapeHtml(t(emptyKey))}</div>${newBtn}</div>`;
       return;
@@ -2640,96 +2638,8 @@
     }
   };
   window.newIdentityChooser = function() {
-    const overlay = document.createElement("div");
-    overlay.className = "modal active";
-    const opt = (onclick, title, desc) => `<button class="email-tab" style="width:100%;flex-direction:column;align-items:flex-start;gap:3px;max-width:none;padding:10px 12px;" data-act="${onclick}">
-       <span style="font-weight:700;">${escapeHtml(title)}</span>
-       <span class="text-muted" style="font-size:11px;font-weight:400;white-space:normal;">${escapeHtml(desc)}</span>
-     </button>`;
-    overlay.innerHTML = `
-    <div class="modal-content" style="max-width:460px;display:flex;flex-direction:column;">
-      <div class="modal-header"><h3>${escapeHtml(t("persona.newTypeTitle"))}</h3><button class="modal-close" data-cancel>&times;</button></div>
-      <div class="modal-body">
-        <div class="text-muted" style="font-size:12px;margin-bottom:8px;">${escapeHtml(t("persona.newTypeHint"))}</div>
-        <div style="display:flex;flex-direction:column;gap:8px;">
-          ${opt("gmail", t("persona.newGmail"), t("persona.newGmailDesc"))}
-          ${opt("cn", t("persona.newFixedCn"), t("persona.newFixedCnDesc"))}
-          ${opt("overseas", t("persona.newFixedOverseas"), t("persona.newFixedOverseasDesc"))}
-        </div>
-      </div>
-    </div>`;
-    let done = false;
-    const close = () => {
-      if (done) return;
-      done = true;
-      overlay.remove();
-    };
-    overlay.querySelectorAll("[data-cancel]").forEach((el) => el.addEventListener("click", close));
-    overlay.addEventListener("click", (e) => {
-      if (e.target === overlay) close();
-    });
-    overlay.querySelectorAll("button[data-act]").forEach((btn) => btn.addEventListener("click", () => {
-      const act = btn.getAttribute("data-act");
-      close();
-      if (act === "gmail") window.createPersonaPrompt();
-      else window.createFixedPersonaPrompt(act);
-    }));
-    document.body.appendChild(overlay);
+    window.createPersonaPrompt();
   };
-  window.createFixedPersonaPrompt = async function(region) {
-    const fields = await promptFixedPersona();
-    if (!fields) return;
-    showToast(t("persona.creatingFixed"), "info");
-    try {
-      const dto = await invoke2("persona_create_fixed", { label: fields.label, region, proxy: fields.proxy });
-      selectedIdentityCategory = region === "cn" ? "fixed_cn" : "fixed_overseas";
-      if (dto && dto.id) selectedPersonaId = dto.id;
-      showToast(tf("persona.fixedCreated", { label: fields.label }), "success");
-      await loadAccounts();
-    } catch (e) {
-      showToast(t("persona.createFailed") + e, "error");
-    }
-  };
-  function promptFixedPersona() {
-    return new Promise((resolve) => {
-      const overlay = document.createElement("div");
-      overlay.className = "modal active";
-      overlay.innerHTML = `
-      <div class="modal-content" style="max-width:480px;">
-        <div class="modal-header"><h3>${escapeHtml(t("persona.fixedTitle"))}</h3><button class="modal-close" data-cancel>&times;</button></div>
-        <div class="modal-body">
-          <label style="display:block;margin-bottom:4px;font-size:13px;">${escapeHtml(t("persona.fixedLabelLabel"))}</label>
-          <input type="text" class="input" id="__fpLabel" placeholder="${escapeHtml(t("persona.fixedLabelPlaceholder"))}" style="width:100%;margin-bottom:12px;">
-          <label style="display:block;margin-bottom:4px;font-size:13px;">${escapeHtml(t("persona.fixedProxyLabel"))}</label>
-          <input type="text" class="input" id="__fpProxy" placeholder="${escapeHtml(t("persona.fixedProxyPlaceholder"))}" style="width:100%;">
-        </div>
-        <div class="modal-footer">
-          <button class="btn btn-secondary" data-cancel>${escapeHtml(t("provision.cancel"))}</button>
-          <button class="btn btn-primary" data-ok>${escapeHtml(t("persona.fixedOk"))}</button>
-        </div>
-      </div>`;
-      let done = false;
-      const finish = (v) => {
-        if (done) return;
-        done = true;
-        overlay.remove();
-        resolve(v);
-      };
-      const submit = () => {
-        const label = overlay.querySelector("#__fpLabel").value.trim();
-        const proxy = overlay.querySelector("#__fpProxy").value.trim();
-        if (!label || !proxy) return;
-        finish({ label, proxy });
-      };
-      overlay.querySelectorAll("[data-cancel]").forEach((el) => el.addEventListener("click", () => finish(null)));
-      overlay.querySelector("[data-ok]")?.addEventListener("click", submit);
-      overlay.addEventListener("click", (e) => {
-        if (e.target === overlay) finish(null);
-      });
-      document.body.appendChild(overlay);
-      setTimeout(() => overlay.querySelector("#__fpLabel")?.focus(), 30);
-    });
-  }
   window.personaOpenBrowser = async function(id) {
     try {
       const msg = await invoke2("persona_open_browser", { personaId: id });

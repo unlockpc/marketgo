@@ -1277,7 +1277,7 @@ const GUIDE_SCENARIOS: GuideScenario[] = [
     descZh: '面向企业与职场决策人', descEn: 'Reach businesses & professional decision-makers',
     platforms: ['LinkedIn', 'Twitter / X', 'Medium'] },
   { icon: '🛍️', zh: '国内种草 / 生活', en: 'China lifestyle / recommendation',
-    descZh: '国内生活、种草、社交（需国内固定 IP）', descEn: 'China lifestyle & recommendation (needs CN fixed IP)',
+    descZh: '国内生活、种草、社交（个别账号需专用 IP 时在卡片配 SOCKS5）', descEn: 'China lifestyle & social (set per-account SOCKS5 when a dedicated IP is needed)',
     platforms: ['小红书', '微博', '知乎', '即刻'] },
   { icon: '🗾', zh: '区域市场（日 / 韩 / 俄）', en: 'Regional (JP / KR / RU)',
     descZh: '区域平台，建议用对应地区的身份/IP', descEn: 'Regional platforms — use a matching region identity/IP',
@@ -1289,8 +1289,8 @@ function loadGuideScenarios() {
   if (!el) return;
   const isZh = currentLanguage === 'zh';
   const intro = isZh
-    ? '按你的营销目标 / 场景挑平台。出口 IP 建议：海外平台用「📧 Gmail 身份」（机场 IP）；小红书 / 微博等用「🇨🇳 国内固定 IP 身份」；Twitter / Reddit / LinkedIn / Facebook 用「🌍 国外固定 IP 身份」。'
-    : 'Pick platforms by your marketing scenario. Exit-IP tip: overseas → "📧 Gmail identity" (airport IP); Xiaohongshu/Weibo → "🇨🇳 CN fixed-IP identity"; Twitter/Reddit/LinkedIn/Facebook → "🌍 Overseas fixed-IP identity".';
+    ? '按你的营销目标 / 场景挑平台。出口 IP：默认走「📧 Gmail 身份」的机场节点；个别账号需要专用 IP，在账号卡片上点「🧦 SOCKS5」单独配置即可。'
+    : 'Pick platforms by your marketing scenario. Exit IP: accounts use their Gmail identity\'s airport node by default; for an account that needs a dedicated IP, set a per-account SOCKS5 via the "🧦 SOCKS5" button on its card.';
   const cards = GUIDE_SCENARIOS.map(s => {
     const chips = s.platforms.map(p => `<span class="guide-chip">${escapeHtml(p)}</span>`).join('');
     return `<div class="card guide-card">
@@ -2570,13 +2570,11 @@ let personasCache: any[] = [];
 let airportStatusCache: any = null;
 
 let selectedPersonaId: string | null = null;
-// #13 身份分类 tab：gmail(机场) / fixed_cn(国内固定) / fixed_overseas(国外固定) / __none__(未归属账号)
-type IdentityCategory = 'gmail' | 'fixed_cn' | 'fixed_overseas' | '__none__';
+// 身份分类 tab：gmail(机场) / __none__(未归属账号)。固定IP身份已废弃，统一为 Gmail；专用 IP 走账号级 SOCKS5。
+type IdentityCategory = 'gmail' | '__none__';
 let selectedIdentityCategory: IdentityCategory = 'gmail';
 const ID_CATEGORIES: { key: IdentityCategory; labelKey: string; match: (p: any) => boolean }[] = [
   { key: 'gmail',          labelKey: 'idcat.gmail',          match: p => (p?.ip_mode || 'airport') === 'airport' },
-  { key: 'fixed_cn',       labelKey: 'idcat.fixedCn',        match: p => p?.ip_mode === 'fixed' && (p?.region || '') === 'cn' },
-  { key: 'fixed_overseas', labelKey: 'idcat.fixedOverseas',  match: p => p?.ip_mode === 'fixed' && (p?.region || '') !== 'cn' },
 ];
 function personasInCategory(cat: IdentityCategory): any[] {
   const c = ID_CATEGORIES.find(x => x.key === cat);
@@ -2645,15 +2643,11 @@ function renderAccounts() {
   // ===== 身份分类（gmail / fixed_cn / fixed_overseas）=====
   const cat = selectedIdentityCategory;
   const personas = personasInCategory(cat);
-  const newBtn = cat === 'gmail'
-    ? `<button class="btn btn-small btn-primary" onclick="createPersonaPrompt()" title="用一个真实 Gmail 新建一套独立身份">${escapeHtml(t('accounts.newGmail'))}</button>`
-    : cat === 'fixed_cn'
-      ? `<button class="btn btn-small btn-primary" onclick="createFixedPersonaPrompt('cn')" title="新建国内固定 IP 身份">${escapeHtml(t('accounts.newFixedCn'))}</button>`
-      : `<button class="btn btn-small btn-primary" onclick="createFixedPersonaPrompt('overseas')" title="新建国外固定 IP 身份">${escapeHtml(t('accounts.newFixedOverseas'))}</button>`;
+  const newBtn = `<button class="btn btn-small btn-primary" onclick="createPersonaPrompt()" title="用一个真实 Gmail 新建一套独立身份">${escapeHtml(t('accounts.newGmail'))}</button>`;
 
   // 该分类下没有身份
   if (!personas.length) {
-    const emptyKey = cat === 'gmail' ? 'idcat.emptyGmail' : cat === 'fixed_cn' ? 'idcat.emptyFixedCn' : 'idcat.emptyFixedOverseas';
+    const emptyKey = 'idcat.emptyGmail';
     list.innerHTML = categoryBar + airportBar + `<div class="card" style="padding:18px;text-align:center;">
       <div class="text-muted" style="margin-bottom:10px;">${escapeHtml(t(emptyKey))}</div>${newBtn}</div>`;
     return;
@@ -2827,90 +2821,12 @@ let collapsedPersonas: Set<string> = new Set();
   } catch (e) { showToast(t('persona.createFailed') + e, 'error'); }
 };
 
-// #13 新建身份：先选类型（Gmail / 国内固定 / 国外固定）
+// 新建身份：固定IP身份已废弃，统一为 Gmail。直接走 Gmail 新建流程。
 (window as any).newIdentityChooser = function() {
-  const overlay = document.createElement('div');
-  overlay.className = 'modal active';
-  const opt = (onclick: string, title: string, desc: string) =>
-    `<button class="email-tab" style="width:100%;flex-direction:column;align-items:flex-start;gap:3px;max-width:none;padding:10px 12px;" data-act="${onclick}">
-       <span style="font-weight:700;">${escapeHtml(title)}</span>
-       <span class="text-muted" style="font-size:11px;font-weight:400;white-space:normal;">${escapeHtml(desc)}</span>
-     </button>`;
-  overlay.innerHTML = `
-    <div class="modal-content" style="max-width:460px;display:flex;flex-direction:column;">
-      <div class="modal-header"><h3>${escapeHtml(t('persona.newTypeTitle'))}</h3><button class="modal-close" data-cancel>&times;</button></div>
-      <div class="modal-body">
-        <div class="text-muted" style="font-size:12px;margin-bottom:8px;">${escapeHtml(t('persona.newTypeHint'))}</div>
-        <div style="display:flex;flex-direction:column;gap:8px;">
-          ${opt('gmail', t('persona.newGmail'), t('persona.newGmailDesc'))}
-          ${opt('cn', t('persona.newFixedCn'), t('persona.newFixedCnDesc'))}
-          ${opt('overseas', t('persona.newFixedOverseas'), t('persona.newFixedOverseasDesc'))}
-        </div>
-      </div>
-    </div>`;
-  let done = false;
-  const close = () => { if (done) return; done = true; overlay.remove(); };
-  overlay.querySelectorAll('[data-cancel]').forEach(el => el.addEventListener('click', close));
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-  overlay.querySelectorAll('button[data-act]').forEach(btn => btn.addEventListener('click', () => {
-    const act = btn.getAttribute('data-act');
-    close();
-    if (act === 'gmail') (window as any).createPersonaPrompt();
-    else (window as any).createFixedPersonaPrompt(act);   // 'cn' | 'overseas'
-  }));
-  document.body.appendChild(overlay);
+  (window as any).createPersonaPrompt();
 };
 
-// #13 新建固定 IP 身份（国内/国外）：标识 + 固定代理两栏录入
-(window as any).createFixedPersonaPrompt = async function(region: string) {
-  const fields = await promptFixedPersona();
-  if (!fields) return;
-  showToast(t('persona.creatingFixed'), 'info');
-  try {
-    const dto: any = await invoke('persona_create_fixed', { label: fields.label, region, proxy: fields.proxy });
-    selectedIdentityCategory = region === 'cn' ? 'fixed_cn' : 'fixed_overseas';
-    if (dto && dto.id) selectedPersonaId = dto.id;
-    showToast(tf('persona.fixedCreated', { label: fields.label }), 'success');
-    await loadAccounts();
-  } catch (e) { showToast(t('persona.createFailed') + e, 'error'); }
-};
-
-// 固定身份录入弹窗：返回 {label, proxy} 或 null
-function promptFixedPersona(): Promise<{ label: string; proxy: string } | null> {
-  return new Promise((resolve) => {
-    const overlay = document.createElement('div');
-    overlay.className = 'modal active';
-    overlay.innerHTML = `
-      <div class="modal-content" style="max-width:480px;">
-        <div class="modal-header"><h3>${escapeHtml(t('persona.fixedTitle'))}</h3><button class="modal-close" data-cancel>&times;</button></div>
-        <div class="modal-body">
-          <label style="display:block;margin-bottom:4px;font-size:13px;">${escapeHtml(t('persona.fixedLabelLabel'))}</label>
-          <input type="text" class="input" id="__fpLabel" placeholder="${escapeHtml(t('persona.fixedLabelPlaceholder'))}" style="width:100%;margin-bottom:12px;">
-          <label style="display:block;margin-bottom:4px;font-size:13px;">${escapeHtml(t('persona.fixedProxyLabel'))}</label>
-          <input type="text" class="input" id="__fpProxy" placeholder="${escapeHtml(t('persona.fixedProxyPlaceholder'))}" style="width:100%;">
-        </div>
-        <div class="modal-footer">
-          <button class="btn btn-secondary" data-cancel>${escapeHtml(t('provision.cancel'))}</button>
-          <button class="btn btn-primary" data-ok>${escapeHtml(t('persona.fixedOk'))}</button>
-        </div>
-      </div>`;
-    let done = false;
-    const finish = (v: { label: string; proxy: string } | null) => { if (done) return; done = true; overlay.remove(); resolve(v); };
-    const submit = () => {
-      const label = (overlay.querySelector('#__fpLabel') as HTMLInputElement).value.trim();
-      const proxy = (overlay.querySelector('#__fpProxy') as HTMLInputElement).value.trim();
-      if (!label || !proxy) return;   // 两栏都必填
-      finish({ label, proxy });
-    };
-    overlay.querySelectorAll('[data-cancel]').forEach(el => el.addEventListener('click', () => finish(null)));
-    overlay.querySelector('[data-ok]')?.addEventListener('click', submit);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(null); });
-    document.body.appendChild(overlay);
-    setTimeout(() => (overlay.querySelector('#__fpLabel') as HTMLInputElement)?.focus(), 30);
-  });
-}
-
-// #13 打开固定 IP 身份的浏览器（无 Gmail 登录步骤）
+// #13 打开身份的浏览器（无 Gmail 登录步骤）
 (window as any).personaOpenBrowser = async function(id: string) {
   try {
     const msg = await invoke<string>('persona_open_browser', { personaId: id });

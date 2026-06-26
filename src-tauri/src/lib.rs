@@ -12546,7 +12546,6 @@ pub fn run() {
             persona_provision_all,
             multi_account::persona_list,
             multi_account::persona_create,
-            multi_account::persona_create_fixed,
             multi_account::persona_open_gmail_login,
             multi_account::persona_open_browser,
             multi_account::persona_delete,
