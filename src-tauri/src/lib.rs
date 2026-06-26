@@ -9595,6 +9595,21 @@ fn stop_nurture() -> Result<(), String> {
     Ok(())
 }
 
+/// 规范化账号自定义代理：trim；空→None；无协议前缀补 socks5://；仅允许 socks5/http/https。
+/// 账号级 SOCKS5 配置入库前统一走这里。纯逻辑，可单测。
+pub(crate) fn normalize_proxy(input: &str) -> Result<Option<String>, String> {
+    let s = input.trim();
+    if s.is_empty() {
+        return Ok(None);
+    }
+    let s = if s.contains("://") { s.to_string() } else { format!("socks5://{}", s) };
+    if s.starts_with("socks5://") || s.starts_with("http://") || s.starts_with("https://") {
+        Ok(Some(s))
+    } else {
+        Err("代理需为 socks5:// / http:// / https:// 或 host:port".to_string())
+    }
+}
+
 /// 一键养号「开跑前登录预检」：检测某账号在其浏览器 profile 下是否已登录对应平台。
 /// 启动该账号的 profile → 导航平台首页轮询登录态。通用滚动平台（不强依赖登录）直接返回 true，不打扰。
 /// 前端据此在开跑前列出未登录账号，让用户先去登录、或跳过它们继续。
@@ -13031,5 +13046,26 @@ mod login_precheck_tests {
         for p in ["zhihu", "weibo", "reddit", "medium", "v2ex", "", "unknown"] {
             assert!(!nurture_requires_login(p), "{} 不应纳入登录预检", p);
         }
+    }
+}
+
+#[cfg(test)]
+mod proxy_normalize_tests {
+    use crate::normalize_proxy;
+
+    #[test]
+    fn normalize_proxy_rules() {
+        // 空 / 纯空白 → None
+        assert_eq!(normalize_proxy("").unwrap(), None);
+        assert_eq!(normalize_proxy("   ").unwrap(), None);
+        // host:port 无协议 → 补 socks5://
+        assert_eq!(normalize_proxy("1.2.3.4:18080").unwrap(), Some("socks5://1.2.3.4:18080".to_string()));
+        // 带账号密码
+        assert_eq!(normalize_proxy("u:p@host:1080").unwrap(), Some("socks5://u:p@host:1080".to_string()));
+        // 已带协议保持原样
+        assert_eq!(normalize_proxy("http://h:8080").unwrap(), Some("http://h:8080".to_string()));
+        assert_eq!(normalize_proxy("socks5://h:1080").unwrap(), Some("socks5://h:1080".to_string()));
+        // 非法协议 → Err
+        assert!(normalize_proxy("ftp://h:21").is_err());
     }
 }
