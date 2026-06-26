@@ -2678,12 +2678,6 @@
     }
   };
   window.personaAddAccounts = async function(id, email) {
-    const persona = personasCache.find((p) => p.id === id);
-    const isFixed = (persona?.ip_mode || "airport") === "fixed";
-    if (isFixed && accounts.filter((a) => a.persona_id === id).length >= 1) {
-      showToast(t("accounts.fixedOneAccount"), "info");
-      return;
-    }
     let catalog;
     try {
       catalog = await invoke2("persona_platform_catalog", { personaId: id });
@@ -2691,20 +2685,14 @@
       showToast(t("provision.loadFailed") + e, "error");
       return;
     }
-    const candidates = catalog.filter((c) => {
-      if (c.provisioned) return false;
-      if (isFixed) {
-        return c.ip_policy === ((persona?.region || "") === "cn" ? "residential_cn" : "static_overseas");
-      }
-      return c.ip_policy === "shared_overseas" && c.login_method !== "google";
-    });
+    const candidates = catalog.filter((c) => !c.provisioned && c.login_method !== "google");
     if (!candidates.length) {
       showToast(t("addacct.none"), "info");
       return;
     }
     const picked = await pickAddAccounts(email, candidates);
     if (!picked) return;
-    const entries = isFixed ? picked.slice(0, 1) : picked;
+    const entries = picked;
     if (!entries.length) {
       showToast(t("addacct.nothing"), "info");
       return;

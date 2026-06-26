@@ -2857,31 +2857,17 @@ let collapsedPersonas: Set<string> = new Set();
 
 // #4/#13 加账号：按身份的 IP 类型路由可加平台，按「手机号/账号密码」分区录凭据，逐个添加并归属
 (window as any).personaAddAccounts = async function(id: string, email: string) {
-  // #13 按身份 IP 类型决定能加哪些平台：
-  //   固定·国内 → residential_cn（小红书等）；固定·海外 → static_overseas（Twitter/Reddit/FB…）；
-  //   Gmail/机场 → 宽松海外平台里「非 Google 登录」的（Google 的走「开通账号」）
-  const persona = personasCache.find((p: any) => p.id === id);
-  const isFixed = (persona?.ip_mode || 'airport') === 'fixed';
-  // 固定 IP 身份建议一身份一号：已有账号则不让再加
-  if (isFixed && accounts.filter((a: any) => a.persona_id === id).length >= 1) {
-    showToast(t('accounts.fixedOneAccount'), 'info'); return;
-  }
+  // 身份统一为 Gmail(机场)，加账号不再按 IP 策略分流：列出所有未开通、非 Google 登录的平台。
+  // （Google 登录平台走「开通账号」一键流程；个别账号需专用 IP 时在账号卡片配 SOCKS5。）
   let catalog: CatalogItem[];
   try {
     catalog = await invoke<CatalogItem[]>('persona_platform_catalog', { personaId: id });
   } catch (e) { showToast(t('provision.loadFailed') + e, 'error'); return; }
-  const candidates = catalog.filter(c => {
-    if (c.provisioned) return false;
-    if (isFixed) {
-      return c.ip_policy === ((persona?.region || '') === 'cn' ? 'residential_cn' : 'static_overseas');
-    }
-    return c.ip_policy === 'shared_overseas' && c.login_method !== 'google';
-  });
+  const candidates = catalog.filter(c => !c.provisioned && c.login_method !== 'google');
   if (!candidates.length) { showToast(t('addacct.none'), 'info'); return; }
   const picked = await pickAddAccounts(email, candidates);
   if (!picked) return;                            // 取消
-  // 固定身份一号：即便填了多个也只取第一个
-  const entries = isFixed ? picked.slice(0, 1) : picked;
+  const entries = picked;
   if (!entries.length) { showToast(t('addacct.nothing'), 'info'); return; }
   try {
     for (const e of entries) {
