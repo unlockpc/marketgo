@@ -408,6 +408,29 @@ fn xhs_close_note_blocking() {
     }
 }
 
+/// 在当前页搜索框输入主题并提交——比导航 search_result URL 更像真人，且不开新 tab、URL 不带 type 字段。
+/// 实测流程(2026-06-26 真站验证)：聚焦 #search-input → JS 全选 + Backspace 清空(React 受控框 Meta+A 选不中，
+/// setSelectionRange 才可靠) → human 输入 → 强点 .input-box .search-icon 提交(图标含 svg 会判定遮挡，需 force)。
+/// 提交成功返回 true。
+fn xhs_search_box_blocking(kw: &str) -> bool {
+    use std::time::Duration;
+    let tab_id = match get_active_tab() { Some(t) if !t.is_empty() => t, _ => return false };
+    if !unzoo_element_exists("#search-input") { return false; }
+    // 聚焦搜索框
+    let _ = unzoo_human_click("#search-input");
+    std::thread::sleep(Duration::from_millis(get_human_delay(400, 900)));
+    // 清空已有关键词：JS 选中全部 + 退格删除
+    let _ = unzoo_evaluate("(function(){var el=document.querySelector('#search-input');if(!el)return 0;el.focus();el.setSelectionRange(0,(el.value||'').length);return (el.value||'').length;})()");
+    let _ = unzoo_mcp("browser_press_key", serde_json::json!({ "tab_id": tab_id, "key": "Backspace" }));
+    std::thread::sleep(Duration::from_millis(get_human_delay(300, 700)));
+    // human 输入主题词
+    if unzoo_human_type("#search-input", kw).is_err() { return false; }
+    std::thread::sleep(Duration::from_millis(get_human_delay(500, 1200)));
+    // 提交：搜索图标含 svg 会被遮挡检测拦下，force 强点
+    ensure_human_profile();
+    unzoo_mcp("human_click", serde_json::json!({ "tab_id": tab_id, "selector": ".input-box .search-icon", "force": true })).is_ok()
+}
+
 /// 小红书养号（搜索驱动）：按主题关键词搜索→拟人浏览→点进笔记阅读；成长期对少量笔记点赞。
 /// 全程"等加载+随机延迟"再操作。返回 (searched, read, liked)。
 /// app/account_id 用于点赞去重(xhs_actions_log)与进度推送。
@@ -420,18 +443,29 @@ fn xhs_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec<S
     }
     let mut searched = 0i64; let mut read = 0i64; let mut liked = 0i64;
     let mut seed = seed0 | 1;
+    let mut last_kw = String::new();
     for _ in 0..n_search.max(1) {
         if nurture_should_stop() { break; }
         if start.elapsed().as_secs() as i64 >= duration_secs { break; }
         seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17;
-        let kw = &keywords[(seed as usize) % keywords.len()];
-        let q_enc = kw.replace(' ', "%20");
-        let url = format!("https://www.xiaohongshu.com/search_result?keyword={}", q_enc);
-        if unzoo_navigate(&url).is_err() { continue; }
-        // 等搜索结果加载完（笔记卡片出现）再操作
-        if !xhs_wait_loaded_blocking("a[href*=\"/explore/\"]", 8) { continue; }
-        std::thread::sleep(Duration::from_millis(get_human_delay(2000, 4000)));
-        searched += 1;
+        let kw = keywords[(seed as usize) % keywords.len()].clone();
+        if kw == last_kw {
+            // 主题与上次相同 → 不重新搜索，直接在当前结果里继续往下翻看（滚动加载更多）
+            emit_nurture_step(&app, account_id, &format!("📖 继续翻看「{}」（同主题不重复搜索）", kw));
+        } else {
+            // 换主题 → 在当前页搜索框输入并提交（不导航 URL、不开新 tab）
+            emit_nurture_step(&app, account_id, &format!("🔍 搜索主题「{}」", kw));
+            if !xhs_search_box_blocking(&kw) {
+                // 搜索框兜底：极少数情况下搜索框不可用时，退回 URL 导航（保证不整体卡死）
+                let url = format!("https://www.xiaohongshu.com/search_result?keyword={}", kw.replace(' ', "%20"));
+                if unzoo_navigate(&url).is_err() { continue; }
+            }
+            // 等搜索结果加载完（笔记卡片出现）再操作
+            if !xhs_wait_loaded_blocking("a[href*=\"/explore/\"]", 8) { continue; }
+            std::thread::sleep(Duration::from_millis(get_human_delay(2000, 4000)));
+            last_kw = kw.clone();
+            searched += 1;
+        }
         // 拟人滚动结果页
         for _ in 0..get_human_delay(2, 4) {
             let _ = unzoo_scroll("down", get_human_delay(200, 500) as i32);
