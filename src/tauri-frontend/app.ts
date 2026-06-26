@@ -2992,6 +2992,7 @@ function renderAccountCard(account: any): string {
           ${account.login_method !== 'google'
             ? `<button class="chip-btn" onclick="transferAccountPersona('${account.id}','${escapeHtml(account.persona_id || '')}')" title="把这个账号改挂到别的身份下">🔄 ${escapeHtml(t('transfer.btn'))}</button>`
             : ''}
+          ${account.custom_proxy ? `<span class="chip-btn" style="background:#fef3c7;color:#92400e;" title="该账号走自定义代理">🧦 ${escapeHtml(String(account.custom_proxy).replace(/^socks5:\/\//,'').replace(/^https?:\/\//,''))}</span>` : ''}
           ${nurtureStats}
         </div>
         ${todayProgress}
@@ -3003,6 +3004,7 @@ function renderAccountCard(account: any): string {
             ? `<button class="btn btn-small btn-success" data-nurture-account="${account.id}" disabled style="opacity:.5;cursor:not-allowed;" title="一键养号进行中，完成后才可单独养号">🌱 ${t('nurture.quickNurture')}</button>`
             : `<button class="btn btn-small btn-success" data-nurture-account="${account.id}" onclick="openNurtureModal('${account.id}', '${escapeHtml(account.platform)}', '${escapeHtml(account.username || account.email || 'N/A')}')" title="${t('nurture.quickNurture')}">🌱 ${t('nurture.quickNurture')}</button>`}
           ${['github','twitter','x','segmentfault','xiaohongshu'].includes(account.platform) ? `<button class="btn btn-small btn-secondary" onclick="pickTopics('${account.id}','${escapeHtml(account.platform)}')" title="选择养号主题">🎯 主题</button>` : ''}
+          <button class="btn btn-small btn-secondary" onclick="openAccountProxyModal('${account.id}')" title="配置该账号的自定义 SOCKS5 代理（不配走身份机场节点）">🧦 SOCKS5</button>
           ${stage !== 'active' ? `<button class="btn btn-small btn-secondary" onclick="finishAccountNurture('${account.id}')" title="老账号无需养号，直接标为正常">✅ ${t('nurture.finishBtn')}</button>` : ''}
         </div>
       </div>
@@ -3011,6 +3013,51 @@ function renderAccountCard(account: any): string {
 }
 
 // 自动登录单个账号（查登录→Google登录→否则注册），在其身份的浏览器里跑
+// 账号级 SOCKS5 代理配置弹框：留空=清除（走身份机场节点）。
+(window as any).openAccountProxyModal = function(accountId: string) {
+  const acc = accounts.find((a: any) => a.id === accountId);
+  const cur = (acc?.custom_proxy as string) || '';
+  const overlay = document.createElement('div');
+  overlay.className = 'modal active';
+  overlay.innerHTML = `
+    <div class="modal-content" style="max-width:460px;">
+      <div class="modal-header"><h3>🧦 配置 SOCKS5 代理</h3><button class="modal-close" data-cancel>&times;</button></div>
+      <div class="modal-body">
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:8px;">留空=清除，走身份统一的机场节点。格式 <code>socks5://user:pass@host:port</code> 或 <code>host:port</code>。</p>
+        <input id="acctProxyInput" type="text" class="input" style="width:100%;" placeholder="host:port 或 socks5://..." value="${escapeHtml(cur)}">
+        <p id="acctProxyTestResult" style="font-size:12px;margin-top:8px;color:var(--text-muted);"></p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="acctProxyTest">测试出口IP</button>
+        <button class="btn btn-secondary" data-cancel>取消</button>
+        <button class="btn btn-primary" id="acctProxySave">保存</button>
+      </div>
+    </div>`;
+  const close = () => overlay.remove();
+  overlay.querySelectorAll('[data-cancel]').forEach(el => el.addEventListener('click', close));
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector('#acctProxySave')?.addEventListener('click', async () => {
+    const val = (overlay.querySelector('#acctProxyInput') as HTMLInputElement).value.trim();
+    try {
+      await invoke('set_account_proxy', { accountId, proxy: val || null });
+      showToast(val ? '已保存自定义代理' : '已清除，走身份机场节点', 'success');
+      close();
+      await loadAccounts();
+    } catch (e) { showToast('保存失败：' + e, 'error'); }
+  });
+  overlay.querySelector('#acctProxyTest')?.addEventListener('click', async () => {
+    const r = overlay.querySelector('#acctProxyTestResult') as HTMLElement;
+    const val = (overlay.querySelector('#acctProxyInput') as HTMLInputElement).value.trim();
+    r.textContent = '测试中…（先保存当前输入再测）';
+    try {
+      await invoke('set_account_proxy', { accountId, proxy: val || null });
+      const out = await invoke<string>('test_account_proxy', { accountId });
+      r.textContent = out;
+    } catch (e) { r.textContent = '测试失败：' + e; }
+  });
+  document.body.appendChild(overlay);
+};
+
 (window as any).autoLoginAccount = async function(accountId: string, platform: string) {
   showToast(`正在处理 ${platform}…（查登录→自动登录，可能需要几十秒）`, 'info');
   try {

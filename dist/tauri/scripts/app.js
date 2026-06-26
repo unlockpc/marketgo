@@ -2793,6 +2793,7 @@
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           ${personaBadge}
           ${account.login_method !== "google" ? `<button class="chip-btn" onclick="transferAccountPersona('${account.id}','${escapeHtml(account.persona_id || "")}')" title="\u628A\u8FD9\u4E2A\u8D26\u53F7\u6539\u6302\u5230\u522B\u7684\u8EAB\u4EFD\u4E0B">\u{1F504} ${escapeHtml(t("transfer.btn"))}</button>` : ""}
+          ${account.custom_proxy ? `<span class="chip-btn" style="background:#fef3c7;color:#92400e;" title="\u8BE5\u8D26\u53F7\u8D70\u81EA\u5B9A\u4E49\u4EE3\u7406">\u{1F9E6} ${escapeHtml(String(account.custom_proxy).replace(/^socks5:\/\//, "").replace(/^https?:\/\//, ""))}</span>` : ""}
           ${nurtureStats}
         </div>
         ${todayProgress}
@@ -2800,12 +2801,62 @@
           ${platformManualLoginCache[(account.platform || "").toLowerCase()] ? `<button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="\u8BE5\u5E73\u53F0\u81EA\u52A8\u767B\u5F55\u8D70\u4E0D\u901A\uFF0C\u70B9\u6B64\u76F4\u63A5\u6253\u5F00\u767B\u5F55\u9875\uFF0C\u5728\u6D4F\u89C8\u5668\u91CC\u624B\u52A8\u767B\u5F55\u4E00\u6B21">\u270B \u624B\u5DE5\u767B\u5F55</button>` : `<button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="\u81EA\u52A8\u767B\u5F55\uFF1A\u67E5\u767B\u5F55\u2192Google\u767B\u5F55\u2192\u5426\u5219\u6CE8\u518C">\u{1F511} \u81EA\u52A8\u767B\u5F55</button>`}
           ${nurtureAllRunning && nurtureAllProfileKeys.has(nurtureProfileKeyOf(account)) ? `<button class="btn btn-small btn-success" data-nurture-account="${account.id}" disabled style="opacity:.5;cursor:not-allowed;" title="\u4E00\u952E\u517B\u53F7\u8FDB\u884C\u4E2D\uFF0C\u5B8C\u6210\u540E\u624D\u53EF\u5355\u72EC\u517B\u53F7">\u{1F331} ${t("nurture.quickNurture")}</button>` : `<button class="btn btn-small btn-success" data-nurture-account="${account.id}" onclick="openNurtureModal('${account.id}', '${escapeHtml(account.platform)}', '${escapeHtml(account.username || account.email || "N/A")}')" title="${t("nurture.quickNurture")}">\u{1F331} ${t("nurture.quickNurture")}</button>`}
           ${["github", "twitter", "x", "segmentfault", "xiaohongshu"].includes(account.platform) ? `<button class="btn btn-small btn-secondary" onclick="pickTopics('${account.id}','${escapeHtml(account.platform)}')" title="\u9009\u62E9\u517B\u53F7\u4E3B\u9898">\u{1F3AF} \u4E3B\u9898</button>` : ""}
+          <button class="btn btn-small btn-secondary" onclick="openAccountProxyModal('${account.id}')" title="\u914D\u7F6E\u8BE5\u8D26\u53F7\u7684\u81EA\u5B9A\u4E49 SOCKS5 \u4EE3\u7406\uFF08\u4E0D\u914D\u8D70\u8EAB\u4EFD\u673A\u573A\u8282\u70B9\uFF09">\u{1F9E6} SOCKS5</button>
           ${stage !== "active" ? `<button class="btn btn-small btn-secondary" onclick="finishAccountNurture('${account.id}')" title="\u8001\u8D26\u53F7\u65E0\u9700\u517B\u53F7\uFF0C\u76F4\u63A5\u6807\u4E3A\u6B63\u5E38">\u2705 ${t("nurture.finishBtn")}</button>` : ""}
         </div>
       </div>
     `;
     }
   }
+  window.openAccountProxyModal = function(accountId) {
+    const acc = accounts.find((a) => a.id === accountId);
+    const cur = acc?.custom_proxy || "";
+    const overlay = document.createElement("div");
+    overlay.className = "modal active";
+    overlay.innerHTML = `
+    <div class="modal-content" style="max-width:460px;">
+      <div class="modal-header"><h3>\u{1F9E6} \u914D\u7F6E SOCKS5 \u4EE3\u7406</h3><button class="modal-close" data-cancel>&times;</button></div>
+      <div class="modal-body">
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:8px;">\u7559\u7A7A=\u6E05\u9664\uFF0C\u8D70\u8EAB\u4EFD\u7EDF\u4E00\u7684\u673A\u573A\u8282\u70B9\u3002\u683C\u5F0F <code>socks5://user:pass@host:port</code> \u6216 <code>host:port</code>\u3002</p>
+        <input id="acctProxyInput" type="text" class="input" style="width:100%;" placeholder="host:port \u6216 socks5://..." value="${escapeHtml(cur)}">
+        <p id="acctProxyTestResult" style="font-size:12px;margin-top:8px;color:var(--text-muted);"></p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="acctProxyTest">\u6D4B\u8BD5\u51FA\u53E3IP</button>
+        <button class="btn btn-secondary" data-cancel>\u53D6\u6D88</button>
+        <button class="btn btn-primary" id="acctProxySave">\u4FDD\u5B58</button>
+      </div>
+    </div>`;
+    const close = () => overlay.remove();
+    overlay.querySelectorAll("[data-cancel]").forEach((el) => el.addEventListener("click", close));
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) close();
+    });
+    overlay.querySelector("#acctProxySave")?.addEventListener("click", async () => {
+      const val = overlay.querySelector("#acctProxyInput").value.trim();
+      try {
+        await invoke2("set_account_proxy", { accountId, proxy: val || null });
+        showToast(val ? "\u5DF2\u4FDD\u5B58\u81EA\u5B9A\u4E49\u4EE3\u7406" : "\u5DF2\u6E05\u9664\uFF0C\u8D70\u8EAB\u4EFD\u673A\u573A\u8282\u70B9", "success");
+        close();
+        await loadAccounts();
+      } catch (e) {
+        showToast("\u4FDD\u5B58\u5931\u8D25\uFF1A" + e, "error");
+      }
+    });
+    overlay.querySelector("#acctProxyTest")?.addEventListener("click", async () => {
+      const r = overlay.querySelector("#acctProxyTestResult");
+      const val = overlay.querySelector("#acctProxyInput").value.trim();
+      r.textContent = "\u6D4B\u8BD5\u4E2D\u2026\uFF08\u5148\u4FDD\u5B58\u5F53\u524D\u8F93\u5165\u518D\u6D4B\uFF09";
+      try {
+        await invoke2("set_account_proxy", { accountId, proxy: val || null });
+        const out = await invoke2("test_account_proxy", { accountId });
+        r.textContent = out;
+      } catch (e) {
+        r.textContent = "\u6D4B\u8BD5\u5931\u8D25\uFF1A" + e;
+      }
+    });
+    document.body.appendChild(overlay);
+  };
   window.autoLoginAccount = async function(accountId, platform) {
     showToast(`\u6B63\u5728\u5904\u7406 ${platform}\u2026\uFF08\u67E5\u767B\u5F55\u2192\u81EA\u52A8\u767B\u5F55\uFF0C\u53EF\u80FD\u9700\u8981\u51E0\u5341\u79D2\uFF09`, "info");
     try {
