@@ -456,7 +456,7 @@ fn xhs_search_box_blocking(kw: &str) -> bool {
 /// 小红书养号（搜索驱动）：按主题关键词搜索→拟人浏览→点进笔记阅读；成长期对少量笔记点赞。
 /// 全程"等加载+随机延迟"再操作。返回 (searched, read, liked)。
 /// app/account_id 用于点赞去重(xhs_actions_log)与进度推送。
-fn xhs_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec<String>, n_search: i64, n_like: i64, duration_secs: i64, seed0: u64) -> Result<(i64, i64, i64), String> {
+fn xhs_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec<String>, n_like: i64, duration_secs: i64, seed0: u64) -> Result<(i64, i64, i64), String> {
     use std::time::{Duration, Instant};
     let start = Instant::now();
     if keywords.is_empty() { return Ok((0, 0, 0)); }
@@ -465,39 +465,36 @@ fn xhs_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec<S
     }
     let mut searched = 0i64; let mut read = 0i64; let mut liked = 0i64;
     let mut seed = seed0 | 1;
-    let mut last_kw = String::new();
-    for _ in 0..n_search.max(1) {
+    // 把所有选中主题打乱后逐个搜索，确保每个主题(含自定义)都轮到——
+    // 之前随机取模 keywords[seed%len] 一个 session 只搜 n_search 次，排在后面的自定义主题常被漏掉。
+    let mut kw_order = keywords.clone();
+    for i in (1..kw_order.len()).rev() {
+        seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17;
+        let j = (seed as usize) % (i + 1);
+        kw_order.swap(i, j);
+    }
+    for (si, kw) in kw_order.iter().enumerate() {
         if nurture_should_stop() { break; }
         if start.elapsed().as_secs() as i64 >= duration_secs { break; }
-        seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17;
-        let kw = keywords[(seed as usize) % keywords.len()].clone();
-        if kw == last_kw {
-            // 主题与上次相同 → 不重新搜索，直接在当前结果里继续往下翻看（滚动加载更多）
-            emit_nurture_step(&app, account_id, &format!("📖 继续翻看「{}」（同主题不重复搜索）", kw));
-        } else if last_kw.is_empty() {
+        if si == 0 {
             // 首次搜索：从 explore 首页出发，其搜索框是「问点」AI 框、提交图标也不同，box 流程不适用。
             // 先用 URL 落到搜索结果页(建立一致的搜索栏 UI)，之后换主题都走搜索框。
             emit_nurture_step(&app, account_id, &format!("🔍 搜索主题「{}」", kw));
             let url = format!("https://www.xiaohongshu.com/search_result?keyword={}", kw.replace(' ', "%20"));
             if unzoo_navigate(&url).is_err() { continue; }
-            if !xhs_wait_loaded_blocking("a[href*=\"/explore/\"]", 8) { continue; }
-            std::thread::sleep(Duration::from_millis(get_human_delay(2000, 4000)));
-            last_kw = kw.clone();
-            searched += 1;
         } else {
             // 换主题 → 在当前搜索结果页的搜索框输入并提交（同一 tab、不开新 tab、URL 不带 type）
             emit_nurture_step(&app, account_id, &format!("🔍 搜索框搜索「{}」", kw));
-            if !xhs_search_box_blocking(&kw) {
+            if !xhs_search_box_blocking(kw) {
                 // 搜索框兜底：极少数情况下搜索框不可用时，退回 URL 导航（保证不整体卡死）
                 let url = format!("https://www.xiaohongshu.com/search_result?keyword={}", kw.replace(' ', "%20"));
                 if unzoo_navigate(&url).is_err() { continue; }
             }
-            // 等搜索结果加载完（笔记卡片出现）再操作
-            if !xhs_wait_loaded_blocking("a[href*=\"/explore/\"]", 8) { continue; }
-            std::thread::sleep(Duration::from_millis(get_human_delay(2000, 4000)));
-            last_kw = kw.clone();
-            searched += 1;
         }
+        // 等搜索结果加载完（笔记卡片出现）再操作
+        if !xhs_wait_loaded_blocking("a[href*=\"/explore/\"]", 8) { continue; }
+        std::thread::sleep(Duration::from_millis(get_human_delay(2000, 4000)));
+        searched += 1;
         // 拟人滚动结果页
         for _ in 0..get_human_delay(2, 4) {
             let _ = unzoo_scroll("down", get_human_delay(200, 500) as i32);
@@ -592,15 +589,16 @@ pub(crate) async fn xiaohongshu_nurture_run(app: &AppHandle, account_id: &str, d
         return Ok("账号未选主题，跳过小红书养号（点卡片上「🎯 主题」选一下方向）".to_string());
     }
     if kws.is_empty() { return Ok("主题无可用关键词".to_string()); }
-    let (n_search, allow_like) = xhs_phase_intensity(&phase);
+    let (_n_search, allow_like) = xhs_phase_intensity(&phase);
     // 成长/成熟期点赞随机 2-4 次（预热只读 → 0）
     let n_like = if allow_like { get_random_delay(2, 4) as i64 } else { 0 };
     let dur = duration.max(30);
     let seed0 = get_random_delay(1, 100_000);
-    emit_nurture_step(app, account_id, &format!("开始小红书养号 · 按主题搜索 {} 次并阅读（约 {}s）", n_search, dur));
+    let topic_n = kws.len();
+    emit_nurture_step(app, account_id, &format!("开始小红书养号 · 逐个搜索 {} 个主题并阅读（约 {}s）", topic_n, dur));
     let app_cl = app.clone();
     let acct = account_id.to_string();
-    let (searched, read, liked) = tauri::async_runtime::spawn_blocking(move || xhs_nurture_browse_blocking(app_cl, &acct, kws, n_search, n_like, dur, seed0))
+    let (searched, read, liked) = tauri::async_runtime::spawn_blocking(move || xhs_nurture_browse_blocking(app_cl, &acct, kws, n_like, dur, seed0))
         .await.map_err(|e| format!("养号任务异常: {}", e))??;
 
     // 写养号统计（与 SF 一致）
