@@ -804,6 +804,7 @@
           <h2 data-i18n="accounts.pageTitle">👤 身份管理</h2>
           <span style="margin-left:auto;display:flex;align-items:center;gap:8px;">
             <button class="btn btn-success" id="btnNurtureAll" title="对所有账号立即养一轮（今日已养>5次的自动跳过）">🌱 一键养号 / Nurture All</button>
+            <button class="btn btn-secondary" onclick="openBatchProxyModal()" title="批量给多个账号配置/清除自定义 SOCKS5 代理">🧦 批量 SOCKS5</button>
             <button class="btn btn-primary" id="btnAddAccount" style="display:none;">
               <span data-i18n="accounts.addAccount">+ Add Account</span>
             </button>
@@ -2029,6 +2030,23 @@
         <button class="btn btn-success" id="btnNurtureAllStart">开始养号 / Start</button>
         <button class="btn btn-danger" id="btnNurtureAllStop" style="display: none;">停止 / Stop</button>
         <button class="btn btn-primary" id="btnNurtureAllClose" style="display: none;" data-close>关闭 / Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Batch SOCKS5 Modal -->
+  <div class="modal" id="modalBatchProxy">
+    <div class="modal-content" style="max-width: 600px;">
+      <div class="modal-header"><h3>🧦 批量配置 SOCKS5 / Batch proxy</h3><button class="modal-close" data-close>&times;</button></div>
+      <div class="modal-body">
+        <p style="font-size:13px;color:var(--text-muted);">勾选账号 → 填代理「应用到选中」，或「清除选中」走机场节点。</p>
+        <input id="batchProxyInput" type="text" class="input" style="width:100%;margin:8px 0;" placeholder="host:port 或 socks5://...">
+        <div id="batchProxyAccounts" style="max-height:320px;overflow:auto;"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close>取消</button>
+        <button class="btn btn-danger" id="batchProxyClear">清除选中</button>
+        <button class="btn btn-primary" id="batchProxyApply">应用到选中</button>
       </div>
     </div>
   </div>

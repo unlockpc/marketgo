@@ -1347,6 +1347,8 @@ function initModals() {
   document.getElementById('btnNurtureAll')?.addEventListener('click', openNurtureAllModal);
   document.getElementById('btnNurtureAllStart')?.addEventListener('click', startNurtureAll);
   document.getElementById('btnNurtureAllStop')?.addEventListener('click', stopNurtureAll);
+  document.getElementById('batchProxyApply')?.addEventListener('click', () => applyBatchProxy(false));
+  document.getElementById('batchProxyClear')?.addEventListener('click', () => applyBatchProxy(true));
   document.getElementById('btnAddAccount')?.addEventListener('click', () => openModal('modalAddAccount'));
   document.getElementById('btnAddAccountEmpty')?.addEventListener('click', () => openModal('modalAddAccount'));
   document.getElementById('btnSaveAccount')?.addEventListener('click', saveAccount);
@@ -3057,6 +3059,36 @@ function renderAccountCard(account: any): string {
   });
   document.body.appendChild(overlay);
 };
+
+// 批量配置 SOCKS5：勾选账号 → 统一设置/清除。
+(window as any).openBatchProxyModal = function() {
+  const box = document.getElementById('batchProxyAccounts');
+  if (box) {
+    box.innerHTML = accounts.map((a: any) => {
+      const name = a.username || a.email || a.platform || a.id;
+      const cur = a.custom_proxy ? `（当前 ${escapeHtml(String(a.custom_proxy).replace(/^socks5:\/\//,''))}）` : '';
+      return `<label style="display:flex;align-items:center;gap:8px;padding:4px 0;">
+        <input type="checkbox" name="batchProxyAcct" value="${a.id}">
+        <span>${escapeHtml(name)} · ${escapeHtml(a.platform)} ${cur}</span></label>`;
+    }).join('');
+  }
+  const inp = document.getElementById('batchProxyInput') as HTMLInputElement | null;
+  if (inp) inp.value = '';
+  openModal('modalBatchProxy');
+};
+
+async function applyBatchProxy(clear: boolean) {
+  const ids = Array.from(document.querySelectorAll('input[name="batchProxyAcct"]:checked'))
+    .map((cb) => (cb as HTMLInputElement).value);
+  if (!ids.length) { showToast('请至少勾选一个账号', 'warning'); return; }
+  const val = clear ? null : ((document.getElementById('batchProxyInput') as HTMLInputElement)?.value.trim() || null);
+  try {
+    const n = await invoke<number>('set_accounts_proxy', { accountIds: ids, proxy: val });
+    showToast(`已${clear ? '清除' : '设置'} ${n} 个账号的代理`, 'success');
+    closeModal('modalBatchProxy');
+    await loadAccounts();
+  } catch (e) { showToast('批量设置失败：' + e, 'error'); }
+}
 
 (window as any).autoLoginAccount = async function(accountId: string, platform: string) {
   showToast(`正在处理 ${platform}…（查登录→自动登录，可能需要几十秒）`, 'info');

@@ -1374,6 +1374,8 @@
     document.getElementById("btnNurtureAll")?.addEventListener("click", openNurtureAllModal);
     document.getElementById("btnNurtureAllStart")?.addEventListener("click", startNurtureAll);
     document.getElementById("btnNurtureAllStop")?.addEventListener("click", stopNurtureAll);
+    document.getElementById("batchProxyApply")?.addEventListener("click", () => applyBatchProxy(false));
+    document.getElementById("batchProxyClear")?.addEventListener("click", () => applyBatchProxy(true));
     document.getElementById("btnAddAccount")?.addEventListener("click", () => openModal("modalAddAccount"));
     document.getElementById("btnAddAccountEmpty")?.addEventListener("click", () => openModal("modalAddAccount"));
     document.getElementById("btnSaveAccount")?.addEventListener("click", saveAccount);
@@ -2857,6 +2859,37 @@
     });
     document.body.appendChild(overlay);
   };
+  window.openBatchProxyModal = function() {
+    const box = document.getElementById("batchProxyAccounts");
+    if (box) {
+      box.innerHTML = accounts.map((a) => {
+        const name = a.username || a.email || a.platform || a.id;
+        const cur = a.custom_proxy ? `\uFF08\u5F53\u524D ${escapeHtml(String(a.custom_proxy).replace(/^socks5:\/\//, ""))}\uFF09` : "";
+        return `<label style="display:flex;align-items:center;gap:8px;padding:4px 0;">
+        <input type="checkbox" name="batchProxyAcct" value="${a.id}">
+        <span>${escapeHtml(name)} \xB7 ${escapeHtml(a.platform)} ${cur}</span></label>`;
+      }).join("");
+    }
+    const inp = document.getElementById("batchProxyInput");
+    if (inp) inp.value = "";
+    openModal("modalBatchProxy");
+  };
+  async function applyBatchProxy(clear) {
+    const ids = Array.from(document.querySelectorAll('input[name="batchProxyAcct"]:checked')).map((cb) => cb.value);
+    if (!ids.length) {
+      showToast("\u8BF7\u81F3\u5C11\u52FE\u9009\u4E00\u4E2A\u8D26\u53F7", "warning");
+      return;
+    }
+    const val = clear ? null : document.getElementById("batchProxyInput")?.value.trim() || null;
+    try {
+      const n = await invoke2("set_accounts_proxy", { accountIds: ids, proxy: val });
+      showToast(`\u5DF2${clear ? "\u6E05\u9664" : "\u8BBE\u7F6E"} ${n} \u4E2A\u8D26\u53F7\u7684\u4EE3\u7406`, "success");
+      closeModal("modalBatchProxy");
+      await loadAccounts();
+    } catch (e) {
+      showToast("\u6279\u91CF\u8BBE\u7F6E\u5931\u8D25\uFF1A" + e, "error");
+    }
+  }
   window.autoLoginAccount = async function(accountId, platform) {
     showToast(`\u6B63\u5728\u5904\u7406 ${platform}\u2026\uFF08\u67E5\u767B\u5F55\u2192\u81EA\u52A8\u767B\u5F55\uFF0C\u53EF\u80FD\u9700\u8981\u51E0\u5341\u79D2\uFF09`, "info");
     try {
