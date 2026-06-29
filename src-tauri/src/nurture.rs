@@ -948,6 +948,46 @@ pub(crate) async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: 
     }
     let _ = engages;
 
+    // 7a-bis) 自动回复（开关开 + 配额>0）：读推文正文 → 大模型生成切题回复 → 直接发。
+    // 风险动作：默认关；读不到正文/生成不合格都跳过；回复间隔 30~90s；跨 session 去重(#reply)。
+    let reply_quota = x_reply_quota(&phase);
+    let reply_on = {
+        let st = app.state::<AppState>();
+        st.db.lock().ok().map(|c| crate::x_reply_enabled(&c)).unwrap_or(false)
+    };
+    let mut replies = 0i64;
+    if aborted_health.is_none() && reply_on && reply_quota > 0 {
+        for t in chosen.iter() {
+            if nurture_should_stop() { break; }
+            if replies >= reply_quota { break; }
+            let key = format!("{}#reply", t);
+            // 去重：本账号已回过这条 → 跳过
+            let acted = { let st = app.state::<AppState>(); let l = st.db.lock().map_err(|e| e.to_string())?; x_already_acted(&l, account_id, &key) };
+            if acted { continue; }
+            // 读正文（读不到/太短 → 跳过，不回复）
+            let tc = t.clone();
+            let body = tauri::async_runtime::spawn_blocking(move || x_read_tweet_text_blocking(&tc)).await.map_err(|e| e.to_string())?;
+            let body = match body { Some(b) => b, None => continue };
+            // 大模型基于正文生成回复（无 key/不合格 → None → 跳过）
+            let reply = match gen_nurture_text(app, "x_reply", &body).await {
+                Some(r) => r,
+                None => { emit_nurture_step(app, account_id, "未配置 AI 或回复不合格，跳过回复"); continue }
+            };
+            emit_nurture_step(app, account_id, &format!("💬 回复 {}/{}", replies + 1, reply_quota));
+            // 发回复（twitter_reply 自带导航 + Draft.js 注入 + 提交）
+            let url = t.clone(); let rep = reply.clone();
+            let r = tauri::async_runtime::spawn_blocking(move || twitter_reply(&url, &rep)).await.map_err(|e| e.to_string())?;
+            if r.is_ok() {
+                let st = app.state::<AppState>(); let l = st.db.lock();
+                if let Ok(conn) = l { let _ = x_record_action(&conn, account_id, "reply", &key); }
+                replies += 1;
+            }
+            // 回复间隔 30~90s（拟人）
+            tokio::time::sleep(std::time::Duration::from_millis(get_random_delay(30, 90))).await;
+        }
+    }
+    let _ = replies;
+
     // 7b) L3：满足闸门时发 1 条极少原创（每周 ≤1 条）
     if aborted_health.is_none() {
         let st = app.state::<AppState>();
