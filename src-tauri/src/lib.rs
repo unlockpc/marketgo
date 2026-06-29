@@ -13090,20 +13090,20 @@ mod xhs_runner_tests {
     }
 
     #[test]
-    fn expand_query_keeps_topic_and_varies() {
+    fn expand_query_always_appends_suffix() {
         use crate::nurture::xhs_expand_query;
-        // 扩展词始终以原主题开头（要么原词，要么"原词 后缀"）
-        for seed in 1u64..200 {
+        use std::collections::HashSet;
+        // 总是「原主题 + 空格 + 非空后缀」，绝不返回光秃秃的原词
+        let mut suffixes = HashSet::new();
+        for seed in 0u64..200 {
             let q = xhs_expand_query("数码科技", seed);
-            assert!(q == "数码科技" || q.starts_with("数码科技 "), "意外的扩展词: {}", q);
+            assert!(q.starts_with("数码科技 "), "应始终拼接后缀: {}", q);
+            let suffix = q.strip_prefix("数码科技 ").unwrap();
+            assert!(!suffix.is_empty(), "后缀不应为空: {}", q);
+            suffixes.insert(suffix.to_string());
         }
-        // 至少能产出原词 + 带后缀两种形态（覆盖 MODS 全表）
-        let mut bare = false; let mut suffixed = false;
-        for seed in 0u64..12 {
-            let q = xhs_expand_query("codex", seed);
-            if q == "codex" { bare = true; } else if q.starts_with("codex ") { suffixed = true; }
-        }
-        assert!(bare && suffixed, "扩展应同时产出原词与带后缀形态");
+        // 后缀应有多样性（不是固定一个）
+        assert!(suffixes.len() >= 5, "后缀应多样，实际只有 {} 种", suffixes.len());
     }
 }
 

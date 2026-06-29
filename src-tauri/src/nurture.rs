@@ -520,12 +520,12 @@ fn xhs_search_box_blocking(kw: &str) -> bool {
     unzoo_mcp("human_click", serde_json::json!({ "tab_id": tab_id, "selector": ".input-box .search-icon", "force": true })).is_ok()
 }
 
-/// 主题扩展：在主题词后随机叠加一个意图后缀(推荐/测评/教程…)，约 1/6 概率用原词。
-/// 让每次搜索更自然多样，不总搜同一个词；对内置和自定义主题都通用。空后缀时返回原词。
+/// 主题扩展：在主题词后**总是**随机叠加一个意图后缀(推荐/测评/教程…)，不再直接搜光秃秃的主题词。
+/// 让每次搜索更自然多样；对内置和自定义主题都通用。
 pub(crate) fn xhs_expand_query(topic: &str, seed: u64) -> String {
-    const MODS: &[&str] = &["", "", "推荐", "测评", "教程", "分享", "好物", "攻略", "干货", "盘点", "种草", "怎么样"];
+    const MODS: &[&str] = &["推荐", "测评", "教程", "分享", "好物", "攻略", "干货", "盘点", "种草", "怎么样", "最新", "实测"];
     let m = MODS[(seed as usize) % MODS.len()];
-    if m.is_empty() { topic.to_string() } else { format!("{} {}", topic, m) }
+    format!("{} {}", topic, m)
 }
 
 /// 小红书养号（搜索驱动）：按主题关键词搜索→拟人浏览→点进笔记阅读；成长期对少量笔记点赞。
