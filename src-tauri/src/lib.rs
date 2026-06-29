@@ -1351,6 +1351,30 @@ fn x_record_action(conn: &Connection, account_id: &str, action_type: &str, targe
         .map(|_| ()).map_err(|e| e.to_string())
 }
 
+/// 读 X 养号自动回复开关（config `x_nurture_reply_enabled` == "1" 才开；缺省=关）。
+pub(crate) fn x_reply_enabled(conn: &Connection) -> bool {
+    conn.query_row("SELECT value FROM config WHERE key='x_nurture_reply_enabled'", [], |r| r.get::<_, String>(0))
+        .map(|v| v == "1").unwrap_or(false)
+}
+
+/// 读 X 自动回复开关（前端设置页用）。
+#[tauri::command]
+fn get_x_reply_enabled(state: State<AppState>) -> Result<bool, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    Ok(x_reply_enabled(&conn))
+}
+
+/// 设 X 自动回复开关。
+#[tauri::command]
+fn set_x_reply_enabled(state: State<AppState>, enabled: bool) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('x_nurture_reply_enabled', ?1)",
+        params![if enabled { "1" } else { "0" }],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// 小红书养号动作去重（与 x_already_acted 同构，作用于 xhs_actions_log）。
 fn xhs_already_acted(conn: &Connection, account_id: &str, target: &str) -> bool {
     conn.query_row(
@@ -12459,6 +12483,8 @@ pub fn run() {
             get_platform_manual_login,
             configure_ai,
             get_ai_config,
+            get_x_reply_enabled,
+            set_x_reply_enabled,
             test_ai_connection,
             fetch_available_models,
             check_browser_status,
