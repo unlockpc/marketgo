@@ -13107,6 +13107,26 @@ mod xhs_runner_tests {
     }
 
     #[test]
+    fn x_reply_quota_by_phase() {
+        use crate::nurture::x_reply_quota;
+        assert_eq!(x_reply_quota("warmup"), 1);
+        assert_eq!(x_reply_quota("growth"), 1);
+        assert_eq!(x_reply_quota("mature"), 2);
+        assert_eq!(x_reply_quota("other"), 1);
+    }
+
+    #[test]
+    fn x_clean_tweet_text_length_gate() {
+        use crate::nurture::x_clean_tweet_text;
+        // 太短 / 空 → None
+        assert_eq!(x_clean_tweet_text(""), None);
+        assert_eq!(x_clean_tweet_text("  short  "), None);      // trim 后 5 字符
+        // 足够长 → Some(trimmed)
+        let long = "  this is a long enough tweet body  ";
+        assert_eq!(x_clean_tweet_text(long), Some("this is a long enough tweet body".to_string()));
+    }
+
+    #[test]
     fn sf_expand_always_appends_chinese_suffix() {
         use crate::nurture::sf_expand_query;
         for seed in 0u64..100 {

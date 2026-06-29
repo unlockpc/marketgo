@@ -548,6 +548,22 @@ pub(crate) fn x_expand_query(kw: &str, seed: u64) -> String {
     format!("{} {}", kw, m)
 }
 
+/// X 自动回复配额（按养号分期）：预热 1 / 成长 1 / 成熟 2；兜底=1。纯逻辑，可单测。
+pub(crate) fn x_reply_quota(phase: &str) -> i64 {
+    match phase {
+        "growth" => 1,
+        "mature" => 2,
+        _ => 1, // warmup 及兜底
+    }
+}
+
+/// 清洗推文正文并过长度门：trim 后非空且字符数 ≥15 才返回 Some，否则 None。
+/// 读不到/太短(纯图/视频/转发无文字)的推文不回复，由此兜底。纯逻辑，可单测。
+pub(crate) fn x_clean_tweet_text(raw: &str) -> Option<String> {
+    let t = raw.trim();
+    if t.chars().count() >= 15 { Some(t.to_string()) } else { None }
+}
+
 /// 小红书养号（搜索驱动）：按主题关键词搜索→拟人浏览→点进笔记阅读；成长期对少量笔记点赞。
 /// 全程"等加载+随机延迟"再操作。返回 (searched, read, liked)。
 /// app/account_id 用于点赞去重(xhs_actions_log)与进度推送。
