@@ -1395,6 +1395,13 @@ function initModals() {
       showToast(on ? 'X 自动回复已开启（高风险）' : 'X 自动回复已关闭', on ? 'warning' : 'success');
     } catch (e) { showToast('设置失败：' + e, 'error'); }
   });
+  document.getElementById('xhsReplyEnabled')?.addEventListener('change', async (ev) => {
+    const on = (ev.target as HTMLInputElement).checked;
+    try {
+      await invoke('set_xhs_reply_enabled', { enabled: on });
+      showToast(on ? '小红书自动评论已开启（高风险）' : '小红书自动评论已关闭', on ? 'warning' : 'success');
+    } catch (e) { showToast('设置失败：' + e, 'error'); }
+  });
   document.getElementById('btnRefreshModels')?.addEventListener('click', refreshModels);
   // Engage page
   document.getElementById('btnAddKeyword')?.addEventListener('click', () => openKeywordModal());
@@ -1561,6 +1568,47 @@ function pickProvisionPlatforms(email: string, catalog: CatalogItem[]): Promise<
 (window as any).pickProvisionPlatforms = pickProvisionPlatforms;
 
 interface TopicItem { key: string; label: string; keywords: string[]; builtin: boolean }
+
+// 养号回复风格（单选，按账号）：控制 X / 小红书 自动回复、评论的整体语气，避免千篇一律。
+const REPLY_STYLES: { key: string; label: string; desc: string }[] = [
+  { key: 'sincere', label: '真诚友善', desc: '真诚、友善、有同理心（默认）' },
+  { key: 'professional', label: '专业理性', desc: '专业、理性、有见地，像懂行的人在交流' },
+  { key: 'humorous', label: '幽默风趣', desc: '轻松幽默、带点机灵的小调侃，不油腻' },
+  { key: 'casual', label: '随性口语', desc: '随性、口语化，像朋友之间随手搭话' },
+  { key: 'enthusiastic', label: '热情活泼', desc: '热情、活泼、有感染力，但不浮夸' },
+];
+(window as any).pickReplyStyle = async function(accountId: string): Promise<void> {
+  let current = 'sincere';
+  try { current = await invoke<string>('get_account_reply_style', { accountId }); } catch {}
+  const overlay = document.createElement('div');
+  overlay.className = 'modal active';
+  document.body.appendChild(overlay);
+  overlay.innerHTML = `
+    <div class="modal-content">
+      <div class="modal-header"><h3>选择回复风格</h3></div>
+      <div class="modal-body">
+        <p class="text-muted" style="font-size:12px;margin:0 0 8px;">控制该账号 X / 小红书 养号自动回复、评论的整体语气</p>
+        ${REPLY_STYLES.map(s => `<label style="display:flex;align-items:flex-start;gap:8px;margin:8px 0;cursor:pointer;">
+          <input type="radio" name="replyStyle" value="${s.key}"${s.key === current ? ' checked' : ''} style="margin-top:3px;">
+          <span><b>${escapeHtml(s.label)}</b><br><span class="text-muted" style="font-size:12px;">${escapeHtml(s.desc)}</span></span>
+        </label>`).join('')}
+      </div>
+      <div class="modal-footer">
+        <button class="btn" id="styleCancel">取消</button>
+        <button class="btn btn-success" id="styleSave">保存</button>
+      </div>
+    </div>`;
+  overlay.querySelector('#styleCancel')!.addEventListener('click', () => overlay.remove());
+  overlay.querySelector('#styleSave')!.addEventListener('click', async () => {
+    const sel = overlay.querySelector<HTMLInputElement>('input[name=replyStyle]:checked');
+    const style = sel ? sel.value : 'sincere';
+    try {
+      await invoke('set_account_reply_style', { accountId, style });
+      showToast('回复风格已保存', 'success');
+      overlay.remove();
+    } catch (e) { showToast('保存失败: ' + e, 'error'); }
+  });
+};
 
 // 统一养号主题多选（按账号+平台）：内置 + 用户自定义；可现场添加/删除自定义主题。复用 .modal.active。
 (window as any).pickTopics = async function(accountId: string, platform: string): Promise<void> {
@@ -3045,6 +3093,7 @@ function renderAccountCard(account: any): string {
             ? `<button class="btn btn-small btn-success" data-nurture-account="${account.id}" disabled style="opacity:.5;cursor:not-allowed;" title="一键养号进行中，完成后才可单独养号">🌱 ${t('nurture.quickNurture')}</button>`
             : `<button class="btn btn-small btn-success" data-nurture-account="${account.id}" onclick="openNurtureModal('${account.id}', '${escapeHtml(account.platform)}', '${escapeHtml(account.username || account.email || 'N/A')}')" title="${t('nurture.quickNurture')}">🌱 ${t('nurture.quickNurture')}</button>`}
           ${['github','twitter','x','segmentfault','xiaohongshu'].includes(account.platform) ? `<button class="btn btn-small btn-secondary" onclick="pickTopics('${account.id}','${escapeHtml(account.platform)}')" title="选择养号主题">🎯 主题</button>` : ''}
+          ${['twitter','x','xiaohongshu'].includes(account.platform) ? `<button class="btn btn-small btn-secondary" onclick="pickReplyStyle('${account.id}')" title="选择养号自动回复/评论的语气风格">💬 风格</button>` : ''}
           <button class="btn btn-small btn-secondary" onclick="openAccountProxyModal('${account.id}')" title="配置该账号的自定义 SOCKS5 代理（不配走身份机场节点）">🧦 SOCKS5</button>
           ${stage !== 'active' ? `<button class="btn btn-small btn-secondary" onclick="finishAccountNurture('${account.id}')" title="老账号无需养号，直接标为正常">✅ ${t('nurture.finishBtn')}</button>` : ''}
         </div>
@@ -6310,12 +6359,17 @@ async function loadAIConfig() {
   }
 }
 
-// 同步「X 自动回复」开关状态（开关已移至账号管理页 header）
+// 同步「X 自动回复」「小红书自动评论」开关状态（开关均在账号管理页 header）
 async function syncXReplyToggle() {
   try {
     const xReply = await invoke<boolean>('get_x_reply_enabled');
     const cb = document.getElementById('xReplyEnabled') as HTMLInputElement | null;
     if (cb) cb.checked = !!xReply;
+  } catch {}
+  try {
+    const xhsReply = await invoke<boolean>('get_xhs_reply_enabled');
+    const cb = document.getElementById('xhsReplyEnabled') as HTMLInputElement | null;
+    if (cb) cb.checked = !!xhsReply;
   } catch {}
 }
 

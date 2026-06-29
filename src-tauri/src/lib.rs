@@ -1061,6 +1061,31 @@ fn account_topics(conn: &Connection, account_id: &str) -> Vec<String> {
     raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok()).unwrap_or_default()
 }
 
+/// 读账号的养号回复风格（控制 X/小红书自动回复语气）。空/未设 → "sincere"。
+pub(crate) fn account_reply_style(conn: &Connection, account_id: &str) -> String {
+    conn.query_row("SELECT reply_style FROM accounts WHERE id=?1", params![account_id],
+        |r| r.get::<_, Option<String>>(0))
+        .ok().flatten().filter(|s| !s.is_empty()).unwrap_or_else(|| "sincere".to_string())
+}
+
+/// 读账号回复风格（前端卡片用）。
+#[tauri::command]
+fn get_account_reply_style(state: State<AppState>, account_id: String) -> Result<String, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    Ok(account_reply_style(&conn, &account_id))
+}
+
+/// 设账号回复风格。只接受已知风格，未知值落回 sincere。
+#[tauri::command]
+fn set_account_reply_style(state: State<AppState>, account_id: String, style: String) -> Result<(), String> {
+    let valid = matches!(style.as_str(), "sincere" | "professional" | "humorous" | "casual" | "enthusiastic");
+    let s = if valid { style.as_str() } else { "sincere" };
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    conn.execute("UPDATE accounts SET reply_style=?1 WHERE id=?2", params![s, account_id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// catalog = 内置(platform) ∪ 自定义表 WHERE platform（内置在前）。
 fn topics_catalog_from(conn: &Connection, platform: &str) -> Vec<TopicItem> {
     let mut out: Vec<TopicItem> = builtin_topics(platform).into_iter().map(|d| TopicItem {
@@ -1391,6 +1416,30 @@ fn set_x_reply_enabled(state: State<AppState>, enabled: bool) -> Result<(), Stri
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     conn.execute(
         "INSERT OR REPLACE INTO config (key, value) VALUES ('x_nurture_reply_enabled', ?1)",
+        params![if enabled { "1" } else { "0" }],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 读小红书养号自动评论开关（config `xhs_nurture_reply_enabled` == "1" 才开；缺省=关）。
+pub(crate) fn xhs_reply_enabled(conn: &Connection) -> bool {
+    conn.query_row("SELECT value FROM config WHERE key='xhs_nurture_reply_enabled'", [], |r| r.get::<_, String>(0))
+        .map(|v| v == "1").unwrap_or(false)
+}
+
+/// 读小红书自动评论开关（前端身份页用）。
+#[tauri::command]
+fn get_xhs_reply_enabled(state: State<AppState>) -> Result<bool, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    Ok(xhs_reply_enabled(&conn))
+}
+
+/// 设小红书自动评论开关。
+#[tauri::command]
+fn set_xhs_reply_enabled(state: State<AppState>, enabled: bool) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('xhs_nurture_reply_enabled', ?1)",
         params![if enabled { "1" } else { "0" }],
     ).map_err(|e| e.to_string())?;
     Ok(())
@@ -3741,6 +3790,8 @@ fn run_migrations(conn: &Connection) -> rusqlite::Result<()> {
     // 统一养号主题：所选主题 keys（JSON 数组，平台无关，账号自带 platform）
     let _ = conn.execute("ALTER TABLE accounts ADD COLUMN nurture_topics TEXT", []);
     let _ = conn.execute("ALTER TABLE accounts ADD COLUMN custom_proxy TEXT", []);
+    // 养号回复风格（sincere/professional/humorous/casual/enthusiastic，空=sincere）：控制 X/小红书自动回复语气
+    let _ = conn.execute("ALTER TABLE accounts ADD COLUMN reply_style TEXT", []);
     // 用户自定义主题（平台隔离）；keywords 可空，空则 runner 用 label 当关键词
     let _ = conn.execute("CREATE TABLE IF NOT EXISTS custom_topics (key TEXT PRIMARY KEY, platform TEXT NOT NULL, label TEXT NOT NULL, keywords TEXT)", []);
     // 小红书养号动作日志（点赞去重，与 x_actions_log 同构）
@@ -12520,6 +12571,10 @@ pub fn run() {
             get_ai_config,
             get_x_reply_enabled,
             set_x_reply_enabled,
+            get_xhs_reply_enabled,
+            set_xhs_reply_enabled,
+            get_account_reply_style,
+            set_account_reply_style,
             test_ai_connection,
             fetch_available_models,
             check_browser_status,
@@ -13196,6 +13251,49 @@ mod xhs_runner_tests {
         assert_eq!(x_reply_quota("growth"), 1);
         assert_eq!(x_reply_quota("mature"), 2);
         assert_eq!(x_reply_quota("other"), 1);
+    }
+
+    #[test]
+    fn xhs_reply_quota_by_phase() {
+        use crate::nurture::xhs_reply_quota;
+        // 小红书评论风控敏感：预热期不评论，成长/成熟期每轮顶多 1 条
+        assert_eq!(xhs_reply_quota("warmup"), 0);
+        assert_eq!(xhs_reply_quota("growth"), 1);
+        assert_eq!(xhs_reply_quota("mature"), 1);
+        assert_eq!(xhs_reply_quota("other"), 0);
+    }
+
+    #[test]
+    fn xhs_filler_comment_detection() {
+        use crate::nurture::xhs_is_filler_comment;
+        // 灌水：套话、纯@、太短、纯表情/标点
+        assert!(xhs_is_filler_comment("学到了，感谢分享"));   // 套话(就是测试发的那条)
+        assert!(xhs_is_filler_comment("支持"));
+        assert!(xhs_is_filler_comment("码住"));
+        assert!(xhs_is_filler_comment("沙发"));
+        assert!(xhs_is_filler_comment("@小红薯692559BB"));     // 纯@提及
+        assert!(xhs_is_filler_comment("好"));                  // 太短
+        assert!(xhs_is_filler_comment("！！！！！"));            // 纯标点
+        assert!(xhs_is_filler_comment("666"));
+        // 非灌水：有观点/问题/吐槽，值得回复
+        assert!(!xhs_is_filler_comment("虽然但是做 skill 不就是这样的么？看不出来这算什么更新"));
+        assert!(!xhs_is_filler_comment("这个很消耗token吧"));
+        assert!(!xhs_is_filler_comment("别更新了 更新一次崩一次"));
+        assert!(!xhs_is_filler_comment("后面 帮我点餐 就很容易了"));
+    }
+
+    #[test]
+    fn reply_style_tone_maps_known_and_defaults() {
+        use crate::ai::reply_style_tone;
+        // 已知风格各有不同语气；未知/空 → 默认真诚(sincere)
+        assert!(reply_style_tone("professional").contains("专业"));
+        assert!(reply_style_tone("humorous").contains("幽默"));
+        assert!(reply_style_tone("casual").contains("随性"));
+        assert!(reply_style_tone("enthusiastic").contains("热情"));
+        let def = reply_style_tone("sincere");
+        assert!(def.contains("真诚"));
+        assert_eq!(reply_style_tone("不存在的风格"), def);
+        assert_eq!(reply_style_tone(""), def);
     }
 
     #[test]

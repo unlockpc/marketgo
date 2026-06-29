@@ -1423,6 +1423,15 @@
         showToast("\u8BBE\u7F6E\u5931\u8D25\uFF1A" + e, "error");
       }
     });
+    document.getElementById("xhsReplyEnabled")?.addEventListener("change", async (ev) => {
+      const on = ev.target.checked;
+      try {
+        await invoke2("set_xhs_reply_enabled", { enabled: on });
+        showToast(on ? "\u5C0F\u7EA2\u4E66\u81EA\u52A8\u8BC4\u8BBA\u5DF2\u5F00\u542F\uFF08\u9AD8\u98CE\u9669\uFF09" : "\u5C0F\u7EA2\u4E66\u81EA\u52A8\u8BC4\u8BBA\u5DF2\u5173\u95ED", on ? "warning" : "success");
+      } catch (e) {
+        showToast("\u8BBE\u7F6E\u5931\u8D25\uFF1A" + e, "error");
+      }
+    });
     document.getElementById("btnRefreshModels")?.addEventListener("click", refreshModels);
     document.getElementById("btnAddKeyword")?.addEventListener("click", () => openKeywordModal());
     document.getElementById("btnSaveKeyword")?.addEventListener("click", saveKeyword);
@@ -1588,6 +1597,50 @@
     });
   }
   window.pickProvisionPlatforms = pickProvisionPlatforms;
+  var REPLY_STYLES = [
+    { key: "sincere", label: "\u771F\u8BDA\u53CB\u5584", desc: "\u771F\u8BDA\u3001\u53CB\u5584\u3001\u6709\u540C\u7406\u5FC3\uFF08\u9ED8\u8BA4\uFF09" },
+    { key: "professional", label: "\u4E13\u4E1A\u7406\u6027", desc: "\u4E13\u4E1A\u3001\u7406\u6027\u3001\u6709\u89C1\u5730\uFF0C\u50CF\u61C2\u884C\u7684\u4EBA\u5728\u4EA4\u6D41" },
+    { key: "humorous", label: "\u5E7D\u9ED8\u98CE\u8DA3", desc: "\u8F7B\u677E\u5E7D\u9ED8\u3001\u5E26\u70B9\u673A\u7075\u7684\u5C0F\u8C03\u4F83\uFF0C\u4E0D\u6CB9\u817B" },
+    { key: "casual", label: "\u968F\u6027\u53E3\u8BED", desc: "\u968F\u6027\u3001\u53E3\u8BED\u5316\uFF0C\u50CF\u670B\u53CB\u4E4B\u95F4\u968F\u624B\u642D\u8BDD" },
+    { key: "enthusiastic", label: "\u70ED\u60C5\u6D3B\u6CFC", desc: "\u70ED\u60C5\u3001\u6D3B\u6CFC\u3001\u6709\u611F\u67D3\u529B\uFF0C\u4F46\u4E0D\u6D6E\u5938" }
+  ];
+  window.pickReplyStyle = async function(accountId) {
+    let current = "sincere";
+    try {
+      current = await invoke2("get_account_reply_style", { accountId });
+    } catch {
+    }
+    const overlay = document.createElement("div");
+    overlay.className = "modal active";
+    document.body.appendChild(overlay);
+    overlay.innerHTML = `
+    <div class="modal-content">
+      <div class="modal-header"><h3>\u9009\u62E9\u56DE\u590D\u98CE\u683C</h3></div>
+      <div class="modal-body">
+        <p class="text-muted" style="font-size:12px;margin:0 0 8px;">\u63A7\u5236\u8BE5\u8D26\u53F7 X / \u5C0F\u7EA2\u4E66 \u517B\u53F7\u81EA\u52A8\u56DE\u590D\u3001\u8BC4\u8BBA\u7684\u6574\u4F53\u8BED\u6C14</p>
+        ${REPLY_STYLES.map((s) => `<label style="display:flex;align-items:flex-start;gap:8px;margin:8px 0;cursor:pointer;">
+          <input type="radio" name="replyStyle" value="${s.key}"${s.key === current ? " checked" : ""} style="margin-top:3px;">
+          <span><b>${escapeHtml(s.label)}</b><br><span class="text-muted" style="font-size:12px;">${escapeHtml(s.desc)}</span></span>
+        </label>`).join("")}
+      </div>
+      <div class="modal-footer">
+        <button class="btn" id="styleCancel">\u53D6\u6D88</button>
+        <button class="btn btn-success" id="styleSave">\u4FDD\u5B58</button>
+      </div>
+    </div>`;
+    overlay.querySelector("#styleCancel").addEventListener("click", () => overlay.remove());
+    overlay.querySelector("#styleSave").addEventListener("click", async () => {
+      const sel = overlay.querySelector("input[name=replyStyle]:checked");
+      const style = sel ? sel.value : "sincere";
+      try {
+        await invoke2("set_account_reply_style", { accountId, style });
+        showToast("\u56DE\u590D\u98CE\u683C\u5DF2\u4FDD\u5B58", "success");
+        overlay.remove();
+      } catch (e) {
+        showToast("\u4FDD\u5B58\u5931\u8D25: " + e, "error");
+      }
+    });
+  };
   window.pickTopics = async function(accountId, platform) {
     const load = async () => {
       try {
@@ -2842,6 +2895,7 @@
           ${platformManualLoginCache[(account.platform || "").toLowerCase()] ? `<button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="\u8BE5\u5E73\u53F0\u81EA\u52A8\u767B\u5F55\u8D70\u4E0D\u901A\uFF0C\u70B9\u6B64\u76F4\u63A5\u6253\u5F00\u767B\u5F55\u9875\uFF0C\u5728\u6D4F\u89C8\u5668\u91CC\u624B\u52A8\u767B\u5F55\u4E00\u6B21">\u270B \u624B\u5DE5\u767B\u5F55</button>` : `<button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="\u81EA\u52A8\u767B\u5F55\uFF1A\u67E5\u767B\u5F55\u2192Google\u767B\u5F55\u2192\u5426\u5219\u6CE8\u518C">\u{1F511} \u81EA\u52A8\u767B\u5F55</button>`}
           ${nurtureAllRunning && nurtureAllProfileKeys.has(nurtureProfileKeyOf(account)) ? `<button class="btn btn-small btn-success" data-nurture-account="${account.id}" disabled style="opacity:.5;cursor:not-allowed;" title="\u4E00\u952E\u517B\u53F7\u8FDB\u884C\u4E2D\uFF0C\u5B8C\u6210\u540E\u624D\u53EF\u5355\u72EC\u517B\u53F7">\u{1F331} ${t("nurture.quickNurture")}</button>` : `<button class="btn btn-small btn-success" data-nurture-account="${account.id}" onclick="openNurtureModal('${account.id}', '${escapeHtml(account.platform)}', '${escapeHtml(account.username || account.email || "N/A")}')" title="${t("nurture.quickNurture")}">\u{1F331} ${t("nurture.quickNurture")}</button>`}
           ${["github", "twitter", "x", "segmentfault", "xiaohongshu"].includes(account.platform) ? `<button class="btn btn-small btn-secondary" onclick="pickTopics('${account.id}','${escapeHtml(account.platform)}')" title="\u9009\u62E9\u517B\u53F7\u4E3B\u9898">\u{1F3AF} \u4E3B\u9898</button>` : ""}
+          ${["twitter", "x", "xiaohongshu"].includes(account.platform) ? `<button class="btn btn-small btn-secondary" onclick="pickReplyStyle('${account.id}')" title="\u9009\u62E9\u517B\u53F7\u81EA\u52A8\u56DE\u590D/\u8BC4\u8BBA\u7684\u8BED\u6C14\u98CE\u683C">\u{1F4AC} \u98CE\u683C</button>` : ""}
           <button class="btn btn-small btn-secondary" onclick="openAccountProxyModal('${account.id}')" title="\u914D\u7F6E\u8BE5\u8D26\u53F7\u7684\u81EA\u5B9A\u4E49 SOCKS5 \u4EE3\u7406\uFF08\u4E0D\u914D\u8D70\u8EAB\u4EFD\u673A\u573A\u8282\u70B9\uFF09">\u{1F9E6} SOCKS5</button>
           ${stage !== "active" ? `<button class="btn btn-small btn-secondary" onclick="finishAccountNurture('${account.id}')" title="\u8001\u8D26\u53F7\u65E0\u9700\u517B\u53F7\uFF0C\u76F4\u63A5\u6807\u4E3A\u6B63\u5E38">\u2705 ${t("nurture.finishBtn")}</button>` : ""}
         </div>
@@ -5456,6 +5510,12 @@ ${names}
       const xReply = await invoke2("get_x_reply_enabled");
       const cb = document.getElementById("xReplyEnabled");
       if (cb) cb.checked = !!xReply;
+    } catch {
+    }
+    try {
+      const xhsReply = await invoke2("get_xhs_reply_enabled");
+      const cb = document.getElementById("xhsReplyEnabled");
+      if (cb) cb.checked = !!xhsReply;
     } catch {
     }
   }

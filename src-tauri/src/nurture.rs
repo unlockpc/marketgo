@@ -332,6 +332,15 @@ pub(crate) fn xhs_phase_intensity(phase: &str) -> (i64, bool) {
     }
 }
 
+/// 小红书自动评论配额（按养号分期）：每轮最多 1 条，且只在成长/成熟期评论；预热期只读不评。
+/// 评论比点赞风控敏感得多，故全程一轮顶多 1 条。纯逻辑，可单测。
+pub(crate) fn xhs_reply_quota(phase: &str) -> i64 {
+    match phase {
+        "growth" | "mature" => 1,
+        _ => 0, // warmup 及兜底：不评论
+    }
+}
+
 /// 轮询关键元素出现确认页面加载完（每秒一次，最多 max_secs 秒）。供"等加载再操作"。
 fn xhs_wait_loaded_blocking(selector: &str, max_secs: u64) -> bool {
     use std::time::Duration;
@@ -500,6 +509,153 @@ fn xhs_close_note_blocking() {
     }
 }
 
+/// 读当前打开的笔记正文（标题+描述），给大模型生成切题评论用。`.note-content` 唯一，含标题(#detail-title)+
+/// 描述(#detail-desc)。trim 后字符数 ≥10 才返回 Some——太短(纯图无文字)的笔记不评论，由此兜底。
+fn xhs_read_note_text_blocking() -> Option<String> {
+    let raw = unzoo_evaluate("(function(){var e=document.querySelector('.note-content');return e?(e.innerText||''):'';})()").ok()?;
+    let text = serde_json::from_str::<String>(&raw).unwrap_or(raw);
+    let t = text.trim();
+    if t.chars().count() >= 10 { Some(t.chars().take(600).collect()) } else { None }
+}
+
+/// 评论框发送核心（真站验证流程 2026-06-29，已纠正为真实键盘）：
+/// 调用前提：评论框**已被真实点击激活**（占位浮层「说点什么…」已隐藏、#content-textarea 已聚焦无遮挡）。
+/// 1) **真实键盘输入**(browser_type，每字符真实 WebKeyboardEvent，CJK 走 IME)。小红书提交逻辑只认真实键盘事件——
+///    `execCommand('insertText')` 虽能点亮按钮但提交不认(和 X 同坑，时好时坏)，故弃用；
+/// 2) 校验按钮已激活(仍 gray/disabled → 落字未被识别 → 失败)；
+/// 3) force 点 `.btn.submit` 发送；
+/// 4) 校验 #content-textarea 已清空/消失(发出后会复位/收起)，否则疑似未发出 → 失败。
+/// 笔记评论与楼中回复共用此核心。任一步失败返回 Err（调用方据此跳过、不记库，避免假成功）。
+fn xhs_submit_comment_box_blocking(text: &str) -> Result<(), String> {
+    use std::time::Duration;
+    let tab_id = get_active_tab().filter(|t| !t.is_empty()).ok_or_else(|| "无活动标签页".to_string())?;
+    std::thread::sleep(Duration::from_millis(get_human_delay(400, 900)));
+    // 1) 真实键盘输入（box 已激活、占位浮层已隐藏，browser_type 聚焦点击可命中输入框；instant=false → 逐字真实键盘+IME）
+    unzoo_mcp("browser_type", serde_json::json!({
+        "tab_id": tab_id, "selector": "#content-textarea", "text": text,
+        "instant": false, "timeout": 8000
+    })).map_err(|e| format!("评论输入失败: {}", e))?;
+    std::thread::sleep(Duration::from_millis(get_human_delay(800, 1600)));
+    // 2) 校验发送按钮已激活(仍 gray/disabled → 落字未被识别 → 失败，绝不假成功)
+    let enabled_js = "(function(){var b=document.querySelector('.btn.submit');if(!b)return 'nobtn';return (b.disabled||/\\bgray\\b/.test(b.className))?'disabled':'enabled';})()";
+    let st = unzoo_evaluate(enabled_js)?;
+    if !st.contains("enabled") {
+        return Err(format!("小红书评论未发出：发送按钮不可用(落字未被识别，state={})", st.trim()));
+    }
+    // 3) 发送(force 点，按钮含 svg/被样式包裹易判遮挡)
+    if !xhs_force_click(".btn.submit") {
+        return Err("点击发送失败".into());
+    }
+    std::thread::sleep(Duration::from_secs(3));
+    // 4) 校验已发出：评论框应清空或消失(发出后会复位/收起)
+    let posted_js = "(function(){var el=document.querySelector('#content-textarea');if(!el)return 'posted';var t=(el.innerText||'').replace(/\\s/g,'');return t===''?'posted':'stuck';})()";
+    let pv = unzoo_evaluate(posted_js)?;
+    if pv.contains("stuck") {
+        return Err("小红书已点发送但评论框未清空，疑似未发出".into());
+    }
+    Ok(())
+}
+
+/// 给笔记本身发评论：先**真实点击占位浮层「说点什么…」(`.inner-when-not-active`)激活评论框**——
+/// 这才能让小红书进入真正编辑态、隐藏占位浮层(否则文字会和占位符叠在一起、提交也不认；这是实测踩坑点)。
+/// `.click-area`/`.content-edit` 作兜底(不同笔记结构不一)。激活后共用发送核心(真实键盘输入)。
+fn xhs_comment_blocking(text: &str) -> Result<(), String> {
+    if !unzoo_element_exists("#content-textarea") {
+        return Err("未找到评论框(#content-textarea)".into());
+    }
+    if !xhs_force_click(".inner-when-not-active") && !xhs_force_click(".click-area") && !xhs_force_click(".content-edit") {
+        return Err("激活评论框失败".into());
+    }
+    xhs_submit_comment_box_blocking(text)
+}
+
+/// 回复楼里【别人的某条评论】：force 点该评论的「回复」按钮(`#<comment_id> .reply.icon-container`)——
+/// 实测点后焦点会落到底部那个【唯一】的 #content-textarea，XHS 用 Vue state 内部记住回复目标 → 共用发送核心。
+/// comment_id 形如 "comment-6a42..."（已含 comment- 前缀）。
+fn xhs_reply_comment_blocking(comment_id: &str, text: &str) -> Result<(), String> {
+    use std::time::Duration;
+    let reply_btn = format!("#{} .reply.icon-container", comment_id);
+    if !unzoo_element_exists(&reply_btn) {
+        return Err(format!("未找到该评论的回复按钮({})", reply_btn));
+    }
+    if !xhs_force_click(&reply_btn) {
+        return Err("点击评论回复按钮失败".into());
+    }
+    std::thread::sleep(Duration::from_millis(get_human_delay(800, 1500)));
+    if !unzoo_element_exists("#content-textarea") {
+        return Err("回复框未出现(#content-textarea)".into());
+    }
+    xhs_submit_comment_box_blocking(text)
+}
+
+/// 判断一条评论是否为「灌水」（无价值、不值得回复）。纯逻辑、可单测，作为调 AI 前的廉价预筛。
+/// 命中任一即视为灌水：太短(<5字)、去掉@提及后实义不足、纯表情/标点(无中文且无字母数字)、命中空泛套话黑名单。
+pub(crate) fn xhs_is_filler_comment(text: &str) -> bool {
+    let t = text.trim();
+    let chars = t.chars().count();
+    if chars < 5 { return true; }
+    // 去掉所有 "@昵称" 段后看剩余实义内容（纯 @某人 的评论实义为空）
+    let mut without_at = String::new();
+    let mut skipping = false;
+    for c in t.chars() {
+        if c == '@' { skipping = true; continue; }
+        if skipping { if c.is_whitespace() { skipping = false; without_at.push(c); } continue; }
+        without_at.push(c);
+    }
+    if without_at.trim().chars().count() < 3 { return true; }
+    // 纯表情/标点：既无中文也无字母数字 → 无实义
+    let has_meaning = t.chars().any(|c| c.is_alphanumeric() || ('\u{4e00}'..='\u{9fff}').contains(&c));
+    if !has_meaning { return true; }
+    // 套话黑名单：去空白/标点后整条等于套话，或很短(≤8字)且含套话
+    let compact: String = t.chars()
+        .filter(|c| !c.is_whitespace() && !c.is_ascii_punctuation() && !"，。！？、；：…~～·「」".contains(*c))
+        .collect();
+    let low = compact.to_lowercase();
+    const FILLER: &[&str] = &[
+        "学到了", "感谢分享", "谢谢分享", "谢谢", "支持", "支持一下", "码住", "马住", "收藏", "已收藏",
+        "沙发", "打卡", "顶", "mark", "马克", "路过", "好的", "不错", "厉害", "厉害了", "太棒了",
+        "赞", "已赞", "期待", "催更", "蹲", "蹲一个", "蹲后续", "666", "牛", "牛逼", "yyds", "哈哈", "哈哈哈", "可以",
+    ];
+    for f in FILLER {
+        let fl = f.to_lowercase();
+        if low == fl { return true; }
+        if chars <= 8 && low.contains(&fl) { return true; }
+    }
+    false
+}
+
+/// 读当前登录用户自己的 user id（从侧栏「我」入口的 /user/profile/<id> 取），用于跳过回复自己的评论。
+/// 读不到返回 None（此时不做自跳过，靠去重 + AI 判定兜底）。
+fn xhs_my_user_id_blocking() -> Option<String> {
+    let js = "(function(){var ls=document.querySelectorAll('a[href*=\"/user/profile/\"]');\
+        for(var i=0;i<ls.length;i++){if(/我/.test(ls[i].innerText||'')){var m=(ls[i].getAttribute('href')||'').match(/\\/user\\/profile\\/([0-9a-f]+)/);if(m)return m[1];}}return '';})()";
+    let raw = unzoo_evaluate(js).ok()?;
+    let id = serde_json::from_str::<String>(&raw).unwrap_or(raw);
+    let id = id.trim().to_string();
+    if id.is_empty() { None } else { Some(id) }
+}
+
+/// 读当前打开笔记的主楼评论（`.parent-comment`），返回每条 (comment_id, author_user_id, is_author, text)。
+/// comment_id 含 "comment-" 前缀，可直接拼回复按钮选择器；author_user_id 用于跳过自己；is_author 标识笔记作者。
+fn xhs_read_parent_comments_blocking() -> Vec<(String, String, bool, String)> {
+    let js = "(function(){var ps=document.querySelectorAll('.parent-comment');var out=[];\
+        for(var i=0;i<ps.length;i++){var p=ps[i];var item=p.querySelector('.comment-item')||p;\
+        var a=p.querySelector('.author');var c=p.querySelector('.content');var uidEl=p.querySelector('[data-user-id]');\
+        out.push({id:item.id||'',uid:uidEl?uidEl.getAttribute('data-user-id'):'',isAuthor:/作者/.test(a?a.innerText:''),text:(c?(c.innerText||''):'').trim()});}\
+        return JSON.stringify(out);})()";
+    let raw = match unzoo_evaluate(js) { Ok(r) => r, Err(_) => return Vec::new() };
+    let inner = serde_json::from_str::<String>(&raw).unwrap_or(raw);
+    let arr: Vec<serde_json::Value> = serde_json::from_str(&inner).unwrap_or_default();
+    arr.into_iter().filter_map(|v| {
+        let id = v.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        if id.is_empty() { return None; }
+        let uid = v.get("uid").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        let is_author = v.get("isAuthor").and_then(|x| x.as_bool()).unwrap_or(false);
+        let text = v.get("text").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        Some((id, uid, is_author, text))
+    }).collect()
+}
+
 /// 在当前页搜索框输入主题并提交——比导航 search_result URL 更像真人，且不开新 tab、URL 不带 type 字段。
 /// 实测流程(2026-06-26 真站验证)：聚焦 #search-input → JS 全选 + Backspace 清空(React 受控框 Meta+A 选不中，
 /// setSelectionRange 才可靠) → human 输入 → 强点 .input-box .search-icon 提交(图标含 svg 会判定遮挡，需 force)。
@@ -582,17 +738,21 @@ fn x_read_tweet_text_blocking(tweet_url: &str) -> Option<String> {
     x_clean_tweet_text(&text)
 }
 
-/// 小红书养号（搜索驱动）：按主题关键词搜索→拟人浏览→点进笔记阅读；成长期对少量笔记点赞。
-/// 全程"等加载+随机延迟"再操作。返回 (searched, read, liked)。
-/// app/account_id 用于点赞去重(xhs_actions_log)与进度推送。
-fn xhs_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec<String>, n_like: i64, duration_secs: i64, seed0: u64) -> Result<(i64, i64, i64), String> {
+/// 小红书养号（搜索驱动）：按主题关键词搜索→拟人浏览→点进笔记阅读；成长期对少量笔记点赞；
+/// 开关开时对**一篇**读过的笔记自动评论(读正文→大模型生成切题评论→execCommand 注入并发送)，
+/// 并对楼里**一条**别人的非灌水评论自动回复(启发式预筛灌水 + AI 判定值不值得回)。
+/// 全程"等加载+随机延迟"再操作。返回 (searched, read, liked, replied, creplied)。
+/// app/account_id 用于点赞/评论去重(xhs_actions_log)与进度推送。reply_on/reply_quota/creply_quota 控制自动评论与楼中回复。
+fn xhs_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec<String>, n_like: i64, reply_on: bool, reply_quota: i64, creply_quota: i64, reply_style: String, duration_secs: i64, seed0: u64) -> Result<(i64, i64, i64, i64, i64), String> {
     use std::time::{Duration, Instant};
     let start = Instant::now();
-    if keywords.is_empty() { return Ok((0, 0, 0)); }
+    if keywords.is_empty() { return Ok((0, 0, 0, 0, 0)); }
     if !xhs_logged_in_blocking() {
         return Err("未登录小红书！请先点卡片上「✋ 手工登录」在浏览器里登一次，再养号。".to_string());
     }
-    let mut searched = 0i64; let mut read = 0i64; let mut liked = 0i64;
+    let mut searched = 0i64; let mut read = 0i64; let mut liked = 0i64; let mut replied = 0i64; let mut creplied = 0i64;
+    // 自己的 user id：用于楼中回复时跳过回复自己（读不到则靠去重 + AI 判定兜底）。开关关时不必读。
+    let my_uid = if reply_on { xhs_my_user_id_blocking().unwrap_or_default() } else { String::new() };
     let mut seed = seed0 | 1;
     // 把所有选中主题打乱后逐个搜索，确保每个主题(含自定义)都轮到——
     // 之前随机取模 keywords[seed%len] 一个 session 只搜 n_search 次，排在后面的自定义主题常被漏掉。
@@ -693,13 +853,91 @@ fn xhs_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec<S
                     }
                 }
             }
+            // 笔记正文：评论/楼中回复都要用，读一次复用（开关关时不读，省一次 JS 调用）。
+            let note_body = if reply_on { xhs_read_note_text_blocking() } else { None };
+            // 自动评论（开关开 + 配额内 + 有笔记 URL 可去重 + 未评过这篇）：基于正文→大模型生成切题评论→注入并发送。
+            // 风险动作：默认关；读不到正文/生成不合格/发送失败都跳过不记库（避免假成功）；一轮顶多 1 条。
+            if reply_on && replied < reply_quota && !dedup_key.is_empty() {
+                let comment_key = format!("{}#comment", dedup_key);
+                let already_cmt = {
+                    let st = app.state::<AppState>();
+                    let locked = st.db.lock();
+                    match locked { Ok(c) => xhs_already_acted(&c, account_id, &comment_key), Err(_) => true }
+                };
+                if !already_cmt {
+                    // 读不到正文/太短 → 跳过，不评论
+                    if let Some(body) = note_body.as_ref() {
+                        // 大模型基于正文生成中文切题评论（无 key/不合格 → None → 跳过）。
+                        // 在 spawn_blocking 线程里用 block_on 驱动这个 async 调用（非 runtime worker 线程，安全）。
+                        let reply = tauri::async_runtime::block_on(gen_nurture_text(&app, "xhs_reply", body, &reply_style));
+                        match reply {
+                            Some(r) => {
+                                emit_nurture_step(&app, account_id, &format!("💬 评论 {}/{}", replied + 1, reply_quota));
+                                std::thread::sleep(Duration::from_millis(get_human_delay(2000, 5000))); // 评论前随机停几秒
+                                match xhs_comment_blocking(&r) {
+                                    Ok(_) => {
+                                        replied += 1;
+                                        let st = app.state::<AppState>();
+                                        if let Ok(c) = st.db.lock() { let _ = xhs_record_action(&c, account_id, "comment", &comment_key); }
+                                        emit_nurture_step(&app, account_id, "💬 评论已发出");
+                                        std::thread::sleep(Duration::from_millis(get_human_delay(2000, 4000))); // 发后 settle
+                                    }
+                                    Err(e) => { emit_nurture_step(&app, account_id, &format!("评论发送失败，跳过：{}", e)); }
+                                }
+                            }
+                            None => { emit_nurture_step(&app, account_id, "未配置 AI 或评论不合格，跳过评论"); }
+                        }
+                    }
+                }
+            }
+            // 楼中回复（开关开 + 配额内 + 有笔记 URL 可去重）：读主楼评论→启发式刷掉灌水→AI 判定值不值得回→回复。
+            // 只回主楼、跳过笔记作者与自己；灌水(启发式或 AI 判 SKIP)不回；一轮顶多 1 条。
+            if reply_on && creplied < creply_quota && !dedup_key.is_empty() {
+                let note_ctx = note_body.as_deref().unwrap_or("");
+                for (cid, uid, is_author, ctext) in xhs_read_parent_comments_blocking() {
+                    if creplied >= creply_quota { break; }
+                    if nurture_should_stop() { break; }
+                    if is_author { continue; }                              // 跳过笔记作者的评论
+                    if !my_uid.is_empty() && uid == my_uid { continue; }    // 跳过自己的评论
+                    if xhs_is_filler_comment(&ctext) { continue; }          // 启发式预筛：明显灌水直接跳过，不调 AI
+                    let creply_key = format!("{}#creply:{}", dedup_key, cid);
+                    let already = {
+                        let st = app.state::<AppState>();
+                        let locked = st.db.lock();
+                        match locked { Ok(c) => xhs_already_acted(&c, account_id, &creply_key), Err(_) => true }
+                    };
+                    if already { continue; }
+                    // AI 判定+生成：灌水 → 返回 SKIP；有价值 → 一句切题回复
+                    let ai_ctx = format!("笔记内容：\n{}\n\n这条评论：\n{}", note_ctx, ctext);
+                    let gen = tauri::async_runtime::block_on(gen_nurture_text(&app, "xhs_creply", &ai_ctx, &reply_style));
+                    let reply = match gen { Some(r) => r, None => { continue; } };
+                    let rt = reply.trim();
+                    if rt.is_empty() || rt.eq_ignore_ascii_case("skip") || rt.to_uppercase().starts_with("SKIP") {
+                        emit_nurture_step(&app, account_id, "该评论判为灌水/无需回复，跳过");
+                        continue;
+                    }
+                    let preview: String = ctext.chars().take(10).collect();
+                    emit_nurture_step(&app, account_id, &format!("💬 回复评论「{}…」", preview));
+                    std::thread::sleep(Duration::from_millis(get_human_delay(2000, 5000))); // 回复前随机停几秒
+                    match xhs_reply_comment_blocking(&cid, rt) {
+                        Ok(_) => {
+                            creplied += 1;
+                            let st = app.state::<AppState>();
+                            if let Ok(c) = st.db.lock() { let _ = xhs_record_action(&c, account_id, "creply", &creply_key); }
+                            emit_nurture_step(&app, account_id, "💬 楼中回复已发出");
+                            std::thread::sleep(Duration::from_millis(get_human_delay(2000, 4000))); // 发后 settle
+                        }
+                        Err(e) => { emit_nurture_step(&app, account_id, &format!("楼中回复发送失败，跳过：{}", e)); }
+                    }
+                }
+            }
             // 关弹框回到搜索结果页，再读下一张卡片
             xhs_close_note_blocking();
             std::thread::sleep(Duration::from_millis(get_human_delay(1500, 3000)));
         }
         std::thread::sleep(Duration::from_millis(get_human_delay(2000, 4000)));
     }
-    Ok((searched, read, liked))
+    Ok((searched, read, liked, replied, creplied))
 }
 
 /// 小红书养号入口：读主题 + 分期 → 搜索驱动浏览(+成长期点赞) → 写养号统计。未选主题 → 跳过提示。
@@ -723,15 +961,33 @@ pub(crate) async fn xiaohongshu_nurture_run(app: &AppHandle, account_id: &str, d
     }
     if kws.is_empty() { return Ok("主题无可用关键词".to_string()); }
     let (_n_search, allow_like) = xhs_phase_intensity(&phase);
-    // 成长/成熟期点赞随机 2-4 次（预热只读 → 0）
-    let n_like = if allow_like { get_random_delay(2, 4) as i64 } else { 0 };
+    // 成长/成熟期点赞随机 1-2 次（预热只读 → 0）。刻意压低：新号一轮点太多赞易触发风控。
+    // 注意用 get_human_delay（返回原值 1-2）而非 get_random_delay（返回毫秒 1000-2000）——
+    // 后者会让点赞配额≈数千、形同不限量（曾让 4 天新号一早上点 25 个赞），是个老 bug。
+    let n_like = if allow_like { get_human_delay(1, 2) as i64 } else { 0 };
+    // 自动评论 + 楼中回复：开关开 + 分期允许(成长/成熟=1，预热=0)。
+    // 一轮养号只随机做其中【一个】——要么评论笔记、要么回复楼里某条评论，不必两样都做(更像真人、也更克制)。
+    let base_q = xhs_reply_quota(&phase);
+    let (reply_quota, creply_quota) = if base_q > 0 {
+        if get_human_delay(0, 1) == 0 { (base_q, 0) } else { (0, base_q) }
+    } else {
+        (0, 0)
+    };
+    let (reply_on, reply_style) = {
+        let st = app.state::<AppState>();
+        let locked = st.db.lock();
+        match locked {
+            Ok(c) => (crate::xhs_reply_enabled(&c), crate::account_reply_style(&c, account_id)),
+            Err(_) => (false, "sincere".to_string()),
+        }
+    };
     let dur = duration.max(30);
     let seed0 = get_random_delay(1, 100_000);
     let topic_n = kws.len();
     emit_nurture_step(app, account_id, &format!("开始小红书养号 · 逐个搜索 {} 个主题并阅读（约 {}s）", topic_n, dur));
     let app_cl = app.clone();
     let acct = account_id.to_string();
-    let (searched, read, liked) = tauri::async_runtime::spawn_blocking(move || xhs_nurture_browse_blocking(app_cl, &acct, kws, n_like, dur, seed0))
+    let (searched, read, liked, replied, creplied) = tauri::async_runtime::spawn_blocking(move || xhs_nurture_browse_blocking(app_cl, &acct, kws, n_like, reply_on, reply_quota, creply_quota, reply_style, dur, seed0))
         .await.map_err(|e| format!("养号任务异常: {}", e))??;
 
     // 写养号统计（与 SF 一致）
@@ -752,26 +1008,28 @@ pub(crate) async fn xiaohongshu_nurture_run(app: &AppHandle, account_id: &str, d
                 params![Uuid::new_v4().to_string(), account_id, today, elapsed_secs]);
         }
     }
-    log::info!("[XHS-NURTURE] account={} phase={} 搜索={} 阅读={} 点赞={} 耗时={}s", account_id, phase, searched, read, liked, elapsed_secs);
-    Ok(format!("小红书养号完成（{}）：搜索 {} 次 · 阅读 {} 篇 · 点赞 {} · 用时 {}s", phase, searched, read, liked, elapsed_secs))
+    log::info!("[XHS-NURTURE] account={} phase={} 搜索={} 阅读={} 点赞={} 评论={} 楼中回复={} 耗时={}s", account_id, phase, searched, read, liked, replied, creplied, elapsed_secs);
+    let cmt_note = if reply_on { format!(" · 评论 {} · 楼中回复 {}", replied, creplied) } else { String::new() };
+    Ok(format!("小红书养号完成（{}）：搜索 {} 次 · 阅读 {} 篇 · 点赞 {}{} · 用时 {}s", phase, searched, read, liked, cmt_note, elapsed_secs))
 }
 
 /// X 养号：按方向取关键词→搜索采推文/用户→去重选取→点赞/关注/转推/回复 + 极少原创。
 pub(crate) async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: i64) -> Result<String, String> {
     let session_start = std::time::Instant::now();
-    // 1) 读方向 + 分期
-    let (niches, kws, phase, warmup) = {
+    // 1) 读方向 + 分期 + 回复风格
+    let (niches, kws, phase, warmup, reply_style) = {
         let st = app.state::<AppState>();
         let conn = st.db.lock().map_err(|e| e.to_string())?;
         let niches = account_topics(&conn, account_id);
         let kws = account_topic_keywords(&conn, account_id);
+        let reply_style = crate::account_reply_style(&conn, account_id);
         let created: Option<String> = conn.query_row("SELECT created_at FROM accounts WHERE id=?1", params![account_id], |r| r.get(0)).ok().flatten();
         let age = created.as_deref().and_then(parse_dt).map(|c| (Utc::now() - c).num_days()).unwrap_or(0);
         let strat = conn.query_row("SELECT warmup_days, COALESCE(growth_days, warmup_days), daily_sessions_min, daily_sessions_max FROM nurture_strategies WHERE platform='twitter'",
             [], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,i64>(1)?, r.get::<_,i64>(2)?, r.get::<_,i64>(3)?))).ok();
         let (warmup, growth, smin, smax) = strat.unwrap_or((5, 5, 2, 4));
         let (phase, _t) = nurture_phase_and_target(age, warmup, growth, smin, smax);
-        (niches, kws, phase.to_string(), warmup)
+        (niches, kws, phase.to_string(), warmup, reply_style)
     };
     if niches.is_empty() {
         return Ok("账号未选方向，跳过 X 养号".to_string());
@@ -987,7 +1245,7 @@ pub(crate) async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: 
                         let body = tauri::async_runtime::spawn_blocking(move || x_read_tweet_text_blocking(&tc)).await.map_err(|e| e.to_string())?;
                         let body = match body { Some(b) => b, None => continue };
                         // 大模型基于正文生成回复（无 key/不合格 → None → 跳过）
-                        let reply = match gen_nurture_text(app, "x_reply", &body).await {
+                        let reply = match gen_nurture_text(app, "x_reply", &body, &reply_style).await {
                             Some(r) => r,
                             None => { emit_nurture_step(app, account_id, "未配置 AI 或回复不合格，跳过回复"); continue }
                         };
@@ -1029,7 +1287,7 @@ pub(crate) async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: 
             // AI 基于账号领域生成一条原创（L3 无原文，按领域/话题；无 AI / 不合格则跳过）
             let domains_str = niches.join("、");
             let ctx = format!("领域: {} / 话题: {}", domains_str, kw);
-            let r = match gen_nurture_text(app, "x_tweet", &ctx).await {
+            let r = match gen_nurture_text(app, "x_tweet", &ctx, &reply_style).await {
                 Some(txt) => tauri::async_runtime::spawn_blocking(move || x_post_tweet_blocking(&txt)).await.map_err(|e| e.to_string())?,
                 None => { emit_nurture_step(app, account_id, "未配置 AI 或生成失败，跳过原创"); Err(String::new()) }
             };

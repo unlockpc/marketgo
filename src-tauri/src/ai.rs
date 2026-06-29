@@ -191,10 +191,22 @@ fn validate_reply(raw: &str) -> Option<String> {
     Some(t)
 }
 
-/// 养号发文统一入口：读 AI 配置 → 拼 prompt → 调 AI → 校验。
+/// 回复风格 → 语气描述（注入 prompt，让养号回复/评论不千篇一律）。可在账号卡片上按账号选择。纯逻辑、可单测。
+pub(crate) fn reply_style_tone(style: &str) -> &'static str {
+    match style {
+        "professional" => "语气专业、理性、有见地，像懂行的人在平等交流，不卖弄",
+        "humorous" => "语气轻松幽默、带点机灵的小调侃，但不油腻、不抢戏、不强行玩梗",
+        "casual" => "语气随性、口语化，像朋友之间随手搭一句话，松弛自然",
+        "enthusiastic" => "语气热情、活泼、有感染力，带点真实的兴奋劲儿，但不浮夸",
+        _ => "语气真诚、友善、有同理心，平和不做作", // sincere 默认
+    }
+}
+
+/// 养号发文统一入口：读 AI 配置 → 拼 prompt(含风格语气) → 调 AI → 校验。
 /// 无 key / 调用失败 / 不合格 均返回 None（调用方据此跳过本次发文，不影响点赞等动作）。
-/// kind: "x_reply"（回复推文）| "gh_comment"（Issue 评论）| "x_tweet"（原创，context 传领域/话题）。
-pub(crate) async fn gen_nurture_text(app: &AppHandle, kind: &str, context: &str) -> Option<String> {
+/// kind: "x_reply"（回复推文）| "gh_comment"（Issue 评论）| "x_tweet"（原创，context 传领域/话题）| "xhs_reply" | "xhs_creply"。
+/// style: 回复风格(sincere/professional/humorous/casual/enthusiastic)，按账号选择，控制整体语气。
+pub(crate) async fn gen_nurture_text(app: &AppHandle, kind: &str, context: &str, style: &str) -> Option<String> {
     let (provider, key) = ai_reply_config(app)?;
     let prompt = match kind {
         "x_tweet" => format!(
@@ -207,6 +219,29 @@ pub(crate) async fn gen_nurture_text(app: &AppHandle, kind: &str, context: &str)
              要求：与原文语言一致；不超过 200 字符；绝不包含链接、产品/推广、@提及；\
              只输出评论正文，不要解释、不要加引号。\n\nIssue 内容：\n{}",
             context),
+        "xhs_reply" => format!(
+            "你是一个刷小红书的真实中国用户，正在看一篇笔记。请针对这篇笔记【具体说了什么】写一句自然、口语化的中文评论，\
+             像真人随手评论那样：要么认同并补充一个相关的具体点，要么问一个真诚的小问题，让人一眼看出你确实看了这篇笔记。\
+             硬性要求：\
+             1) 必须用中文，口语、自然，可适度用 1 个语气词，但不要堆 emoji；\
+             2) 紧扣笔记实际内容，绝不能是「学到了」「支持」「太真实了」「说到心坎里」「码住」这类不沾内容的空泛套话；\
+             3) 不超过 40 字；不含链接、产品名/推广、@提及、话题标签(#)、联系方式、引流话术；\
+             4) 只输出评论正文，不要解释、不要加引号。\n\n笔记内容：\n{}",
+            context),
+        // context 形如「笔记内容：…\n\n这条评论：…」。灌水→只输出 SKIP；有价值→生成一句切题回复。
+        "xhs_creply" => format!(
+            "你在小红书刷一篇笔记，正在看评论区。下面给你笔记内容和其中一条【别人的评论】。\
+             先判断这条评论值不值得真诚回复：\
+             如果它是无价值灌水（纯表情、纯@某人、「学到了/支持/沙发/打卡/赞/码住」这类空泛套话、与笔记无关的广告引流），\
+             就【只输出四个大写字母 SKIP】，不要输出任何别的内容。\
+             如果它有实际观点、问题或吐槽，值得互动，就用中文写一句自然、口语、切题的回复：\
+             认同并补充一个具体点，或友善回应它的问题/观点，让人看出你确实读懂了它。\
+             硬性要求：\
+             1) 用中文，口语自然，不堆 emoji；\
+             2) 紧扣这条评论的实际内容，绝不空泛套话；\
+             3) 不超过 40 字；不含链接、产品/推广、@提及、话题标签(#)、引流话术；\
+             4) 只输出回复正文或 SKIP，不要解释、不要加引号。\n\n{}",
+            context),
         _ => format!(
             "你是一个活跃在该领域的真实用户，正在刷推。请针对下面这条推文【具体说了什么】写一句切题的回复：\
              要么认同并补充一个相关的具体看法，要么提一个真诚的小问题，让人一眼看出你确实读懂了这条推文。\
@@ -217,6 +252,9 @@ pub(crate) async fn gen_nurture_text(app: &AppHandle, kind: &str, context: &str)
              4) 只输出回复正文，不要解释、不要加引号。\n\n推文内容：\n{}",
             context),
     };
+    // 风格语气贯穿全文：放在最前，对所有 kind 生效，但不放松「切题、不空泛套话、不含链接/推广」等硬性要求。
+    let prompt = format!("写作语气风格（在满足下方所有硬性要求的前提下，整体语气按此把握）：{}。\n\n{}",
+        reply_style_tone(style), prompt);
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
         .build().ok()?;

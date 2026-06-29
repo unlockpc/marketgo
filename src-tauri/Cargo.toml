@@ -1,5 +1,5 @@
 [package]
-name = "unmarket"
+name = "marketgo"
 version = "0.1.0"
 description = "Global marketing automation tool"
 authors = ["UnzooAI"]

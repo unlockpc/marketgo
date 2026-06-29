@@ -806,6 +806,9 @@
             <label title="开启后养号会读推文→大模型生成回复→自动发；高风险，默认关" style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text-muted,#888);cursor:pointer;white-space:nowrap;">
               <input type="checkbox" id="xReplyEnabled"> 💬 X 自动回复
             </label>
+            <label title="开启后养号会读笔记正文→大模型生成中文评论→自动发；高风险，默认关" style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text-muted,#888);cursor:pointer;white-space:nowrap;">
+              <input type="checkbox" id="xhsReplyEnabled"> 💬 小红书自动评论
+            </label>
             <button class="btn btn-success" id="btnNurtureAll" title="对所有账号立即养一轮（今日已养>5次的自动跳过）">🌱 一键养号 / Nurture All</button>
             <button class="btn btn-secondary" onclick="openBatchProxyModal()" title="批量给多个账号配置/清除自定义 SOCKS5 代理">🧦 批量 SOCKS5</button>
             <button class="btn btn-primary" id="btnAddAccount" style="display:none;">
