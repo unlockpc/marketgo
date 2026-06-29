@@ -564,6 +564,24 @@ pub(crate) fn x_clean_tweet_text(raw: &str) -> Option<String> {
     if t.chars().count() >= 15 { Some(t.to_string()) } else { None }
 }
 
+/// 打开推文详情页，读主推文正文。读到非空且够长(见 x_clean_tweet_text)才返回 Some。
+/// 在 spawn_blocking 中调用。选择器 `article [data-testid="tweetText"]` 已实测稳定拿主推文、不混评论。
+fn x_read_tweet_text_blocking(tweet_url: &str) -> Option<String> {
+    use std::time::Duration;
+    if unzoo_navigate(tweet_url).is_err() { return None; }
+    // 轮询正文元素出现，最多 ~8s
+    let mut waited = 0;
+    while !unzoo_element_exists("article [data-testid=\"tweetText\"]") && waited < 8 {
+        std::thread::sleep(Duration::from_secs(2));
+        waited += 2;
+    }
+    let raw = unzoo_evaluate(
+        "(function(){var e=document.querySelector('article [data-testid=\"tweetText\"]');return e?e.innerText:'';})()"
+    ).unwrap_or_default();
+    let text = serde_json::from_str::<String>(&raw).unwrap_or(raw);
+    x_clean_tweet_text(&text)
+}
+
 /// 小红书养号（搜索驱动）：按主题关键词搜索→拟人浏览→点进笔记阅读；成长期对少量笔记点赞。
 /// 全程"等加载+随机延迟"再操作。返回 (searched, read, liked)。
 /// app/account_id 用于点赞去重(xhs_actions_log)与进度推送。
