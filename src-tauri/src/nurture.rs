@@ -221,7 +221,10 @@ fn sf_nurture_browse_blocking(keywords: Vec<String>, n_search: i64, read_per_sea
         // xorshift 推进选词
         seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17;
         let kw = &keywords[(seed as usize) % keywords.len()];
-        let q_enc = kw.replace(' ', "%20");
+        // 再推进一次给后缀，让选词与后缀不同源；主题扩展：领域词后总是拼技术意图后缀。
+        seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17;
+        let query = sf_expand_query(kw, seed);
+        let q_enc = query.replace(' ', "%20");
         let url = format!("https://segmentfault.com/search?q={}", q_enc);
         if unzoo_navigate(&url).is_err() { continue; }
         std::thread::sleep(Duration::from_millis(get_human_delay(2500, 4500)));
@@ -528,6 +531,23 @@ pub(crate) fn xhs_expand_query(topic: &str, seed: u64) -> String {
     format!("{} {}", topic, m)
 }
 
+/// 思否主题扩展：中文技术社区，给领域词总是拼一个技术意图后缀(教程/实战/原理…)，不直接搜光秃秃的领域词。
+pub(crate) fn sf_expand_query(topic: &str, seed: u64) -> String {
+    const MODS: &[&str] = &["教程", "实战", "原理", "入门", "最佳实践", "源码", "报错", "面试", "踩坑", "进阶"];
+    let m = MODS[(seed as usize) % MODS.len()];
+    format!("{} {}", topic, m)
+}
+
+/// X 主题扩展：英文社区。hashtag(以 # 开头)保持原样不拼(否则破坏话题流)；
+/// 普通词总是拼一个英文意图后缀(tutorial/tips/explained…)，让浏览更聚焦该方向。
+pub(crate) fn x_expand_query(kw: &str, seed: u64) -> String {
+    let kw = kw.trim();
+    if kw.starts_with('#') { return kw.to_string(); }
+    const MODS: &[&str] = &["tutorial", "tips", "guide", "explained", "review", "examples", "basics", "news", "trends", "best practices"];
+    let m = MODS[(seed as usize) % MODS.len()];
+    format!("{} {}", kw, m)
+}
+
 /// 小红书养号（搜索驱动）：按主题关键词搜索→拟人浏览→点进笔记阅读；成长期对少量笔记点赞。
 /// 全程"等加载+随机延迟"再操作。返回 (searched, read, liked)。
 /// app/account_id 用于点赞去重(xhs_actions_log)与进度推送。
@@ -728,6 +748,8 @@ pub(crate) async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: 
     if kws.is_empty() { return Ok("方向无可用关键词".to_string()); }
     let seed = get_random_delay(1, 100_000);
     let kw = &kws[(seed as usize) % kws.len()];
+    // 主题扩展：普通词拼英文意图后缀(tutorial/tips…)，hashtag 保持原样。
+    let kw = &x_expand_query(kw, seed);
 
     // 3) 浏览器：搜领域词，用「热门(Top)」标签——X 按互动热度排序，直接给该领域当下热门推。
     //    注意：高级运算符 min_faves 在 X 网页端已失效（会被当字面文本→0 结果），故不用运算符；

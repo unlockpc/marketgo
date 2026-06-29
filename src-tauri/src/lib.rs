@@ -13105,6 +13105,30 @@ mod xhs_runner_tests {
         // 后缀应有多样性（不是固定一个）
         assert!(suffixes.len() >= 5, "后缀应多样，实际只有 {} 种", suffixes.len());
     }
+
+    #[test]
+    fn sf_expand_always_appends_chinese_suffix() {
+        use crate::nurture::sf_expand_query;
+        for seed in 0u64..100 {
+            let q = sf_expand_query("Rust", seed);
+            assert!(q.starts_with("Rust "), "思否应始终拼后缀: {}", q);
+            assert!(q.len() > "Rust ".len(), "后缀不应为空: {}", q);
+        }
+    }
+
+    #[test]
+    fn x_expand_appends_for_words_but_keeps_hashtags() {
+        use crate::nurture::x_expand_query;
+        // 普通词：总是拼英文后缀
+        for seed in 0u64..50 {
+            let q = x_expand_query("machine learning", seed);
+            assert!(q.starts_with("machine learning "), "普通词应拼后缀: {}", q);
+        }
+        // hashtag：保持原样，不拼
+        for seed in 0u64..50 {
+            assert_eq!(x_expand_query("#AI", seed), "#AI", "hashtag 不应拼后缀");
+        }
+    }
 }
 
 #[cfg(test)]
