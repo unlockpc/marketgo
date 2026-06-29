@@ -67,9 +67,10 @@ fn x_reply_quota(phase: &str) -> i64 {
 - `unzoo_evaluate` 取 `article [data-testid="tweetText"]` 的 innerText。
 - trim 后非空且 `chars().count() >= 15` → `Some(text)`，否则 `None`。
 
-### 4. 生成（复用现有）
-- `gen_nurture_text(app, "x_reply", &text).await` → `Option<String>`。
-- `gen_nurture_text` 的 `x_reply` 分支已约束：针对推文内容、同语言、≤200~280 字符、无链接/@/hashtag、不合格返回 None（ai.rs:194 区）。若现有约束不足，在该分支微调 prompt（同语言要点可借助实测拿到的 `lang`）。
+### 4. 生成（复用现有）—— 回复完全由大模型基于读到的正文产出
+- **读到的推文正文是唯一内容输入**：`gen_nurture_text(app, "x_reply", &正文).await` 把正文拼进 prompt 交给**配置的大模型**（Gemini/OpenAI/DeepSeek/Qwen，由 `ai.provider` + `ai.key.*` 决定），回复由大模型生成，**非模板、非固定话术**。
+- 现有 `x_reply` prompt（ai.rs:210）已强约束：必须针对"这条推文具体说了什么"切题回复、与推文**完全同语言**、禁止"太真实了/说到心坎里"等空泛套话、≤200 字符、无链接/@/hashtag；`validate_reply` 再清洗校验，不合格返回 None。
+- 无大模型 key → 返回 None → 不回复（等于该功能静默关闭）。
 
 ### 5. 发回复 `x_send_reply_blocking(reply: &str) -> bool`
 - 当前已在推文详情页（读正文那步已导航到位）。
