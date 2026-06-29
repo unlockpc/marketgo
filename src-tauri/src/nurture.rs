@@ -776,11 +776,13 @@ pub(crate) async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: 
     if niches.is_empty() {
         return Ok("账号未选方向，跳过 X 养号".to_string());
     }
-    let (n_like, n_follow, n_engage) = x_daily_quota(&phase);
+    let quota_base = x_daily_quota(&phase);
 
     // 2) 选方向 → 关键词（已在首块收集）
     if kws.is_empty() { return Ok("方向无可用关键词".to_string()); }
     let seed = get_random_delay(1, 100_000);
+    // 配额加随机抖动：点赞次数浮动、转推 0~3、关注 0~base，避免每轮次数固定像脚本
+    let (n_like, n_follow, n_engage) = x_jitter_quota(quota_base, seed);
     let kw = &kws[(seed as usize) % kws.len()];
     // 主题扩展：普通词拼英文意图后缀(tutorial/tips…)，hashtag 保持原样。
     let kw = &x_expand_query(kw, seed);
@@ -855,138 +857,162 @@ pub(crate) async fn x_nurture_run(app: &AppHandle, account_id: &str, _duration: 
                 already.insert(t.clone());
             }
         }
-        gh_pick_targets(&tweets, &already, n_like.max(1) as usize, seed)
+        gh_pick_targets(&tweets, &already, n_like.max(n_engage).max(3) as usize, seed)
     };
 
-    // 5) L1 点赞（B：动作命中限流/受限 → 退避，停止本轮剩余动作）
+    // 5) 动作执行：点赞 / 关注 / 转推 / 回复——本轮顺序随机打乱（避免每次都「点赞完→转推→回复」像脚本）。
+    //    各动作命中限流/受限(HEALTH:) → 置 aborted_health，后续动作整体跳过。
     let mut likes = 0i64;
-    let mut aborted_health: Option<String> = None;
-    emit_nurture_step(app, account_id, &format!("开始 X 养号 · 准备点赞 {} 条推文", chosen.len()));
-    for (i, t) in chosen.iter().enumerate() {
-        if nurture_should_stop() { break; }
-        emit_nurture_step(app, account_id, &format!("❤️ 点赞中 {}/{}", i + 1, chosen.len()));
-        let tc = t.clone();
-        let r = tauri::async_runtime::spawn_blocking(move || x_like_blocking(&tc)).await.map_err(|e| e.to_string())?;
-        match r {
-            Ok(_) => {
-                let st = app.state::<AppState>();
-                let locked = st.db.lock();
-                if let Ok(conn) = locked { let _ = x_record_action(&conn, account_id, "like", t); }
-                likes += 1;
-            }
-            Err(e) if e.starts_with("HEALTH:") => { aborted_health = Some(e[7..].to_string()); break; }
-            Err(_) => {}
-        }
-        // X 动作间隔：随机 15-40 秒（拟人 + 不过度）
-        tokio::time::sleep(std::time::Duration::from_millis(get_random_delay(15, 40))).await;
-    }
-
-    // 6) L1 关注：People 搜索找该领域好用户 → 质量门(有简介+粉丝≥500)达标才关注
     let mut follows = 0i64;
-    if aborted_health.is_none() && n_follow > 0 {
-        let ukw = kws[((seed >> 3) as usize) % kws.len()].to_string(); // 换一个子话题搜人
-        emit_nurture_step(app, account_id, &format!("👤 搜索领域优质用户中…（{}）", ukw));
-        let candidates: Vec<String> = match tauri::async_runtime::spawn_blocking(move || x_search_users_blocking(&ukw)).await {
-            Ok(Ok(v)) => v,
-            _ => Vec::new(), // people 搜索失败就不关注，不影响其它动作
-        };
-        // 过滤已关注 + 跨账号去重；多取些候选（质量门会刷掉一部分）
-        let pool: Vec<String> = {
-            let st = app.state::<AppState>();
-            let conn = st.db.lock().map_err(|e| e.to_string())?;
-            let mut already = std::collections::HashSet::new();
-            for p in &candidates {
-                if x_already_acted(&conn, account_id, p) || x_target_persona_count(&conn, p) >= 3 {
-                    already.insert(p.clone());
-                }
-            }
-            gh_pick_targets(&candidates, &already, (n_follow * 3).max(3) as usize, seed)
-        };
-        emit_nurture_step(app, account_id, &format!("👤 找领域优质用户关注（目标 {} 个）", n_follow));
-        for prof in &pool {
-            if nurture_should_stop() { break; }
-            if follows >= n_follow { break; }
-            emit_nurture_step(app, account_id, &format!("👤 关注评估中（已 {}/{}）：{}", follows, n_follow, prof.trim_start_matches("https://x.com/")));
-            let p = prof.clone();
-            let res = tauri::async_runtime::spawn_blocking(move || x_follow_quality_blocking(&p)).await
-                .map_err(|e| e.to_string())?;
-            match res {
-                Ok(true) => {
-                    let st = app.state::<AppState>(); let l = st.db.lock();
-                    if let Ok(conn) = l { let _ = x_record_action(&conn, account_id, "follow", prof); }
-                    follows += 1;
-                }
-                Ok(false) => {} // 不达标/已关注，下一个
-                Err(e) if e.starts_with("HEALTH:") => { aborted_health = Some(e[7..].to_string()); break; }
-                Err(_) => {}
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(get_random_delay(15, 40))).await; // X 动作间隔 15-40s
-        }
-    }
-
-    // 7a) L2：engage 预算内，对部分已点赞推文转推（回复动作已移除——详情页正文抓取在养号场景不可靠，
-    //     且自动回复质量难保证；点赞/关注/转推/极少原创已足够养号）
     let mut engages = 0i64;
-    if aborted_health.is_none() && n_engage > 0 {
-        for (i, t) in chosen.iter().take(n_engage as usize).enumerate() {
-            if nurture_should_stop() { break; }
-            let key = format!("{}#engage", t);
-            let acted = { let st = app.state::<AppState>(); let l = st.db.lock().map_err(|e| e.to_string())?; x_already_acted(&l, account_id, &key) };
-            if acted { continue; }
-            emit_nurture_step(app, account_id, &format!("🔁 转推 {}/{}", i + 1, n_engage));
-            let tc = t.clone();
-            let r = tauri::async_runtime::spawn_blocking(move || x_retweet_blocking(&tc)).await.map_err(|e| e.to_string())?;
-            if r.is_ok() {
-                let st = app.state::<AppState>(); let l = st.db.lock();
-                if let Ok(conn) = l {
-                    let _ = x_record_action(&conn, account_id, "retweet", &key);
-                }
-                engages += 1;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(get_random_delay(15, 40))).await; // X 动作间隔 15-40s
-        }
-    }
-    let _ = engages;
-
-    // 7a-bis) 自动回复（开关开 + 配额>0）：读推文正文 → 大模型生成切题回复 → 直接发。
-    // 风险动作：默认关；读不到正文/生成不合格都跳过；回复间隔 30~90s；跨 session 去重(#reply)。
+    let mut replies = 0i64;
+    let mut aborted_health: Option<String> = None;
     let reply_quota = x_reply_quota(&phase);
     let reply_on = {
         let st = app.state::<AppState>();
         st.db.lock().ok().map(|c| crate::x_reply_enabled(&c)).unwrap_or(false)
     };
-    let mut replies = 0i64;
-    if aborted_health.is_none() && reply_on && reply_quota > 0 {
-        for t in chosen.iter() {
-            if nurture_should_stop() { break; }
-            if replies >= reply_quota { break; }
-            let key = format!("{}#reply", t);
-            // 去重：本账号已回过这条 → 跳过
-            let acted = { let st = app.state::<AppState>(); let l = st.db.lock().map_err(|e| e.to_string())?; x_already_acted(&l, account_id, &key) };
-            if acted { continue; }
-            // 读正文（读不到/太短 → 跳过，不回复）
-            let tc = t.clone();
-            let body = tauri::async_runtime::spawn_blocking(move || x_read_tweet_text_blocking(&tc)).await.map_err(|e| e.to_string())?;
-            let body = match body { Some(b) => b, None => continue };
-            // 大模型基于正文生成回复（无 key/不合格 → None → 跳过）
-            let reply = match gen_nurture_text(app, "x_reply", &body).await {
-                Some(r) => r,
-                None => { emit_nurture_step(app, account_id, "未配置 AI 或回复不合格，跳过回复"); continue }
-            };
-            emit_nurture_step(app, account_id, &format!("💬 回复 {}/{}", replies + 1, reply_quota));
-            // 发回复（twitter_reply 自带导航 + Draft.js 注入 + 提交）
-            let url = t.clone(); let rep = reply.clone();
-            let r = tauri::async_runtime::spawn_blocking(move || twitter_reply(&url, &rep)).await.map_err(|e| e.to_string())?;
-            if r.is_ok() {
-                let st = app.state::<AppState>(); let l = st.db.lock();
-                if let Ok(conn) = l { let _ = x_record_action(&conn, account_id, "reply", &key); }
-                replies += 1;
-            }
-            // 回复间隔 30~90s（拟人）
-            tokio::time::sleep(std::time::Duration::from_millis(get_random_delay(30, 90))).await;
+
+    // 本轮动作顺序随机：0=点赞 1=关注 2=转推 3=回复（Fisher–Yates，用 seed 派生伪随机）
+    let mut order = [0u8, 1, 2, 3];
+    {
+        let mut s = seed ^ 0x9E3779B97F4A7C15;
+        for i in (1..order.len()).rev() {
+            s ^= s << 13; s ^= s >> 7; s ^= s << 17;
+            let j = (s as usize) % (i + 1);
+            order.swap(i, j);
         }
     }
-    let _ = replies;
+
+    for step in order {
+        if nurture_should_stop() || aborted_health.is_some() { break; }
+        match step {
+            // 点赞（B：动作命中限流/受限 → 退避，停止本轮剩余动作）
+            0 => {
+                emit_nurture_step(app, account_id, &format!("开始点赞 · {} 条推文", chosen.len()));
+                for (i, t) in chosen.iter().enumerate() {
+                    if nurture_should_stop() { break; }
+                    emit_nurture_step(app, account_id, &format!("❤️ 点赞中 {}/{}", i + 1, chosen.len()));
+                    let tc = t.clone();
+                    let r = tauri::async_runtime::spawn_blocking(move || x_like_blocking(&tc)).await.map_err(|e| e.to_string())?;
+                    match r {
+                        Ok(_) => {
+                            let st = app.state::<AppState>();
+                            if let Ok(conn) = st.db.lock() { let _ = x_record_action(&conn, account_id, "like", t); }
+                            likes += 1;
+                        }
+                        Err(e) if e.starts_with("HEALTH:") => { aborted_health = Some(e[7..].to_string()); break; }
+                        Err(_) => {}
+                    }
+                    // X 动作间隔：随机 15-40 秒（拟人 + 不过度）
+                    tokio::time::sleep(std::time::Duration::from_millis(get_random_delay(15, 40))).await;
+                }
+            }
+            // 关注：People 搜索找该领域好用户 → 质量门(有简介+粉丝达标)才关注
+            1 => {
+                if n_follow > 0 {
+                    let ukw = kws[((seed >> 3) as usize) % kws.len()].to_string(); // 换一个子话题搜人
+                    emit_nurture_step(app, account_id, &format!("👤 搜索领域优质用户中…（{}）", ukw));
+                    let candidates: Vec<String> = match tauri::async_runtime::spawn_blocking(move || x_search_users_blocking(&ukw)).await {
+                        Ok(Ok(v)) => v,
+                        _ => Vec::new(), // people 搜索失败就不关注，不影响其它动作
+                    };
+                    // 过滤已关注 + 跨账号去重；多取些候选（质量门会刷掉一部分）
+                    let pool: Vec<String> = {
+                        let st = app.state::<AppState>();
+                        let conn = st.db.lock().map_err(|e| e.to_string())?;
+                        let mut already = std::collections::HashSet::new();
+                        for p in &candidates {
+                            if x_already_acted(&conn, account_id, p) || x_target_persona_count(&conn, p) >= 3 {
+                                already.insert(p.clone());
+                            }
+                        }
+                        gh_pick_targets(&candidates, &already, (n_follow * 3).max(3) as usize, seed)
+                    };
+                    emit_nurture_step(app, account_id, &format!("👤 找领域优质用户关注（目标 {} 个）", n_follow));
+                    for prof in &pool {
+                        if nurture_should_stop() { break; }
+                        if follows >= n_follow { break; }
+                        emit_nurture_step(app, account_id, &format!("👤 关注评估中（已 {}/{}）：{}", follows, n_follow, prof.trim_start_matches("https://x.com/")));
+                        let p = prof.clone();
+                        let res = tauri::async_runtime::spawn_blocking(move || x_follow_quality_blocking(&p)).await
+                            .map_err(|e| e.to_string())?;
+                        match res {
+                            Ok(true) => {
+                                let st = app.state::<AppState>();
+                                if let Ok(conn) = st.db.lock() { let _ = x_record_action(&conn, account_id, "follow", prof); }
+                                follows += 1;
+                            }
+                            Ok(false) => {} // 不达标/已关注，下一个
+                            Err(e) if e.starts_with("HEALTH:") => { aborted_health = Some(e[7..].to_string()); break; }
+                            Err(_) => {}
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(get_random_delay(15, 40))).await; // X 动作间隔 15-40s
+                    }
+                }
+            }
+            // 转推：engage 预算内，对部分推文转推
+            2 => {
+                if n_engage > 0 {
+                    for (i, t) in chosen.iter().take(n_engage as usize).enumerate() {
+                        if nurture_should_stop() { break; }
+                        let key = format!("{}#engage", t);
+                        let acted = { let st = app.state::<AppState>(); let l = st.db.lock().map_err(|e| e.to_string())?; x_already_acted(&l, account_id, &key) };
+                        if acted { continue; }
+                        emit_nurture_step(app, account_id, &format!("🔁 转推 {}/{}", i + 1, n_engage));
+                        let tc = t.clone();
+                        let r = tauri::async_runtime::spawn_blocking(move || x_retweet_blocking(&tc)).await.map_err(|e| e.to_string())?;
+                        if r.is_ok() {
+                            let st = app.state::<AppState>();
+                            if let Ok(conn) = st.db.lock() { let _ = x_record_action(&conn, account_id, "retweet", &key); }
+                            engages += 1;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(get_random_delay(15, 40))).await; // X 动作间隔 15-40s
+                    }
+                }
+            }
+            // 自动回复（开关开 + 配额>0）：读正文 → 大模型生成切题回复 → 真实键盘输入并发送。
+            // 风险动作：默认关；读不到正文/生成不合格/发送失败都跳过；回复间隔 30~90s；跨 session 去重(#reply)。
+            3 => {
+                if reply_on && reply_quota > 0 {
+                    for t in chosen.iter() {
+                        if nurture_should_stop() { break; }
+                        if replies >= reply_quota { break; }
+                        let key = format!("{}#reply", t);
+                        // 去重：本账号已回过这条 → 跳过
+                        let acted = { let st = app.state::<AppState>(); let l = st.db.lock().map_err(|e| e.to_string())?; x_already_acted(&l, account_id, &key) };
+                        if acted { continue; }
+                        // 读正文（读不到/太短 → 跳过，不回复）
+                        let tc = t.clone();
+                        let body = tauri::async_runtime::spawn_blocking(move || x_read_tweet_text_blocking(&tc)).await.map_err(|e| e.to_string())?;
+                        let body = match body { Some(b) => b, None => continue };
+                        // 大模型基于正文生成回复（无 key/不合格 → None → 跳过）
+                        let reply = match gen_nurture_text(app, "x_reply", &body).await {
+                            Some(r) => r,
+                            None => { emit_nurture_step(app, account_id, "未配置 AI 或回复不合格，跳过回复"); continue }
+                        };
+                        emit_nurture_step(app, account_id, &format!("💬 回复 {}/{}", replies + 1, reply_quota));
+                        // 发回复（twitter_reply 自带导航 + 真实键盘输入 + 校验按钮可用 + 提交校验）
+                        let url = t.clone(); let rep = reply.clone();
+                        let r = tauri::async_runtime::spawn_blocking(move || twitter_reply(&url, &rep)).await.map_err(|e| e.to_string())?;
+                        match r {
+                            Ok(_) => {
+                                let st = app.state::<AppState>();
+                                if let Ok(conn) = st.db.lock() { let _ = x_record_action(&conn, account_id, "reply", &key); }
+                                replies += 1;
+                            }
+                            // 发送失败（如按钮未激活/未登录）→ 不记库、出提示，避免假成功
+                            Err(e) => { emit_nurture_step(app, account_id, &format!("回复发送失败，跳过：{}", e)); }
+                        }
+                        // 回复间隔 30~90s（拟人）
+                        tokio::time::sleep(std::time::Duration::from_millis(get_random_delay(30, 90))).await;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let _ = (likes, follows, engages, replies);
 
     // 7b) L3：满足闸门时发 1 条极少原创（每周 ≤1 条）
     if aborted_health.is_none() {

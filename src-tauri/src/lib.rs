@@ -1213,6 +1213,27 @@ fn x_daily_quota(phase: &str) -> (i64, i64, i64) {
     }
 }
 
+/// 给每轮配额加随机抖动，避免每次点赞/转推次数都一模一样（像脚本）。
+/// - 点赞：在 [max(1, base-2), base] 间随机（base>0 时至少 1 次）；
+/// - 转推：0..=base 随机（含 0——养号不必每次都转推，符合「转推 0~3」诉求）；
+/// - 关注：0..=base 随机（关注本就少，允许某轮不关注）。
+fn x_jitter_quota(base: (i64, i64, i64), seed: u64) -> (i64, i64, i64) {
+    let (bl, bf, be) = base;
+    // 从同一 seed 派生三路弱相关随机分量
+    let r1 = seed ^ 0x9E3779B97F4A7C15;
+    let r2 = (seed >> 21).wrapping_mul(0x2545F4914F6CDD1D);
+    let r3 = (seed >> 41).wrapping_mul(0x9E3779B97F4A7C15);
+    let like = if bl <= 0 {
+        0
+    } else {
+        let lo = (bl - 2).max(1);
+        lo + (r1 % ((bl - lo + 1) as u64)) as i64
+    };
+    let follow = if bf <= 0 { 0 } else { (r3 % ((bf + 1) as u64)) as i64 };
+    let engage = if be <= 0 { 0 } else { (r2 % ((be + 1) as u64)) as i64 };
+    (like, follow, engage)
+}
+
 /// 极少量原创是否解锁：号龄走完预热期（≥ warmup_days）且已有 L1 历史（点赞/关注）。
 /// 跟随养号周期缩放——用户把周期调短，发原创门槛同步前移。频率上限由调用方按周限。
 fn x_l3_allowed(age_days: i64, warmup_days: i64, l1_action_count: i64) -> bool {
@@ -10387,15 +10408,10 @@ fn twitter_reply(url: &str, text: &str) -> Result<(), String> {
         return Err("未找到 X 回复框（可能未登录、推文不可回复或页面改版）".into());
     }
 
-    // focus → 清空 → execCommand 插入（Draft.js 友好）；text 用 JSON 编码成安全的 JS 字符串字面量
-    let js_text = serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into());
-    let inject = format!(
-        "(function(){{var e=document.querySelector('[data-testid=\"tweetTextarea_0\"]');if(!e)return 'no';e.focus();document.execCommand('selectAll',false,null);document.execCommand('delete',false,null);var ok=document.execCommand('insertText',false,{});return 'exec='+ok;}})()",
-        js_text);
-    let r = unzoo_evaluate(&inject)?;
-    if !r.contains("exec=true") {
-        return Err(format!("X 回复框输入失败：{}", r));
-    }
+    // 真实键盘逐字输入（X 是 Draft.js：只认 isTrusted 键盘事件）。
+    // 注意：execCommand('insertText') 注入虽然能让文字显示，但 React 状态不更新 →
+    // 「回复」按钮保持置灰 → 点了也发不出去（且会被误记成功）。必须走真实键盘。
+    unzoo_type(box_sel, text).map_err(|e| format!("X 回复框输入失败: {}", e))?;
     std::thread::sleep(std::time::Duration::from_millis(1200));
 
     let submit_sel = "[data-testid=\"tweetButtonInline\"]";
@@ -10405,10 +10421,23 @@ fn twitter_reply(url: &str, text: &str) -> Result<(), String> {
         w2 += 2;
     }
     if !unzoo_element_exists(submit_sel) {
-        return Err("X 已输入回复，但未出现可用的发布按钮".into());
+        return Err("X 已输入回复，但未出现发布按钮".into());
+    }
+    // 校验按钮已激活；仍置灰说明落字没被 X 识别 → 直接判失败（不再点了假装成功）
+    let enabled_js = "(function(){var b=document.querySelector('[data-testid=\"tweetButtonInline\"]');if(!b)return 'nobtn';return (b.getAttribute('aria-disabled')==='true'||b.disabled)?'disabled':'enabled';})()";
+    let st = unzoo_evaluate(enabled_js)?;
+    if !st.contains("enabled") {
+        return Err(format!("X 回复未发出：发布按钮不可用（落字未被识别，state={}）", st.trim()));
     }
     unzoo_click(submit_sel).map_err(|e| format!("点击发布失败: {}", e))?;
-    std::thread::sleep(std::time::Duration::from_secs(2));
+    std::thread::sleep(std::time::Duration::from_secs(3));
+
+    // 发出后回复框应清空 / 按钮重新置灰；据此确认确实发送成功，避免点了没发出
+    let posted_js = "(function(){var e=document.querySelector('[data-testid=\"tweetTextarea_0\"]');var t=e?(e.innerText||'').replace(/[\\s\\u200b]/g,''):'';var b=document.querySelector('[data-testid=\"tweetButtonInline\"]');var dis=b?(b.getAttribute('aria-disabled')==='true'||b.disabled):true;return (t===''||dis)?'posted':'stuck';})()";
+    let pv = unzoo_evaluate(posted_js)?;
+    if pv.contains("stuck") {
+        return Err("X 已点击发布但回复框未清空，疑似未发出".into());
+    }
     Ok(())
 }
 
@@ -12844,6 +12873,28 @@ mod platform_meta_tests {
         let (l2, _, _) = x_daily_quota("mature");
         assert!(l2 >= 1);
         assert_eq!(x_daily_quota("unknown"), (1, 0, 0));
+    }
+
+    #[test]
+    fn x_jitter_quota_stays_in_bounds() {
+        // 多个 seed 下，抖动后的配额都应落在预期区间，且转推含 0
+        let mut saw_zero_engage = false;
+        let mut saw_max_engage = false;
+        for s in 0u64..2000 {
+            // mature 基准 (5,1,3)
+            let (l, f, e) = x_jitter_quota((5, 1, 3), s.wrapping_mul(2654435761));
+            assert!((3..=5).contains(&l), "like {} 越界", l);
+            assert!((0..=1).contains(&f), "follow {} 越界", f);
+            assert!((0..=3).contains(&e), "engage {} 越界", e);
+            if e == 0 { saw_zero_engage = true; }
+            if e == 3 { saw_max_engage = true; }
+        }
+        assert!(saw_zero_engage, "转推从未取到 0（应允许某轮不转推）");
+        assert!(saw_max_engage, "转推从未取到上限 3");
+        // base 为 0 的维度恒为 0
+        assert_eq!(x_jitter_quota((2, 0, 0), 12345), (x_jitter_quota((2, 0, 0), 12345).0, 0, 0));
+        let (wl, _, _) = x_jitter_quota((2, 0, 0), 999);
+        assert!((1..=2).contains(&wl));
     }
 
     #[test]
