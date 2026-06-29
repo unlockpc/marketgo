@@ -10438,6 +10438,12 @@ fn twitter_reply(url: &str, text: &str) -> Result<(), String> {
     if pv.contains("stuck") {
         return Err("X 已点击发布但回复框未清空，疑似未发出".into());
     }
+
+    // 发布成功后 X 常弹「订阅 Premium 以推广你的回复」弹窗——自动关掉（点「稍后再说/Maybe later」
+    // 或弹窗关闭按钮，兜底 Esc），避免它残留遮挡页面影响后续动作。best-effort，失败不影响回复结果。
+    let dismiss_js = "(function(){var d=document.querySelector('[role=\"dialog\"]');if(!d)return 'no-dialog';var bs=[].slice.call(d.querySelectorAll('button,[role=\"button\"]'));for(var i=0;i<bs.length;i++){var t=(bs[i].innerText||'').trim();if(/稍后再说|Maybe later|Not now|Later|跳过|Skip|以后/i.test(t)){bs[i].click();return 'clicked';}}var c=d.querySelector('[aria-label=\"Close\"],[aria-label=\"关闭\"],[data-testid=\"app-bar-close\"]');if(c){c.click();return 'closed';}return 'no-btn';})()";
+    let _ = unzoo_evaluate(dismiss_js);
+    std::thread::sleep(std::time::Duration::from_millis(600));
     Ok(())
 }
 
