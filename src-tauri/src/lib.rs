@@ -8476,6 +8476,16 @@ async fn unzoo_delete_profile(profile_id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// 关闭某个标签页（尽力而为，失败仅忽略）。用于关掉登录预检临时开的 tab。
+async fn unzoo_close_tab(tab_id: &str) {
+    if tab_id.is_empty() { return; }
+    let _ = get_http_client()
+        .post(format!("{}/tabs/close", UNZOO_API_BASE))
+        .json(&serde_json::json!({ "tab_id": tab_id }))
+        .send()
+        .await;
+}
+
 #[tauri::command]
 async fn unzoo_launch_profile(profile_id: String) -> Result<String, String> {
     let client = get_http_client();
@@ -9703,7 +9713,7 @@ async fn check_account_login(
         }
         unzoo_launch_profile(selected).await?
     };
-    set_active_tab(Some(tab_id));
+    set_active_tab(Some(tab_id.clone()));
 
     // 账号级代理覆盖：登录预检也按账号 apply 代理。
     let _ = multi_account::apply_account_proxy(&app, &account_id).await;
@@ -9714,6 +9724,10 @@ async fn check_account_login(
     })
     .await
     .map_err(|e| format!("登录检测异常: {}", e))?;
+
+    // 关掉预检临时开的 tab：养号会另开自己的 tab，留着只会堆积空标签。
+    unzoo_close_tab(&tab_id).await;
+    set_active_tab(None);
     Ok(logged)
 }
 
