@@ -1125,7 +1125,8 @@ fn x_fail_health(default: &str) -> String {
 /// 点赞某推文（已 Like 的 testid 为 "unlike"，只点 "like" 不取消）。
 fn x_like_blocking(tweet_url: &str) -> Result<(), String> {
     unzoo_navigate(tweet_url)?;
-    std::thread::sleep(std::time::Duration::from_millis(get_random_delay(2, 5)));
+    // 打开推文后先「阅读」几秒再点赞，避免秒赞像机器人
+    std::thread::sleep(std::time::Duration::from_millis(get_random_delay(4, 9)));
     log::info!("[X-ACTION] like 目标={}", tweet_url);
     if unzoo_element_exists("[data-testid=\"like\"]") {
         unzoo_click("[data-testid=\"like\"]").map_err(|e| format!("like 失败: {}", e))?;
@@ -1191,7 +1192,8 @@ fn x_follow_quality_blocking(profile_url: &str) -> Result<bool, String> {
 /// 转推（Repost）某推文。
 fn x_retweet_blocking(tweet_url: &str) -> Result<(), String> {
     unzoo_navigate(tweet_url)?;
-    std::thread::sleep(std::time::Duration::from_millis(get_random_delay(2, 5)));
+    // 打开推文后先「阅读」几秒再转推，避免秒转像机器人
+    std::thread::sleep(std::time::Duration::from_millis(get_random_delay(4, 9)));
     log::info!("[X-ACTION] retweet 目标={}", tweet_url);
     if !unzoo_element_exists("[data-testid=\"retweet\"]") {
         return Err("未找到 retweet 按钮".to_string());
