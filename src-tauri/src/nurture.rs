@@ -387,10 +387,25 @@ fn x_logged_in_blocking() -> bool {
     false
 }
 
-/// GitHub 登录检测：导航首页 + 通用文本法（GitHub 文本信号可靠，见 check_platform_login_status）。
+/// GitHub 登录检测：导航首页后轮询（文本信号可靠，但首屏渲染慢，单次检测会把已登录误判为未登录）。
+/// 命中登录后文本即 true；出现「Sign in」入口即 false；最多等约 18s。在 spawn_blocking 中调用。
 fn gh_logged_in_blocking() -> bool {
+    use std::time::Duration;
     let _ = unzoo_navigate("https://github.com/");
-    check_platform_login_status("github").unwrap_or(false)
+    let mut waited = 0;
+    while waited < 18 {
+        // check_platform_login_status 内部已 sleep 2s 再读文本，确保读的是渲染后的页面
+        if check_platform_login_status("github").unwrap_or(false) {
+            return true;
+        }
+        // 明确未登录：首页存在「Sign in」入口（已登录页无 /login 链接）→ 提前返回，不必等满
+        if unzoo_element_exists("a[href=\"/login\"]") {
+            return false;
+        }
+        std::thread::sleep(Duration::from_secs(1));
+        waited += 3; // 约 2s(内部读取) + 1s
+    }
+    false
 }
 
 /// 一键养号「未登录预检」覆盖的平台：这些平台的专属 runner 未登录会直接报错失败，
