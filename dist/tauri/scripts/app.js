@@ -2355,6 +2355,7 @@
       updateHealthOverview();
       await loadRegisterPlatforms();
       await loadGmailStatus();
+      await syncXReplyToggle();
     } catch (error) {
       console.error("Failed to load accounts:", error);
     }
@@ -5449,6 +5450,8 @@ ${names}
     } catch (error) {
       console.error("Failed to load AI config:", error);
     }
+  }
+  async function syncXReplyToggle() {
     try {
       const xReply = await invoke2("get_x_reply_enabled");
       const cb = document.getElementById("xReplyEnabled");

@@ -2483,6 +2483,7 @@ async function loadAccounts() {
     updateHealthOverview();
     await loadRegisterPlatforms();
     await loadGmailStatus();
+    await syncXReplyToggle();
   } catch (error) {
     console.error('Failed to load accounts:', error);
   }
@@ -6307,7 +6308,10 @@ async function loadAIConfig() {
   } catch (error) {
     console.error('Failed to load AI config:', error);
   }
-  // X 自动回复开关状态
+}
+
+// 同步「X 自动回复」开关状态（开关已移至账号管理页 header）
+async function syncXReplyToggle() {
   try {
     const xReply = await invoke<boolean>('get_x_reply_enabled');
     const cb = document.getElementById('xReplyEnabled') as HTMLInputElement | null;

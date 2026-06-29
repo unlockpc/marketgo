@@ -803,6 +803,9 @@
         <header class="page-header">
           <h2 data-i18n="accounts.pageTitle">👤 身份管理</h2>
           <span style="margin-left:auto;display:flex;align-items:center;gap:8px;">
+            <label title="开启后养号会读推文→大模型生成回复→自动发；高风险，默认关" style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text-muted,#888);cursor:pointer;white-space:nowrap;">
+              <input type="checkbox" id="xReplyEnabled"> 💬 X 自动回复
+            </label>
             <button class="btn btn-success" id="btnNurtureAll" title="对所有账号立即养一轮（今日已养>5次的自动跳过）">🌱 一键养号 / Nurture All</button>
             <button class="btn btn-secondary" onclick="openBatchProxyModal()" title="批量给多个账号配置/清除自定义 SOCKS5 代理">🧦 批量 SOCKS5</button>
             <button class="btn btn-primary" id="btnAddAccount" style="display:none;">
@@ -1481,13 +1484,6 @@
             <button class="btn btn-primary" id="btnSaveAI">Save AI Settings</button>
             <button class="btn btn-secondary" id="btnTestAI" style="margin-left: 10px;">Test Connection</button>
             <span class="save-status" id="aiSaveStatus"></span>
-
-            <div style="margin-top:14px;display:flex;align-items:center;gap:8px;">
-              <input type="checkbox" id="xReplyEnabled">
-              <label for="xReplyEnabled" style="font-size:13px;">
-                X 养号自动回复（开启后养号会读推文→大模型生成回复→自动发；高风险，默认关）
-              </label>
-            </div>
           </section>
 
           <!-- Browser Configuration -->
