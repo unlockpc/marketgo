@@ -1388,6 +1388,13 @@ function initModals() {
   });
   document.getElementById('nurturePlatform')?.addEventListener('change', populateNurtureForm);
   document.getElementById('aiProvider')?.addEventListener('change', () => { populateDefaultModels(); updateAIKeyVisibility(); });
+  document.getElementById('xReplyEnabled')?.addEventListener('change', async (ev) => {
+    const on = (ev.target as HTMLInputElement).checked;
+    try {
+      await invoke('set_x_reply_enabled', { enabled: on });
+      showToast(on ? 'X 自动回复已开启（高风险）' : 'X 自动回复已关闭', on ? 'warning' : 'success');
+    } catch (e) { showToast('设置失败：' + e, 'error'); }
+  });
   document.getElementById('btnRefreshModels')?.addEventListener('click', refreshModels);
   // Engage page
   document.getElementById('btnAddKeyword')?.addEventListener('click', () => openKeywordModal());
@@ -6300,6 +6307,12 @@ async function loadAIConfig() {
   } catch (error) {
     console.error('Failed to load AI config:', error);
   }
+  // X 自动回复开关状态
+  try {
+    const xReply = await invoke<boolean>('get_x_reply_enabled');
+    const cb = document.getElementById('xReplyEnabled') as HTMLInputElement | null;
+    if (cb) cb.checked = !!xReply;
+  } catch {}
 }
 
 async function saveSchedulerSettings() {

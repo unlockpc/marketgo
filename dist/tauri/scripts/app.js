@@ -1414,6 +1414,15 @@
       populateDefaultModels();
       updateAIKeyVisibility();
     });
+    document.getElementById("xReplyEnabled")?.addEventListener("change", async (ev) => {
+      const on = ev.target.checked;
+      try {
+        await invoke2("set_x_reply_enabled", { enabled: on });
+        showToast(on ? "X \u81EA\u52A8\u56DE\u590D\u5DF2\u5F00\u542F\uFF08\u9AD8\u98CE\u9669\uFF09" : "X \u81EA\u52A8\u56DE\u590D\u5DF2\u5173\u95ED", on ? "warning" : "success");
+      } catch (e) {
+        showToast("\u8BBE\u7F6E\u5931\u8D25\uFF1A" + e, "error");
+      }
+    });
     document.getElementById("btnRefreshModels")?.addEventListener("click", refreshModels);
     document.getElementById("btnAddKeyword")?.addEventListener("click", () => openKeywordModal());
     document.getElementById("btnSaveKeyword")?.addEventListener("click", saveKeyword);
@@ -5439,6 +5448,12 @@ ${names}
       }
     } catch (error) {
       console.error("Failed to load AI config:", error);
+    }
+    try {
+      const xReply = await invoke2("get_x_reply_enabled");
+      const cb = document.getElementById("xReplyEnabled");
+      if (cb) cb.checked = !!xReply;
+    } catch {
     }
   }
   async function saveSchedulerSettings() {
