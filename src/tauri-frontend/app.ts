@@ -3086,8 +3086,8 @@ function renderAccountCard(account: any): string {
         </div>
         ${todayProgress}
         <div class="account-actions">
-          ${platformManualLoginCache[(account.platform || '').toLowerCase()]
-            ? `<button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="该平台自动登录走不通，点此直接打开登录页，在浏览器里手动登录一次">✋ 手工登录</button>`
+          ${account.manual_login
+            ? `<button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="通过「加账号」手动加的账号（存了用户名/密码），点此打开登录页在浏览器里手动登录一次">✋ 手工登录</button>`
             : `<button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="自动登录：查登录→Google登录→否则注册">🔑 自动登录</button>`}
           ${(nurtureAllRunning && nurtureAllProfileKeys.has(nurtureProfileKeyOf(account)))
             ? `<button class="btn btn-small btn-success" data-nurture-account="${account.id}" disabled style="opacity:.5;cursor:not-allowed;" title="一键养号进行中，完成后才可单独养号">🌱 ${t('nurture.quickNurture')}</button>`

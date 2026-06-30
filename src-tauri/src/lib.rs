@@ -3342,6 +3342,8 @@ pub struct Account {
     pub login_method: Option<String>,    // google | phone | password（判断是否可转移归属）
     #[serde(default)]
     pub custom_proxy: Option<String>,    // 账号级自定义 SOCKS5/HTTP 代理（空=走身份机场节点）
+    #[serde(default)]
+    pub manual_login: bool,              // true=「加账号」手动加的(存了用户名/密码)，卡片展示「手工登录」；google/Gmail 身份账号=false
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -4188,7 +4190,7 @@ fn list_accounts(state: State<AppState>) -> Result<Vec<Account>, String> {
     let mut stmt = conn.prepare(
         "SELECT a.id, a.platform, a.username, a.email, a.status, a.created_at, a.profile_id, \
                 COALESCE(a.health_status,'unknown'), COALESCE(a.total_nurture_seconds,0), a.last_nurture_at, \
-                a.persona_id, p.email, a.custom_proxy \
+                a.persona_id, p.email, a.custom_proxy, a.credentials \
          FROM accounts a LEFT JOIN personas p ON p.id = a.persona_id ORDER BY a.created_at DESC")
         .map_err(|e| e.to_string())?;
 
@@ -4196,6 +4198,8 @@ fn list_accounts(state: State<AppState>) -> Result<Vec<Account>, String> {
         let platform: String = row.get(1)?;
         let google = get_platform_config(&platform).map(|c| c.google_oauth).unwrap_or(false);
         let login_method = Some(platform_login_method(&platform, google).to_string());
+        // 「加账号」手动加的会存 credentials(用户名/密码)；Gmail 身份账号无密码 → 据此判手工登录
+        let manual_login = row.get::<_, Option<String>>(13)?.map(|c| !c.trim().is_empty()).unwrap_or(false);
         Ok(Account {
             id: row.get(0)?,
             platform,
@@ -4211,6 +4215,7 @@ fn list_accounts(state: State<AppState>) -> Result<Vec<Account>, String> {
             persona_email: row.get(11)?,
             login_method,
             custom_proxy: row.get(12)?,
+            manual_login,
         })
     }).map_err(|e| e.to_string())?;
 
@@ -4256,6 +4261,7 @@ fn add_account(state: State<AppState>, platform: String, username: String, passw
         persona_email: None,
         login_method,
         custom_proxy: None,
+        manual_login: true, // 「加账号」手动加，存了用户名/密码 → 手工登录
     })
 }
 
