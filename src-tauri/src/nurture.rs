@@ -751,6 +751,9 @@ fn xhs_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec<S
         return Err("未登录小红书！请先点卡片上「✋ 手工登录」在浏览器里登一次，再养号。".to_string());
     }
     let mut searched = 0i64; let mut read = 0i64; let mut liked = 0i64; let mut replied = 0i64; let mut creplied = 0i64;
+    // 本轮(整 session)已点开读过的笔记 URL：避免反复点开同一帖——搜索结果常有重复卡片，且关闭弹框后 feed
+    // 会重排/懒加载，导致按 nth-of-type 序号点会错位命中已读过的笔记。跨主题搜索也共用此集合去重。
+    let mut opened_urls: std::collections::HashSet<String> = std::collections::HashSet::new();
     // 自己的 user id：用于楼中回复时跳过回复自己（读不到则靠去重 + AI 判定兜底）。开关关时不必读。
     let my_uid = if reply_on { xhs_my_user_id_blocking().unwrap_or_default() } else { String::new() };
     let mut seed = seed0 | 1;
@@ -822,6 +825,12 @@ fn xhs_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec<S
             // 弹框打开后小红书会把 URL 更新为 /explore/<id>，取来做跨 session 点赞去重
             let note_url = unzoo_evaluate("location.href").unwrap_or_default();
             let dedup_key = if note_url.contains("/explore/") { note_url } else { String::new() };
+            // 本轮已读过这篇 → 立刻关掉跳过，不重复读/赞/评（serps 有重复卡片、关闭后 feed 重排会让序号错位命中同一帖）
+            if !dedup_key.is_empty() && !opened_urls.insert(dedup_key.clone()) {
+                xhs_close_note_blocking();
+                std::thread::sleep(Duration::from_millis(get_human_delay(800, 1500)));
+                continue;
+            }
             // 弹框内「停留阅读」——不滚动（弹窗里滚动不像真人），只随机停几秒 + 少量鼠标移动
             for _ in 0..get_human_delay(2, 4) {
                 std::thread::sleep(Duration::from_millis(get_human_delay(1800, 4000)));
