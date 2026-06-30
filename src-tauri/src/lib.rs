@@ -1473,6 +1473,67 @@ fn x_target_persona_count(conn: &Connection, target: &str) -> i64 {
         params![target], |r| r.get(0)).unwrap_or(0)
 }
 
+// ===== 微博养号 DB 助手（与 x_*/xhs_* 同构，作用于 weibo_actions_log；target = 微博 mid）=====
+
+/// 本账号是否已对该 mid 操作过（点赞去重）。
+fn weibo_already_acted(conn: &Connection, account_id: &str, target: &str) -> bool {
+    conn.query_row(
+        "SELECT 1 FROM weibo_actions_log WHERE account_id=?1 AND target=?2 LIMIT 1",
+        params![account_id, target], |_| Ok(true)).unwrap_or(false)
+}
+
+fn weibo_record_action(conn: &Connection, account_id: &str, action_type: &str, target: &str) -> Result<(), String> {
+    let today = Local::now().format("%Y-%m-%d").to_string();
+    conn.execute(
+        "INSERT INTO weibo_actions_log (id, account_id, action_type, target, date) VALUES (?1,?2,?3,?4,?5)",
+        params![Uuid::new_v4().to_string(), account_id, action_type, target, today])
+        .map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// 跨账号去重：该 mid 已被多少个不同账号操作过（≥3 时本账号不再操作，避免一条微博被全矩阵点赞）。
+fn weibo_target_persona_count(conn: &Connection, target: &str) -> i64 {
+    conn.query_row(
+        "SELECT COUNT(DISTINCT account_id) FROM weibo_actions_log WHERE target=?1",
+        params![target], |r| r.get(0)).unwrap_or(0)
+}
+
+/// 微博按号龄分期返回当日点赞配额（微博风控较严，刻意压低，最高一轮 4 赞）。
+pub(crate) fn weibo_like_quota(phase: &str) -> i64 {
+    match phase {
+        "growth" => 4,
+        "mature" => 4,
+        "warmup" => 2,
+        _ => 1, // 兜底=极轻
+    }
+}
+
+/// 给点赞配额加随机抖动，避免每轮次数固定像脚本：在 [max(1, base-2), base] 间随机；base<=0 → 0。
+pub(crate) fn weibo_jitter_likes(base: i64, seed: u64) -> i64 {
+    if base <= 0 { return 0; }
+    let lo = (base - 2).max(1);
+    let r = seed ^ 0x9E3779B97F4A7C15;
+    lo + (r % ((base - lo + 1) as u64)) as i64
+}
+
+/// 按页面文本分类微博账号健康风险：captcha(验证码/安全验证) | banned(封禁/冻结) | restricted(频率受限) | None。
+/// 命中即应中止本轮养号并写 health_status。纯逻辑，可单测。
+pub(crate) fn weibo_classify_health(text: &str) -> Option<&'static str> {
+    if text.contains("验证码") || text.contains("安全验证") || text.contains("完成验证")
+        || text.contains("拖动滑块") || text.contains("人机验证") || text.contains("滑动验证") {
+        return Some("captcha");
+    }
+    if text.contains("账号异常") || text.contains("帐号异常") || text.contains("已被冻结")
+        || text.contains("账号被封") || text.contains("帐号被封") || text.contains("封禁") {
+        return Some("banned");
+    }
+    if text.contains("操作过于频繁") || text.contains("操作频繁") || text.contains("访问过于频繁")
+        || text.contains("请求过于频繁") || text.contains("请稍后再试")
+        || (text.contains("超过") && text.contains("上限")) {
+        return Some("restricted");
+    }
+    None
+}
+
 /// 平台 → 场景类别 key（research/product/social/content/career/lifestyle）。
 /// 供前端在已开通账号卡片上展示场景类别徽章（与开通选择器同一套分类）。
 #[tauri::command]
@@ -1601,7 +1662,7 @@ const NURTURE_WARMUP_DAYS: &[(&str, i64)] = &[
     ("twitter", 5), ("x", 5),       // 默认预热 5 天（成长时长 NULL→兜底 = 5，成熟从第 10 天起）；用户可在设置里自定义
     ("linkedin", 21),      // 职场，限制新号
     ("tiktok", 21),
-    ("weibo", 21),         // 较严
+    ("weibo", 3),          // 默认预热 3 天（成长 5 天见 weibo cadence seeding）；用户可在设置里自定义
     // —— 中等（14 天）——
     ("habr", 14),          // 需 karma / 历史邀请制
     ("vk", 14),
@@ -3799,6 +3860,10 @@ fn run_migrations(conn: &Connection) -> rusqlite::Result<()> {
     // 小红书养号动作日志（点赞去重，与 x_actions_log 同构）
     let _ = conn.execute("CREATE TABLE IF NOT EXISTS xhs_actions_log (id TEXT PRIMARY KEY, account_id TEXT NOT NULL, action_type TEXT NOT NULL, target TEXT NOT NULL, date TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP)", []);
     let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_xhs_actions_acct ON xhs_actions_log(account_id, target)", []);
+    // 微博养号动作日志（点赞去重，target = 微博 mid，与 x_actions_log 同构）
+    let _ = conn.execute("CREATE TABLE IF NOT EXISTS weibo_actions_log (id TEXT PRIMARY KEY, account_id TEXT NOT NULL, action_type TEXT NOT NULL, target TEXT NOT NULL, date TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP)", []);
+    let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_weibo_actions_acct ON weibo_actions_log(account_id, target)", []);
+    let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_weibo_actions_target ON weibo_actions_log(target)", []);
     // 一次性把旧三列方向迁入统一列（key 不变，直接搬 JSON）
     let _ = conn.execute("UPDATE accounts SET nurture_topics = gh_domains WHERE platform='github' AND nurture_topics IS NULL AND gh_domains IS NOT NULL", []);
     let _ = conn.execute("UPDATE accounts SET nurture_topics = x_niches WHERE platform IN ('twitter','x') AND nurture_topics IS NULL AND x_niches IS NOT NULL", []);
@@ -3824,7 +3889,7 @@ fn run_migrations(conn: &Connection) -> rusqlite::Result<()> {
                 ("linkedin", 14, 1, 3, 60, 120, 8, 20),
                 ("xiaohongshu", 7, 3, 6, 60, 180, 10, 23),
                 ("zhihu", 14, 2, 4, 60, 180, 9, 22),
-                ("weibo", 14, 2, 5, 60, 180, 9, 23),
+                ("weibo", 3, 2, 5, 60, 180, 9, 23),
                 ("vk", 14, 2, 4, 60, 180, 10, 22),
                 ("facebook", 14, 2, 4, 60, 180, 9, 22),
                 ("instagram", 14, 3, 5, 60, 180, 10, 23),
@@ -3877,6 +3942,19 @@ fn run_migrations(conn: &Connection) -> rusqlite::Result<()> {
                     []);
             }
             engine_cfg_set(&conn, "nurture_xhs_cadence_seeded", "1");
+        }
+
+        // 一次性：微博养号节奏定为「预热 3 天 + 成长 5 天」。flag 守护只跑一次，不覆盖用户后续手改；缺行补一条。
+        if engine_cfg_get(&conn, "nurture_weibo_cadence_seeded").is_none() {
+            let updated = conn.execute(
+                "UPDATE nurture_strategies SET warmup_days=3, growth_days=5 WHERE platform='weibo'",
+                []).unwrap_or(0);
+            if updated == 0 {
+                let _ = conn.execute(
+                    "INSERT OR IGNORE INTO nurture_strategies (platform, warmup_days, growth_days) VALUES ('weibo', 3, 5)",
+                    []);
+            }
+            engine_cfg_set(&conn, "nurture_weibo_cadence_seeded", "1");
         }
     }
 
@@ -9682,6 +9760,10 @@ async fn quick_nurture(
     if platform.eq_ignore_ascii_case("xiaohongshu") || platform.eq_ignore_ascii_case("redbook") {
         return nurture::xiaohongshu_nurture_run(&app, &account_id, seconds).await;
     }
+    // 微博走专属搜索驱动养号（s.weibo.com 搜索领域词→采集卡片→就地点赞+滚动浏览），不走纯滚动。
+    if platform.eq_ignore_ascii_case("weibo") {
+        return nurture::weibo_nurture_run(&app, &account_id, seconds).await;
+    }
 
     // Simulate browsing for specified duration.
     // 走阻塞版 + spawn_blocking（阻塞 reqwest 不能在 async 里直接调，否则导航 panic、tab 空白不操作）。
@@ -12962,6 +13044,40 @@ mod platform_meta_tests {
         assert_eq!(x_jitter_quota((2, 0, 0), 12345), (x_jitter_quota((2, 0, 0), 12345).0, 0, 0));
         let (wl, _, _) = x_jitter_quota((2, 0, 0), 999);
         assert!((1..=2).contains(&wl));
+    }
+
+    #[test]
+    fn weibo_like_quota_by_phase() {
+        assert_eq!(weibo_like_quota("warmup"), 2);
+        assert_eq!(weibo_like_quota("growth"), 4);
+        assert_eq!(weibo_like_quota("mature"), 4);
+        assert_eq!(weibo_like_quota("unknown"), 1);
+    }
+
+    #[test]
+    fn weibo_jitter_likes_stays_in_bounds() {
+        // base=4：抖动后应落在 [2,4]，且能取到下界 2 与上界 4
+        let (mut saw_lo, mut saw_hi) = (false, false);
+        for s in 0u64..3000 {
+            let l = weibo_jitter_likes(4, s.wrapping_mul(2654435761));
+            assert!((2..=4).contains(&l), "like {} 越界", l);
+            if l == 2 { saw_lo = true; }
+            if l == 4 { saw_hi = true; }
+        }
+        assert!(saw_lo && saw_hi, "抖动未覆盖区间端点 lo={} hi={}", saw_lo, saw_hi);
+        // base<=0 恒为 0；base=1 恒为 1（lo=max(1,-1)=1）
+        assert_eq!(weibo_jitter_likes(0, 123), 0);
+        assert_eq!(weibo_jitter_likes(1, 123), 1);
+    }
+
+    #[test]
+    fn weibo_classify_health_maps() {
+        assert_eq!(weibo_classify_health("请完成验证码后继续"), Some("captcha"));
+        assert_eq!(weibo_classify_health("需要安全验证"), Some("captcha"));
+        assert_eq!(weibo_classify_health("您的账号异常，请联系客服"), Some("banned"));
+        assert_eq!(weibo_classify_health("操作过于频繁，请稍后再试"), Some("restricted"));
+        assert_eq!(weibo_classify_health("已超过当日点赞上限"), Some("restricted"));
+        assert_eq!(weibo_classify_health("AI 工具 的搜索结果"), None);
     }
 
     #[test]

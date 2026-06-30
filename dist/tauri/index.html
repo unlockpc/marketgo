@@ -1489,33 +1489,6 @@
             <span class="save-status" id="aiSaveStatus"></span>
           </section>
 
-          <!-- Browser Configuration -->
-          <section class="settings-section">
-            <h3>🌐 <span data-i18n="settings.browser">Browser (Unzoo)</span></h3>
-            <div class="browser-status-detail" id="browserStatusDetail">
-              <span class="status-badge" data-i18n="accounts.checking">Checking...</span>
-            </div>
-
-            <!-- Profile Selection -->
-            <div class="form-group" style="margin-top: 15px;">
-              <label data-i18n="settings.browserProfile">Browser Profile</label>
-              <p class="text-muted" style="font-size: 12px; margin-bottom: 8px;" data-i18n="settings.browserProfileDesc">Select browser profile for publishing. Will auto-connect next time.</p>
-              <div style="display: flex; gap: 10px; align-items: center;">
-                <select id="browserProfile" class="select" style="flex: 1;">
-                  <option value="" data-i18n="settings.selectProfile">-- Select Profile --</option>
-                </select>
-                <button class="btn btn-secondary" id="btnRefreshProfiles">🔄</button>
-                <button class="btn btn-primary" id="btnConnectProfile" data-i18n="settings.connect">Connect</button>
-              </div>
-              <div id="profileStatus" style="margin-top: 8px; font-size: 12px;"></div>
-            </div>
-
-            <div class="form-group" style="margin-top: 15px;">
-              <label data-i18n="settings.unzooPath">Unzoo Path</label>
-              <input type="text" id="unzooPath" class="input" readonly>
-            </div>
-          </section>
-
           <!-- Language Settings -->
           <section class="settings-section">
             <h3 data-i18n="settings.language">Language / 语言</h3>
@@ -1599,58 +1572,6 @@
             <div class="form-group">
               <label>并发数 / Concurrency（1–5）</label>
               <input type="number" id="nurtureAllConcurrency" class="input" value="1" min="1" max="5" style="max-width:120px;">
-            </div>
-          </section>
-
-          <!-- 平台登录方式（手工登录标记） -->
-          <section class="settings-section">
-            <h3>🔐 平台登录方式</h3>
-            <p class="text-muted" style="font-size:12px;margin-bottom:10px;">勾选「需要手工登录」的平台。被勾选平台的账号卡片会显示「✋ 手工登录」徽章，提醒你在弹出的浏览器窗口里手动登录一次。（SegmentFault 因 Google 登录失效已默认勾选）</p>
-            <div id="platformManualLoginList">
-              <p class="text-muted">Loading...</p>
-            </div>
-          </section>
-
-          <!-- Proxy Management -->
-          <section class="settings-section">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-              <h3>🌐 <span data-i18n="settings.proxyPool">Proxy Pool</span></h3>
-              <button class="btn btn-primary btn-small" id="btnAddProxy" data-i18n="settings.addProxy">+ Add Proxy</button>
-            </div>
-            <p class="text-muted" style="margin-bottom: 15px;" data-i18n="settings.proxyDesc">Manage proxies for multi-account operations. Each account can use a different proxy.</p>
-
-            <!-- Proxy Stats -->
-            <div class="proxy-stats">
-              <div class="proxy-stat">
-                <span class="proxy-stat-value" id="proxyStatTotal">0</span>
-                <span class="proxy-stat-label" data-i18n="settings.total">Total</span>
-              </div>
-              <div class="proxy-stat">
-                <span class="proxy-stat-value" id="proxyStatActive">0</span>
-                <span class="proxy-stat-label" data-i18n="settings.active">Active</span>
-              </div>
-              <div class="proxy-stat">
-                <span class="proxy-stat-value" id="proxyStatUsed">0</span>
-                <span class="proxy-stat-label" data-i18n="settings.inUse">In Use</span>
-              </div>
-              <div class="proxy-stat">
-                <span class="proxy-stat-value" id="proxyStatFailed">0</span>
-                <span class="proxy-stat-label" data-i18n="settings.failed">Failed</span>
-              </div>
-            </div>
-
-            <!-- Proxy List -->
-            <div class="proxy-list" id="proxyList">
-              <div class="empty-state-inline">
-                <p data-i18n="settings.noProxies">No proxies configured. Add a proxy to get started.</p>
-              </div>
-            </div>
-
-            <!-- Bulk Import -->
-            <div class="form-group" style="margin-top: 15px;">
-              <label data-i18n="settings.bulkImportHint">Bulk Import (one per line: protocol://ip:port or protocol://user:pass@ip:port)</label>
-              <textarea id="bulkProxyInput" class="input" rows="3" placeholder="socks5://127.0.0.1:1080&#10;http://user:pass@proxy.example.com:8080"></textarea>
-              <button class="btn btn-secondary" id="btnBulkImportProxy" style="margin-top: 8px;" data-i18n="settings.importProxies">Import Proxies</button>
             </div>
           </section>
 
@@ -1852,58 +1773,6 @@
   </div>
 
   <!-- Add Proxy to Pool Modal -->
-  <div class="modal" id="modalAddProxy">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h3>Add Proxy</h3>
-        <button class="modal-close" onclick="closeModal('modalAddProxy')">&times;</button>
-      </div>
-      <div class="modal-body">
-        <div class="form-group">
-          <label>Proxy Name</label>
-          <input type="text" id="proxyName" class="input" placeholder="e.g., US Residential 1">
-        </div>
-        <div class="form-row">
-          <div class="form-group">
-            <label>Protocol</label>
-            <select id="proxyProtocol" class="select">
-              <option value="socks5">SOCKS5</option>
-              <option value="http">HTTP</option>
-              <option value="https">HTTPS</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label>Host</label>
-            <input type="text" id="proxyHost" class="input" placeholder="127.0.0.1">
-          </div>
-          <div class="form-group">
-            <label>Port</label>
-            <input type="number" id="proxyPort" class="input" placeholder="1080">
-          </div>
-        </div>
-        <div class="form-row">
-          <div class="form-group">
-            <label>Username (optional)</label>
-            <input type="text" id="proxyUsername" class="input" placeholder="">
-          </div>
-          <div class="form-group">
-            <label>Password (optional)</label>
-            <input type="password" id="proxyPassword" class="input" placeholder="">
-          </div>
-        </div>
-        <div class="form-group">
-          <label>Tags (comma-separated)</label>
-          <input type="text" id="proxyTags" class="input" placeholder="us, residential, fast">
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button class="btn btn-secondary" onclick="closeModal('modalAddProxy')">Cancel</button>
-        <button class="btn btn-secondary" id="btnTestProxy">Test Proxy</button>
-        <button class="btn btn-primary" id="btnSavePoolProxy">Save Proxy</button>
-      </div>
-    </div>
-  </div>
-
   <!-- Set Proxy Modal -->
   <div class="modal" id="modalSetProxy">
     <div class="modal-content">
