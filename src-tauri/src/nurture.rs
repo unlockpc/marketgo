@@ -1098,17 +1098,87 @@ fn weibo_like_by_mid_blocking(mid: &str) -> Result<bool, String> {
     if after.trim() == "1" { Ok(true) } else { Err(format!("点击后未变已赞(state={})，疑似未生效", after.trim())) }
 }
 
-/// 微博养号阻塞主流程：轮转关键词搜索 → 体检 → 采集 mid → DB 去重 → 就地点赞 → 滚动浏览。
-/// 返回 (searched, liked, health_abort)：命中验证码/封号/限流时写 health_abort 并提前结束（保留已完成计数）。
-fn weibo_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec<String>, n_like: i64, duration_secs: i64, seed0: u64) -> Result<(i64, i64, Option<String>), String> {
+/// 读搜索结果页中 mid 卡片的微博正文（给 AI 生成切题评论用）。trim 后字符数 ≥8 才返回 Some。
+fn weibo_read_card_text_blocking(mid: &str) -> Option<String> {
+    let js = format!("(function(){{var c=document.querySelector('div.card-wrap[mid=\"{}\"]');if(!c)return '';var p=c.querySelector('p[node-type=\"feed_list_content\"]')||c.querySelector('.txt');return p?(p.innerText||''):'';}})()", mid);
+    let raw = unzoo_evaluate(&js).ok()?;
+    let text = serde_json::from_str::<String>(&raw).unwrap_or(raw);
+    let t = text.trim();
+    if t.chars().count() >= 8 { Some(t.chars().take(400).collect()) } else { None }
+}
+
+/// 在搜索结果页就地评论 mid 对应的微博；also_forward=true 时勾选「同时转发到我的微博」(= 转帖)。
+/// 配方(2026-06-30 真站实测)：展开评论框 → 真实键盘输入 → 补发 input/keyup 触发微博按钮校验 →
+/// (转帖则勾选同时转发) → 校验发送按钮可用 → force 点发送 → 校验输入框清空。
+/// 微博评论框是普通 textarea(非 Vue 富文本)，但按钮点亮要补发 input 事件——browser_type 真键盘单独点不亮。
+/// 任一步失败返回 Err（调用方据此跳过、不记库，避免假成功）。
+fn weibo_comment_blocking(mid: &str, text: &str, also_forward: bool) -> Result<(), String> {
+    use std::time::Duration;
+    // 1) 滚到卡片并展开评论框
+    let _ = unzoo_evaluate(&format!("(function(){{var c=document.querySelector('div.card-wrap[mid=\"{}\"]');if(c)c.scrollIntoView({{block:'center'}});return 'ok';}})()", mid));
+    std::thread::sleep(Duration::from_millis(get_human_delay(500, 1200)));
+    let toggle_sel = format!("div.card-wrap[mid=\"{}\"] a[action-type=\"feed_list_comment\"]", mid);
+    if !unzoo_element_exists(&toggle_sel) { return Err("未找到评论按钮".into()); }
+    if !xhs_force_click(&toggle_sel) { return Err("展开评论框失败".into()); }
+    std::thread::sleep(Duration::from_millis(get_human_delay(600, 1200)));
+    let ta_sel = format!("div.card-wrap[mid=\"{}\"] .card-sender textarea[node-type=\"textEl\"]", mid);
+    if !unzoo_element_exists(&ta_sel) { return Err("评论输入框未出现".into()); }
+    // 2) 真实键盘输入（instant=false → 逐字真实键盘 + IME）
+    let tab_id = get_active_tab().filter(|t| !t.is_empty()).ok_or_else(|| "无活动标签页".to_string())?;
+    unzoo_mcp("browser_type", serde_json::json!({
+        "tab_id": tab_id, "selector": ta_sel, "text": text, "instant": false, "timeout": 8000
+    })).map_err(|e| format!("评论输入失败: {}", e))?;
+    std::thread::sleep(Duration::from_millis(get_human_delay(500, 1100)));
+    // 3) 补发 input/keyup 触发微博的按钮启用校验，并回读按钮状态
+    let nudge_js = format!(
+        "(function(){{var c=document.querySelector('div.card-wrap[mid=\"{}\"]');if(!c)return 'no';\
+         var ta=c.querySelector('.card-sender textarea[node-type=\"textEl\"]');\
+         if(ta){{['input','keyup','change'].forEach(function(ev){{ta.dispatchEvent(new Event(ev,{{bubbles:true}}));}});}}\
+         var b=c.querySelector('.card-sender a[action-type=\"post\"]');\
+         return b?(/disable/.test(b.className)?'disabled':'enabled'):'nobtn';}})()", mid);
+    let st = unzoo_evaluate(&nudge_js).unwrap_or_default();
+    if !st.contains("enabled") {
+        return Err(format!("微博{}未发出：发送按钮不可用(落字未被识别，state={})", if also_forward { "转帖" } else { "评论" }, st.trim()));
+    }
+    // 3b) 转帖：勾选「同时转发到我的微博」(勾选失败不致命，退化为纯评论)
+    if also_forward {
+        let fwd_js = format!(
+            "(function(){{var c=document.querySelector('div.card-wrap[mid=\"{}\"]');if(!c)return 'no';\
+             var cb=c.querySelector('.card-sender input[name=\"forward\"]');if(!cb)return 'nocb';\
+             if(!cb.checked){{cb.checked=true;cb.dispatchEvent(new Event('change',{{bubbles:true}}));cb.dispatchEvent(new Event('click',{{bubbles:true}}));}}\
+             return cb.checked?'checked':'fail';}})()", mid);
+        let _ = unzoo_evaluate(&fwd_js);
+    }
+    // 4) force 点发送
+    let post_sel = format!("div.card-wrap[mid=\"{}\"] .card-sender a[action-type=\"post\"]", mid);
+    if !xhs_force_click(&post_sel) { return Err("点击发送失败".into()); }
+    std::thread::sleep(Duration::from_secs(3));
+    // 5) 校验输入框已清空/收起（发出后会复位）
+    let posted_js = format!("(function(){{var c=document.querySelector('div.card-wrap[mid=\"{}\"]');if(!c)return 'posted';var ta=c.querySelector('.card-sender textarea[node-type=\"textEl\"]');if(!ta)return 'posted';var t=(ta.value||'').replace(/\\s/g,'');return t===''?'posted':'stuck';}})()", mid);
+    if unzoo_evaluate(&posted_js).unwrap_or_default().contains("stuck") {
+        return Err("已点发送但评论框未清空，疑似未发出".into());
+    }
+    Ok(())
+}
+
+/// 微博养号阻塞主流程：轮转关键词搜索 → 体检 → 采集 mid → DB 去重 → 就地点赞 + 滚动浏览 → 随机一次评论/转帖。
+/// 返回 (searched, liked, commented, forwarded, health_abort)：命中验证码/封号/限流时写 health_abort 并提前结束（保留已完成计数）。
+/// reply_on=false 或 reply_quota=0 时完全不评论/转帖（首版行为）。
+fn weibo_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec<String>, n_like: i64, reply_on: bool, reply_quota: i64, reply_style: String, duration_secs: i64, seed0: u64) -> Result<(i64, i64, i64, i64, Option<String>), String> {
     use std::time::{Duration, Instant};
     let start = Instant::now();
     let mut searched = 0i64;
     let mut liked = 0i64;
+    let mut commented = 0i64;
+    let mut forwarded = 0i64;
+    let mut engaged = 0i64; // 评论+转帖合计，受 reply_quota 限制（一轮最多 1 次互动）
     let mut seed = seed0;
     let mut acted_mids: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut ki = (seed0 as usize) % keywords.len().max(1);
-    while liked < n_like {
+    // 本轮互动是「评论」还是「转帖」：由 seed 派生，随机二选一（一轮只做一种，更克制更像真人）
+    let engage_is_forward = reply_on && reply_quota > 0 && (seed0 >> 7) % 2 == 0;
+    // 循环条件：点赞没点够 或 还有互动配额没用（开关开时）
+    while liked < n_like || (reply_on && engaged < reply_quota) {
         if nurture_should_stop() { break; }
         if start.elapsed().as_secs() as i64 >= duration_secs { break; }
         let kw = keywords[ki % keywords.len()].clone();
@@ -1128,7 +1198,7 @@ fn weibo_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec
                 let _ = conn.execute("UPDATE accounts SET health_status=?1, last_health_check=datetime('now') WHERE id=?2", params![state, account_id]);
             }
             log::warn!("[WEIBO-NURTURE] account={} kw={} 检测到 {} → 停止养号", account_id, kw, state);
-            return Ok((searched, liked, Some(state.to_string())));
+            return Ok((searched, liked, commented, forwarded, Some(state.to_string())));
         }
         // 3) 采集卡片 mid
         let mids = weibo_collect_mids_blocking();
@@ -1136,11 +1206,11 @@ fn weibo_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec
             std::thread::sleep(Duration::from_millis(get_random_delay(2, 4)));
             continue;
         }
-        // 4) DB 过滤：本账号已赞 + 跨账号≥3 + 本轮已点
+        // 4) DB 过滤：本账号已赞 + 跨账号≥3 + 本轮已点（保留 mids 给后面的互动步骤用）
         let candidates: Vec<String> = {
             let st = app.state::<AppState>();
             let conn = st.db.lock().map_err(|e| e.to_string())?;
-            mids.into_iter().filter(|m| {
+            mids.iter().cloned().filter(|m| {
                 !acted_mids.contains(m)
                     && !weibo_already_acted(&conn, account_id, m)
                     && weibo_target_persona_count(&conn, m) < 3
@@ -1167,44 +1237,78 @@ fn weibo_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec
             // 点赞间隔 18~45s（拟人 + 不过度）
             std::thread::sleep(Duration::from_millis(get_random_delay(18, 45)));
         }
+        // 5b) 互动：开关开 + 配额未用完。一轮最多 1 次，挑一条有正文、未互动过的微博评论或转帖。
+        if reply_on && engaged < reply_quota && !nurture_should_stop() {
+            let kind_key = if engage_is_forward { "forward" } else { "reply" };
+            for mid in &mids {
+                if engaged >= reply_quota || nurture_should_stop() { break; }
+                let dedup = format!("{}#{}", mid, kind_key);
+                // 已互动过(本账号) → 跳过
+                let acted = { let st = app.state::<AppState>(); st.db.lock().ok().map(|c| weibo_already_acted(&c, account_id, &dedup)).unwrap_or(true) };
+                if acted { continue; }
+                // 读正文（读不到/太短 → 跳过，不互动）
+                let body = match weibo_read_card_text_blocking(mid) { Some(b) => b, None => continue };
+                // AI 生成切题评论（无 key/不合格 → 跳过本轮互动）
+                let text = match tauri::async_runtime::block_on(gen_nurture_text(&app, "weibo_reply", &body, &reply_style)) {
+                    Some(t) => t,
+                    None => { emit_nurture_step(&app, account_id, "未配置 AI 或评论不合格，跳过互动"); break; }
+                };
+                emit_nurture_step(&app, account_id, if engage_is_forward { "🔁 微博转帖中…" } else { "💬 微博评论中…" });
+                match weibo_comment_blocking(mid, &text, engage_is_forward) {
+                    Ok(_) => {
+                        let st = app.state::<AppState>();
+                        if let Ok(conn) = st.db.lock() { let _ = weibo_record_action(&conn, account_id, kind_key, &dedup); }
+                        engaged += 1;
+                        if engage_is_forward { forwarded += 1; } else { commented += 1; }
+                    }
+                    Err(e) => { emit_nurture_step(&app, account_id, &format!("{}发送失败，跳过：{}", if engage_is_forward { "转帖" } else { "评论" }, e)); }
+                }
+                std::thread::sleep(Duration::from_millis(get_random_delay(30, 90))); // 互动间隔 30~90s
+                break; // 一页最多互动 1 次
+            }
+        }
         // 6) 读完这页随机滚动浏览，再换词
         weibo_browse_scroll_blocking(seed);
         std::thread::sleep(Duration::from_millis(get_random_delay(3, 8)));
     }
-    Ok((searched, liked, None))
+    Ok((searched, liked, commented, forwarded, None))
 }
 
-/// 微博养号：按方向取关键词 → s.weibo.com 搜索采卡片 → 去重选取 → 就地点赞 + 滚动浏览。
-/// 首版只做「点赞 + 浏览」；评论/楼中回复留二期（可套小红书的 creply + 灌水识别）。
+/// 微博养号：按方向取关键词 → s.weibo.com 搜索采卡片 → 去重选取 → 就地点赞 + 滚动浏览 + 随机一次评论/转帖。
+/// 评论/转帖为风险动作：默认关，开关开(weibo_reply_enabled)且分期允许(成长/成熟)才做；一轮最多 1 次，评论 vs 转帖随机二选一。
 pub(crate) async fn weibo_nurture_run(app: &AppHandle, account_id: &str, duration: i64) -> Result<String, String> {
     let session_start = std::time::Instant::now();
-    // 1) 读方向 + 关键词 + 分期
-    let (topics, kws, phase) = {
+    // 1) 读方向 + 关键词 + 分期 + 回复开关/风格
+    let (topics, kws, phase, reply_on, reply_style) = {
         let st = app.state::<AppState>();
         let conn = st.db.lock().map_err(|e| e.to_string())?;
         let topics = account_topics(&conn, account_id);
         let kws = account_topic_keywords(&conn, account_id);
+        let reply_on = crate::weibo_reply_enabled(&conn);
+        let reply_style = crate::account_reply_style(&conn, account_id);
         let created: Option<String> = conn.query_row("SELECT created_at FROM accounts WHERE id=?1", params![account_id], |r| r.get(0)).ok().flatten();
         let age = created.as_deref().and_then(parse_dt).map(|c| (Utc::now() - c).num_days()).unwrap_or(0);
         let strat = conn.query_row("SELECT warmup_days, COALESCE(growth_days, warmup_days), daily_sessions_min, daily_sessions_max FROM nurture_strategies WHERE platform='weibo'",
             [], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,i64>(1)?, r.get::<_,i64>(2)?, r.get::<_,i64>(3)?))).ok();
         let (warmup, growth, smin, smax) = strat.unwrap_or((3, 5, 2, 4));
         let (phase, _t) = nurture_phase_and_target(age, warmup, growth, smin, smax);
-        (topics, kws, phase.to_string())
+        (topics, kws, phase.to_string(), reply_on, reply_style)
     };
     if topics.is_empty() {
         return Ok("账号未选方向，跳过微博养号（点卡片上「🎯 主题」选一下方向）".to_string());
     }
     if kws.is_empty() { return Ok("方向无可用关键词".to_string()); }
-    // 2) 点赞配额：按分期取基数再加抖动（微博较严，最高一轮 4 赞）
+    // 2) 点赞次数：按分期取区间，再在区间内随机（预热1-2 / 成长·成熟1-3）
     let seed = get_random_delay(1, 100_000);
-    let n_like = crate::weibo_jitter_likes(crate::weibo_like_quota(&phase), seed);
+    let n_like = crate::weibo_pick_likes(crate::weibo_like_range(&phase), seed);
+    // 互动配额：开关开 + 分期允许(成长/成熟=1，预热=0)
+    let reply_quota = if reply_on { crate::weibo_reply_quota(&phase) } else { 0 };
     let dur = duration.max(30);
-    emit_nurture_step(app, account_id, &format!("开始微博养号 · 搜索领域词并就地点赞（目标 {} 赞，约 {}s）", n_like, dur));
-    // 3) 阻塞驱动：搜索→采集→点赞→浏览
+    emit_nurture_step(app, account_id, &format!("开始微博养号 · 搜索领域词点赞{}（目标 {} 赞，约 {}s）", if reply_quota > 0 { " + 随机一次评论/转帖" } else { "" }, n_like, dur));
+    // 3) 阻塞驱动：搜索→采集→点赞→浏览→互动
     let app_cl = app.clone();
     let acct = account_id.to_string();
-    let (searched, liked, aborted) = tauri::async_runtime::spawn_blocking(move || weibo_nurture_browse_blocking(app_cl, &acct, kws, n_like, dur, seed))
+    let (searched, liked, commented, forwarded, aborted) = tauri::async_runtime::spawn_blocking(move || weibo_nurture_browse_blocking(app_cl, &acct, kws, n_like, reply_on, reply_quota, reply_style, dur, seed))
         .await.map_err(|e| format!("养号任务异常: {}", e))??;
 
     // 4) 记录耗时 + 健康态 + 当日 session
@@ -1226,11 +1330,12 @@ pub(crate) async fn weibo_nurture_run(app: &AppHandle, account_id: &str, duratio
                 params![Uuid::new_v4().to_string(), account_id, today, elapsed_secs]);
         }
     }
-    log::info!("[WEIBO-NURTURE] account={} phase={} 搜索={} 点赞={} 耗时={}s health={}", account_id, phase, searched, liked, elapsed_secs, final_health);
+    log::info!("[WEIBO-NURTURE] account={} phase={} 搜索={} 点赞={} 评论={} 转帖={} 耗时={}s health={}", account_id, phase, searched, liked, commented, forwarded, elapsed_secs, final_health);
+    let engage_note = if reply_on { format!(" · 评论 {} · 转帖 {}", commented, forwarded) } else { String::new() };
     if let Some(s) = &aborted {
-        return Ok(format!("微博养号中止（{}）：已搜索 {} 次 · 点赞 {} · 用时 {}s", s, searched, liked, elapsed_secs));
+        return Ok(format!("微博养号中止（{}）：已搜索 {} 次 · 点赞 {}{} · 用时 {}s", s, searched, liked, engage_note, elapsed_secs));
     }
-    Ok(format!("微博养号完成（{}）：搜索 {} 次 · 点赞 {} · 用时 {}s", phase, searched, liked, elapsed_secs))
+    Ok(format!("微博养号完成（{}）：搜索 {} 次 · 点赞 {}{} · 用时 {}s", phase, searched, liked, engage_note, elapsed_secs))
 }
 
 /// X 养号：按方向取关键词→搜索采推文/用户→去重选取→点赞/关注/转推/回复 + 极少原创。
@@ -1600,18 +1705,6 @@ fn gh_watch_repo_blocking(repo_url: &str) -> Result<(), String> {
     ]).map(|_| ())
 }
 
-/// 良性、不带推广意图的短评论（养号阶段建立真人感，绝不带链接/产品）。
-pub(crate) fn gh_benign_comment(seed: u64) -> String {
-    const POOL: &[&str] = &[
-        "Ran into the same thing — thanks for documenting this.",
-        "This worked for me, appreciate the write-up.",
-        "Nice, the explanation here is really clear.",
-        "Confirmed on my side too. Helpful, thanks!",
-        "Subscribing — running into something similar.",
-        "Great repo, learned a lot reading through this.",
-    ];
-    POOL[(seed as usize) % POOL.len()].to_string()
-}
 
 // ===== X 动作助手（human 模式语义定位；unzoo_click/type 已路由到 human）=====
 // 选择器用 X 稳定的 data-testid（CSS 属性选择器），best-effort，需实测校准。

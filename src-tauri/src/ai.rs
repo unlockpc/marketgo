@@ -204,7 +204,7 @@ pub(crate) fn reply_style_tone(style: &str) -> &'static str {
 
 /// 养号发文统一入口：读 AI 配置 → 拼 prompt(含风格语气) → 调 AI → 校验。
 /// 无 key / 调用失败 / 不合格 均返回 None（调用方据此跳过本次发文，不影响点赞等动作）。
-/// kind: "x_reply"（回复推文）| "gh_comment"（Issue 评论）| "x_tweet"（原创，context 传领域/话题）| "xhs_reply" | "xhs_creply"。
+/// kind: "x_reply"（回复推文）| "gh_comment"（Issue 评论）| "x_tweet"（原创，context 传领域/话题）| "xhs_reply" | "xhs_creply" | "weibo_reply"（评论微博）。
 /// style: 回复风格(sincere/professional/humorous/casual/enthusiastic)，按账号选择，控制整体语气。
 pub(crate) async fn gen_nurture_text(app: &AppHandle, kind: &str, context: &str, style: &str) -> Option<String> {
     let (provider, key) = ai_reply_config(app)?;
@@ -241,6 +241,15 @@ pub(crate) async fn gen_nurture_text(app: &AppHandle, kind: &str, context: &str,
              2) 紧扣这条评论的实际内容，绝不空泛套话；\
              3) 不超过 40 字；不含链接、产品/推广、@提及、话题标签(#)、引流话术；\
              4) 只输出回复正文或 SKIP，不要解释、不要加引号。\n\n{}",
+            context),
+        "weibo_reply" => format!(
+            "你是一个刷微博的真实中国用户，正在看一条微博。请针对这条微博【具体说了什么】写一句自然、口语化的中文评论，\
+             像真人随手评论那样：要么认同并补充一个相关的具体点，要么吐槽/调侃一句，要么问一个真诚的小问题，让人一眼看出你确实看了这条微博。\
+             硬性要求：\
+             1) 必须用中文，口语、自然，可适度用 1 个语气词，但不要堆 emoji；\
+             2) 紧扣微博实际内容，绝不能是「说得对」「支持」「沙发」「前排」「转发了」这类不沾内容的空泛套话；\
+             3) 不超过 40 字；不含链接、产品名/推广、@提及、话题标签(#)、联系方式、引流话术；\
+             4) 只输出评论正文，不要解释、不要加引号。\n\n微博内容：\n{}",
             context),
         _ => format!(
             "你是一个活跃在该领域的真实用户，正在刷推。请针对下面这条推文【具体说了什么】写一句切题的回复：\

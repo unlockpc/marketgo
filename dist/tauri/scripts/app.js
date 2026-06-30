@@ -1431,6 +1431,15 @@
         showToast("\u8BBE\u7F6E\u5931\u8D25\uFF1A" + e, "error");
       }
     });
+    document.getElementById("weiboReplyEnabled")?.addEventListener("change", async (ev) => {
+      const on = ev.target.checked;
+      try {
+        await invoke2("set_weibo_reply_enabled", { enabled: on });
+        showToast(on ? "\u5FAE\u535A\u81EA\u52A8\u8BC4\u8BBA/\u8F6C\u5E16\u5DF2\u5F00\u542F\uFF08\u9AD8\u98CE\u9669\uFF09" : "\u5FAE\u535A\u81EA\u52A8\u8BC4\u8BBA/\u8F6C\u5E16\u5DF2\u5173\u95ED", on ? "warning" : "success");
+      } catch (e) {
+        showToast("\u8BBE\u7F6E\u5931\u8D25\uFF1A" + e, "error");
+      }
+    });
     document.getElementById("btnRefreshModels")?.addEventListener("click", refreshModels);
     document.getElementById("btnAddKeyword")?.addEventListener("click", () => openKeywordModal());
     document.getElementById("btnSaveKeyword")?.addEventListener("click", saveKeyword);
@@ -2894,7 +2903,7 @@
           ${account.manual_login ? `<button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="\u901A\u8FC7\u300C\u52A0\u8D26\u53F7\u300D\u624B\u52A8\u52A0\u7684\u8D26\u53F7\uFF08\u5B58\u4E86\u7528\u6237\u540D/\u5BC6\u7801\uFF09\uFF0C\u70B9\u6B64\u6253\u5F00\u767B\u5F55\u9875\u5728\u6D4F\u89C8\u5668\u91CC\u624B\u52A8\u767B\u5F55\u4E00\u6B21">\u270B \u624B\u5DE5\u767B\u5F55</button>` : `<button class="btn btn-small btn-primary" onclick="autoLoginAccount('${account.id}','${escapeHtml(account.platform)}')" title="\u81EA\u52A8\u767B\u5F55\uFF1A\u67E5\u767B\u5F55\u2192Google\u767B\u5F55\u2192\u5426\u5219\u6CE8\u518C">\u{1F511} \u81EA\u52A8\u767B\u5F55</button>`}
           ${nurtureAllRunning && nurtureAllProfileKeys.has(nurtureProfileKeyOf(account)) ? `<button class="btn btn-small btn-success" data-nurture-account="${account.id}" disabled style="opacity:.5;cursor:not-allowed;" title="\u4E00\u952E\u517B\u53F7\u8FDB\u884C\u4E2D\uFF0C\u5B8C\u6210\u540E\u624D\u53EF\u5355\u72EC\u517B\u53F7">\u{1F331} ${t("nurture.quickNurture")}</button>` : `<button class="btn btn-small btn-success" data-nurture-account="${account.id}" onclick="openNurtureModal('${account.id}', '${escapeHtml(account.platform)}', '${escapeHtml(account.username || account.email || "N/A")}')" title="${t("nurture.quickNurture")}">\u{1F331} ${t("nurture.quickNurture")}</button>`}
           ${["github", "twitter", "x", "segmentfault", "xiaohongshu"].includes(account.platform) ? `<button class="btn btn-small btn-secondary" onclick="pickTopics('${account.id}','${escapeHtml(account.platform)}')" title="\u9009\u62E9\u517B\u53F7\u4E3B\u9898">\u{1F3AF} \u4E3B\u9898</button>` : ""}
-          ${["twitter", "x", "xiaohongshu"].includes(account.platform) ? `<button class="btn btn-small btn-secondary" onclick="pickReplyStyle('${account.id}')" title="\u9009\u62E9\u517B\u53F7\u81EA\u52A8\u56DE\u590D/\u8BC4\u8BBA\u7684\u8BED\u6C14\u98CE\u683C">\u{1F4AC} \u98CE\u683C</button>` : ""}
+          ${["twitter", "x", "xiaohongshu", "weibo"].includes(account.platform) ? `<button class="btn btn-small btn-secondary" onclick="pickReplyStyle('${account.id}')" title="\u9009\u62E9\u517B\u53F7\u81EA\u52A8\u56DE\u590D/\u8BC4\u8BBA\u7684\u8BED\u6C14\u98CE\u683C">\u{1F4AC} \u98CE\u683C</button>` : ""}
           <button class="btn btn-small btn-secondary" onclick="openAccountProxyModal('${account.id}')" title="\u914D\u7F6E\u8BE5\u8D26\u53F7\u7684\u81EA\u5B9A\u4E49 SOCKS5 \u4EE3\u7406\uFF08\u4E0D\u914D\u8D70\u8EAB\u4EFD\u673A\u573A\u8282\u70B9\uFF09">\u{1F9E6} SOCKS5</button>
           ${stage !== "active" ? `<button class="btn btn-small btn-secondary" onclick="finishAccountNurture('${account.id}')" title="\u8001\u8D26\u53F7\u65E0\u9700\u517B\u53F7\uFF0C\u76F4\u63A5\u6807\u4E3A\u6B63\u5E38">\u2705 ${t("nurture.finishBtn")}</button>` : ""}
         </div>
@@ -5236,6 +5245,12 @@ ${names}
       const xhsReply = await invoke2("get_xhs_reply_enabled");
       const cb = document.getElementById("xhsReplyEnabled");
       if (cb) cb.checked = !!xhsReply;
+    } catch {
+    }
+    try {
+      const weiboReply = await invoke2("get_weibo_reply_enabled");
+      const cb = document.getElementById("weiboReplyEnabled");
+      if (cb) cb.checked = !!weiboReply;
     } catch {
     }
   }

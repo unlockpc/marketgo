@@ -1401,6 +1401,13 @@ function initModals() {
       showToast(on ? '小红书自动评论已开启（高风险）' : '小红书自动评论已关闭', on ? 'warning' : 'success');
     } catch (e) { showToast('设置失败：' + e, 'error'); }
   });
+  document.getElementById('weiboReplyEnabled')?.addEventListener('change', async (ev) => {
+    const on = (ev.target as HTMLInputElement).checked;
+    try {
+      await invoke('set_weibo_reply_enabled', { enabled: on });
+      showToast(on ? '微博自动评论/转帖已开启（高风险）' : '微博自动评论/转帖已关闭', on ? 'warning' : 'success');
+    } catch (e) { showToast('设置失败：' + e, 'error'); }
+  });
   document.getElementById('btnRefreshModels')?.addEventListener('click', refreshModels);
   // Engage page
   document.getElementById('btnAddKeyword')?.addEventListener('click', () => openKeywordModal());
@@ -1927,69 +1934,7 @@ async function refreshConsole() {
   }
 }
 
-function renderDashboardCampaigns(campaigns: any[]) {
-  const container = document.getElementById('dashCampaignsList');
-  if (!container) return;
 
-  if (campaigns.length === 0) {
-    container.innerHTML = `
-      <div class="empty-state-inline">
-        <p>No active campaigns. Create one to start publishing!</p>
-      </div>
-    `;
-    return;
-  }
-
-  container.innerHTML = campaigns.map(c => `
-    <div class="campaign-item">
-      <div class="campaign-info">
-        <div class="campaign-name">${escapeHtml(c.name)}</div>
-        <div class="campaign-meta">${c.platforms?.length || 0} platforms • ${c.status}</div>
-      </div>
-      <div class="campaign-progress">
-        <div class="progress-bar">
-          <div class="progress-fill" style="width: ${c.progress || 0}%"></div>
-        </div>
-        <div class="progress-text">${c.progress || 0}%</div>
-      </div>
-      <div class="campaign-actions">
-        <button class="btn btn-small btn-secondary" onclick="viewCampaign('${c.id}')">View</button>
-      </div>
-    </div>
-  `).join('');
-}
-
-function renderDashboardActivity(activities: any[]) {
-  const container = document.getElementById('dashActivityList');
-  if (!container) return;
-
-  if (activities.length === 0) {
-    container.innerHTML = `
-      <div class="empty-state-inline">
-        <p>No recent activity</p>
-      </div>
-    `;
-    return;
-  }
-
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'completed': return '✅';
-      case 'failed': return '❌';
-      case 'warning': return '⚠️';
-      case 'running': return '⏳';
-      default: return '📋';
-    }
-  };
-
-  container.innerHTML = activities.slice(0, 5).map(a => `
-    <div class="activity-item">
-      <span class="activity-time">${formatTime(a.time)}</span>
-      <span class="activity-icon">${getStatusIcon(a.status)}</span>
-      <span class="activity-text">${escapeHtml(a.message)}</span>
-    </div>
-  `).join('');
-}
 
 // 全局平台图标映射
 const PLATFORM_ICONS: Record<string, string> = {
@@ -2011,32 +1956,6 @@ const PLATFORM_ICONS: Record<string, string> = {
   telegram: '✈️', discord: '💬', slack: '💼'
 };
 
-function renderPlatformHealth(healthData: Record<string, number>) {
-  const container = document.getElementById('dashPlatformHealth');
-  if (!container) return;
-
-  // 显示前 8 个有数据的平台
-  const allPlatforms = ['twitter', 'reddit', 'linkedin', 'zhihu', 'weibo', 'github', 'v2ex', 'producthunt', 'hackernews', 'medium'];
-  const platforms = allPlatforms.filter(p => healthData[p] !== undefined).slice(0, 8);
-  if (platforms.length === 0) {
-    // 默认显示主要平台
-    platforms.push('twitter', 'reddit', 'linkedin', 'zhihu', 'weibo');
-  }
-
-  container.innerHTML = platforms.map(platform => {
-    const health = healthData[platform] || 0;
-    const healthClass = health >= 70 ? '' : health >= 40 ? 'warning' : 'error';
-    return `
-      <div class="platform-health-item">
-        <span class="platform-name">${platform.charAt(0).toUpperCase() + platform.slice(1)}</span>
-        <div class="health-bar">
-          <div class="health-fill ${healthClass}" style="width: ${health}%"></div>
-        </div>
-        <span class="health-value">${health > 0 ? health + '%' : '--'}</span>
-      </div>
-    `;
-  }).join('');
-}
 
 function formatTime(timeStr: string): string {
   if (!timeStr) return '--:--';
@@ -2985,11 +2904,6 @@ let collapsedPersonas: Set<string> = new Set();
   } catch (e) { showToast(t('persona.deleteFailed') + e, 'error'); }
 };
 
-function personaSelectOptions(selectedId?: string | null): string {
-  const opts = personasCache.map((p: any) =>
-    `<option value="${p.id}" ${p.id === selectedId ? 'selected' : ''}>${escapeHtml(p.name ? `${p.name}（${p.email}）` : p.email)}</option>`).join('');
-  return `<option value="">未归属（用全局 Profile）</option>${opts}`;
-}
 
 function renderAccountCard(account: any): string {
   {
@@ -3092,7 +3006,7 @@ function renderAccountCard(account: any): string {
             ? `<button class="btn btn-small btn-success" data-nurture-account="${account.id}" disabled style="opacity:.5;cursor:not-allowed;" title="一键养号进行中，完成后才可单独养号">🌱 ${t('nurture.quickNurture')}</button>`
             : `<button class="btn btn-small btn-success" data-nurture-account="${account.id}" onclick="openNurtureModal('${account.id}', '${escapeHtml(account.platform)}', '${escapeHtml(account.username || account.email || 'N/A')}')" title="${t('nurture.quickNurture')}">🌱 ${t('nurture.quickNurture')}</button>`}
           ${['github','twitter','x','segmentfault','xiaohongshu'].includes(account.platform) ? `<button class="btn btn-small btn-secondary" onclick="pickTopics('${account.id}','${escapeHtml(account.platform)}')" title="选择养号主题">🎯 主题</button>` : ''}
-          ${['twitter','x','xiaohongshu'].includes(account.platform) ? `<button class="btn btn-small btn-secondary" onclick="pickReplyStyle('${account.id}')" title="选择养号自动回复/评论的语气风格">💬 风格</button>` : ''}
+          ${['twitter','x','xiaohongshu','weibo'].includes(account.platform) ? `<button class="btn btn-small btn-secondary" onclick="pickReplyStyle('${account.id}')" title="选择养号自动回复/评论的语气风格">💬 风格</button>` : ''}
           <button class="btn btn-small btn-secondary" onclick="openAccountProxyModal('${account.id}')" title="配置该账号的自定义 SOCKS5 代理（不配走身份机场节点）">🧦 SOCKS5</button>
           ${stage !== 'active' ? `<button class="btn btn-small btn-secondary" onclick="finishAccountNurture('${account.id}')" title="老账号无需养号，直接标为正常">✅ ${t('nurture.finishBtn')}</button>` : ''}
         </div>
@@ -4276,55 +4190,6 @@ async function openBatchNurtureModal() {
   closeModal('modalBatchNurture');
 };
 
-function renderNurtureSection() {
-  const container = document.getElementById('nurtureSection');
-  if (!container) return;
-
-  const accountsWithNurture = accounts.filter(a => a.total_nurture_seconds > 0);
-
-  container.innerHTML = `
-    <div class="card nurture-card">
-      <div class="card-header">
-        <h3>🌱 ${t('nurture.title')}</h3>
-        <p class="text-muted">${t('nurture.description')}</p>
-      </div>
-      <div class="card-body">
-        ${accounts.length === 0 ? `<p class="text-muted">${t('nurture.noAccounts')}</p>` : `
-          <div class="nurture-accounts-grid">
-            ${accounts.map(account => `
-              <div class="nurture-account-card">
-                <div class="nurture-account-header">
-                  <span class="platform-icon">${getPlatformIcon(account.platform)}</span>
-                  <span class="account-name">${escapeHtml(account.username || account.email || 'N/A')}</span>
-                </div>
-                <div class="nurture-stats">
-                  <div class="stat">
-                    <span class="stat-label">${t('nurture.totalTime')}</span>
-                    <span class="stat-value">${formatNurtureTime(account.total_nurture_seconds || 0)}</span>
-                  </div>
-                  ${account.last_nurture_at ? `
-                    <div class="stat">
-                      <span class="stat-label">${t('nurture.lastNurture')}</span>
-                      <span class="stat-value">${formatTimeAgo(account.last_nurture_at)}</span>
-                    </div>
-                  ` : ''}
-                </div>
-                <button
-                  class="btn btn-small btn-primary nurture-btn"
-                  data-nurture-account="${account.id}"
-                  onclick="quickNurtureAccount('${account.id}', '${escapeHtml(account.platform)}', 60)"
-                  ${nurtureInProgress === account.id ? 'disabled' : ''}
-                >
-                  ${nurtureInProgress === account.id ? `<span class="spinner-small"></span> ${t('nurture.running')}` : `🌱 ${t('nurture.quickNurture')}`}
-                </button>
-              </div>
-            `).join('')}
-          </div>
-        `}
-      </div>
-    </div>
-  `;
-}
 
 function formatNurtureTime(seconds: number): string {
   if (seconds < 60) return `${seconds} ${t('nurture.seconds')}`;
@@ -6017,7 +5882,7 @@ async function loadAIConfig() {
   }
 }
 
-// 同步「X 自动回复」「小红书自动评论」开关状态（开关均在账号管理页 header）
+// 同步「X 自动回复」「小红书自动评论」「微博自动评论/转帖」开关状态（开关均在账号管理页 header）
 async function syncXReplyToggle() {
   try {
     const xReply = await invoke<boolean>('get_x_reply_enabled');
@@ -6028,6 +5893,11 @@ async function syncXReplyToggle() {
     const xhsReply = await invoke<boolean>('get_xhs_reply_enabled');
     const cb = document.getElementById('xhsReplyEnabled') as HTMLInputElement | null;
     if (cb) cb.checked = !!xhsReply;
+  } catch {}
+  try {
+    const weiboReply = await invoke<boolean>('get_weibo_reply_enabled');
+    const cb = document.getElementById('weiboReplyEnabled') as HTMLInputElement | null;
+    if (cb) cb.checked = !!weiboReply;
   } catch {}
 }
 
@@ -7872,17 +7742,6 @@ function queuePublishTask() {
   navigateTo('tasks');
 }
 
-// Queue-based discover
-function queueDiscoverTask() {
-  if (keywords.length === 0) {
-    showToast(t('msg.addKeywordsFirst'), 'error');
-    return;
-  }
-
-  createTask('discover', `Discover posts for ${keywords.length} keywords`, { keywords });
-  showToast('Discovery task added to queue', 'success');
-  navigateTo('tasks');
-}
 
 // ============================================================================
 // 📣 内容发布（原创 + 定时 + 媒体），借鉴 social-auto-upload，全程走 Unzoo

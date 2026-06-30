@@ -414,53 +414,6 @@ pub(crate) async fn persona_rename(app: AppHandle, id: String, name: Option<Stri
     Ok(())
 }
 
-/// #13 创建「固定 IP 身份」：不分配机场节点、不走 mihomo，直接给独立 profile 绑用户填的固定代理。
-/// label = 身份标识（手机号/任意名，唯一）；region = cn(国内) / 其他(海外)；proxy = socks5://.. 或 http://.. 或 host:port。
-/// 天然不进 #11 自动轮换（node_name 为空）。一身份 = 一固定 IP（建议一身份一号，由前端约束）。
-#[tauri::command]
-pub(crate) async fn persona_create_fixed(app: AppHandle, label: String, region: String, proxy: String) -> Result<PersonaDto, String> {
-    let label = label.trim().to_string();
-    let region = region.trim().to_string();
-    let mut proxy = proxy.trim().to_string();
-    if label.is_empty() { return Err("请填写身份标识（名称/手机号）".into()); }
-    if proxy.is_empty() { return Err("请填写固定代理地址".into()); }
-    // 规范化代理：没带协议前缀的按 socks5 处理
-    if !proxy.contains("://") { proxy = format!("socks5://{}", proxy); }
-    if !(proxy.starts_with("socks5://") || proxy.starts_with("http://") || proxy.starts_with("https://")) {
-        return Err("代理需为 socks5:// / http:// / https:// 或 host:port".into());
-    }
-
-    let id = {
-        let state = app.state::<AppState>();
-        let conn = state.db.lock().map_err(|_| "db".to_string())?;
-        let exists: bool = conn.query_row("SELECT 1 FROM personas WHERE email=?1", params![label], |_| Ok(true)).unwrap_or(false);
-        if exists { return Err("这个标识已经创建过身份了".into()); }
-        Uuid::new_v4().to_string()
-    };
-
-    // 建独立 profile + 随机指纹
-    let pname = sanitize_profile_name(&label);
-    let (profile_id, profile_path) = create_profile_raw(&pname).await?;
-    // 固定身份：把 Unzoo profile 显示名设成与身份标识一致（覆盖 create_profile_raw 里的 sanitize 名）
-    let _ = unzoo_set_profile_name(&profile_id, &label).await;
-    let _ = unzoo_randomize_fingerprint2(&profile_path).await;
-
-    // 直接给 profile 绑用户的固定代理（不经机场/mihomo）
-    unzoo_set_profile_proxy2(&profile_path, &proxy).await?;
-
-    {
-        let state = app.state::<AppState>();
-        let conn = state.db.lock().map_err(|_| "db".to_string())?;
-        conn.execute(
-            "INSERT INTO personas (id, email, profile_id, node_name, local_port, status, created_at, ip_mode, fixed_proxy, region) \
-             VALUES (?1,?2,?3,NULL,NULL,'active',datetime('now'),'fixed',?4,?5)",
-            params![id, label, profile_id, proxy, region]).map_err(|e| e.to_string())?;
-    }
-
-    let state = app.state::<AppState>();
-    let conn = state.db.lock().map_err(|_| "db".to_string())?;
-    Ok(persona_row_to_dto(&conn, &id, &label, Some(profile_id), None, None, "active".into(), None, "fixed".into(), Some(proxy), Some(region)))
-}
 
 /// 打开某 profile 的窗口并导航到 url（用于引导用户在新身份里登录 Gmail）。阻塞，spawn_blocking 调用。
 fn open_profile_window(profile_path: &str, url: &str) -> Result<(), String> {

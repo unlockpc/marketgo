@@ -1,7 +1,6 @@
 //! 机场订阅域：拉取 Clash 订阅 → 节点入池 → 为各身份配对/改派节点 → 重建并热重载 mihomo 内核。
 //! 依赖 lib.rs 中的 mihomo 内核子系统与共享原语（见 `use crate::{...}`）。
 
-use serde::Serialize;
 use tauri::{AppHandle, State, Manager, Emitter};
 use rusqlite::params;
 
@@ -180,9 +179,6 @@ pub(crate) async fn airport_refresh_subscription(app: AppHandle) -> Result<Strin
         Ok(format!("已刷新：{} 个有效节点，节点无变化", count))
     }
 }
-
-#[derive(Serialize)]
-pub struct NodePoolStat { pub total: i64, pub in_use: i64, pub free: i64, pub by_region: Vec<(String, i64)> }
 
 #[tauri::command]
 pub(crate) fn airport_status(state: State<AppState>) -> Result<serde_json::Value, String> {
