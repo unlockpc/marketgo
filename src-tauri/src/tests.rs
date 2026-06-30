@@ -534,6 +534,62 @@ mod xhs_runner_tests {
     }
 
     #[test]
+    fn xhs_collect_and_follow_quota_by_phase() {
+        use crate::nurture::{xhs_collect_quota, xhs_follow_quota};
+        // 收藏：各期上界恒 1（含预热期，收藏几乎无风控）
+        for p in ["warmup", "growth", "mature", "other"] {
+            assert_eq!(xhs_collect_quota(p), 1, "收藏配额 {}", p);
+        }
+        // 关注：预热 0（新号不关注），成长/成熟上界 2
+        assert_eq!(xhs_follow_quota("warmup"), 0);
+        assert_eq!(xhs_follow_quota("growth"), 2);
+        assert_eq!(xhs_follow_quota("mature"), 2);
+        assert_eq!(xhs_follow_quota("other"), 0);
+    }
+
+    #[test]
+    fn xhs_parse_count_handles_wan_and_plain() {
+        use crate::nurture::xhs_parse_count;
+        assert_eq!(xhs_parse_count("570"), 570);
+        assert_eq!(xhs_parse_count(" 4275 "), 4275);
+        assert_eq!(xhs_parse_count("1.2万"), 12000);
+        assert_eq!(xhs_parse_count("3.5w"), 35000);
+        assert_eq!(xhs_parse_count("2W"), 20000);
+        assert_eq!(xhs_parse_count("abc"), 0); // 解析失败兜底 0
+        assert_eq!(xhs_parse_count(""), 0);
+    }
+
+    #[test]
+    fn xhs_parse_profile_stats_extracts_fans_and_likes() {
+        use crate::nurture::xhs_parse_profile_stats;
+        assert_eq!(xhs_parse_profile_stats("90 关注 570 粉丝 4275 获赞与收藏"), (570, 4275));
+        assert_eq!(xhs_parse_profile_stats("1200 关注 1.2万 粉丝 50万 获赞与收藏"), (12000, 500000));
+        // 缺字段 → 该项 0
+        assert_eq!(xhs_parse_profile_stats("乱七八糟没有数字"), (0, 0));
+    }
+
+    #[test]
+    fn xhs_author_passes_quality_gate() {
+        use crate::nurture::xhs_author_passes_quality;
+        assert!(xhs_author_passes_quality(500, 0));      // 粉丝达标
+        assert!(xhs_author_passes_quality(0, 3000));     // 获赞达标
+        assert!(xhs_author_passes_quality(600, 100));    // 任一达标即可
+        assert!(!xhs_author_passes_quality(499, 2999));  // 都不达标 → 不关注
+        assert!(!xhs_author_passes_quality(0, 0));
+    }
+
+    #[test]
+    fn xhs_author_id_from_url_extracts() {
+        use crate::nurture::xhs_author_id_from_url;
+        assert_eq!(
+            xhs_author_id_from_url("https://www.xiaohongshu.com/user/profile/61ab89e7000000001000cbd7?xsec_token=ABC=&x=1").as_deref(),
+            Some("61ab89e7000000001000cbd7")
+        );
+        assert_eq!(xhs_author_id_from_url("/user/profile/abc123").as_deref(), Some("abc123"));
+        assert_eq!(xhs_author_id_from_url("https://www.xiaohongshu.com/explore/xxx"), None); // 非作者链接
+    }
+
+    #[test]
     fn reply_style_tone_maps_known_and_defaults() {
         use crate::ai::reply_style_tone;
         // 已知风格各有不同语气；未知/空 → 默认真诚(sincere)

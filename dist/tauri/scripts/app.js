@@ -3363,7 +3363,7 @@
     if (modal) {
       resetNurtureModal();
       document.getElementById("nurtureAccountId").value = accountId;
-      document.getElementById("nurturePlatform").value = platform;
+      document.getElementById("nurtureModalPlatform").value = platform;
       document.getElementById("nurtureAccountInfo").textContent = `${platform} - ${username || t("msg.account")}`;
       modal.classList.add("active");
     }
@@ -3405,7 +3405,7 @@
   var currentNurtureTaskId = null;
   window.startNurtureFromModal = async function() {
     const accountId = document.getElementById("nurtureAccountId")?.value;
-    const platform = document.getElementById("nurturePlatform")?.value;
+    const platform = document.getElementById("nurtureModalPlatform")?.value;
     const accountInfo = document.getElementById("nurtureAccountInfo")?.textContent || "";
     const seconds = parseInt(document.getElementById("nurtureDuration")?.value || "60");
     const setupDiv = document.getElementById("nurtureSetup");

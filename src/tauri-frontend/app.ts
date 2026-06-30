@@ -3506,7 +3506,7 @@ let nurtureInProgress: string | null = null;
     resetNurtureModal();
 
     (document.getElementById('nurtureAccountId') as HTMLInputElement).value = accountId;
-    (document.getElementById('nurturePlatform') as HTMLInputElement).value = platform;
+    (document.getElementById('nurtureModalPlatform') as HTMLInputElement).value = platform;
     document.getElementById('nurtureAccountInfo')!.textContent = `${platform} - ${username || t('msg.account')}`;
     modal.classList.add('active');
   }
@@ -3555,7 +3555,7 @@ let currentNurtureTaskId: string | null = null;
 
 (window as any).startNurtureFromModal = async function() {
   const accountId = (document.getElementById('nurtureAccountId') as HTMLInputElement)?.value;
-  const platform = (document.getElementById('nurturePlatform') as HTMLInputElement)?.value;
+  const platform = (document.getElementById('nurtureModalPlatform') as HTMLInputElement)?.value;
   const accountInfo = document.getElementById('nurtureAccountInfo')?.textContent || '';
   const seconds = parseInt((document.getElementById('nurtureDuration') as HTMLSelectElement)?.value || '60');
 

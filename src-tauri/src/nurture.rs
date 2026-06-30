@@ -341,6 +341,47 @@ pub(crate) fn xhs_reply_quota(phase: &str) -> i64 {
     }
 }
 
+/// 小红书收藏配额上界：各期每轮 ≤1 次（收藏几乎无风控，预热期也允许）。实际 0~1 在 runner 里随机。
+pub(crate) fn xhs_collect_quota(_phase: &str) -> i64 { 1 }
+
+/// 小红书关注配额上界（按养号分期）：预热 0（新号不关注），成长/成熟 2。实际 0~2 在 runner 里随机。
+/// 关注会通知对方、建立粉丝关系，比点赞敏感，故全程克制 + 进作者主页质量门。纯逻辑，可单测。
+pub(crate) fn xhs_follow_quota(phase: &str) -> i64 {
+    match phase { "growth" | "mature" => 2, _ => 0 }
+}
+
+/// 解析小红书计数文本（"570" / "1.2万" / "3.5w"）→ 整数。解析失败返回 0。纯逻辑，可单测。
+pub(crate) fn xhs_parse_count(s: &str) -> i64 {
+    let t = s.trim();
+    let (num, mult) = if let Some(p) = t.strip_suffix('万').or_else(|| t.strip_suffix('w')).or_else(|| t.strip_suffix('W')) {
+        (p.trim(), 10000.0)
+    } else { (t, 1.0) };
+    num.parse::<f64>().map(|v| (v * mult) as i64).unwrap_or(0)
+}
+
+/// 从作者主页交互文本解析 (粉丝数, 获赞与收藏数)。格式「N 关注 N 粉丝 N 获赞与收藏」，数字可带「万」。
+/// 取每个标签前最后一个空白分隔 token 作为该项数值。纯逻辑，可单测。
+pub(crate) fn xhs_parse_profile_stats(text: &str) -> (i64, i64) {
+    let grab = |label: &str| -> i64 {
+        text.split(label).next()
+            .and_then(|pre| pre.split_whitespace().last())
+            .map(xhs_parse_count).unwrap_or(0)
+    };
+    (grab("粉丝"), grab("获赞与收藏"))
+}
+
+/// 关注质量门：粉丝 ≥500 或 获赞与收藏 ≥3000（任一达标即可）才关注，过滤小号/僵尸号。纯逻辑，可单测。
+pub(crate) fn xhs_author_passes_quality(fans: i64, likes: i64) -> bool {
+    fans >= 500 || likes >= 3000
+}
+
+/// 从作者主页 URL（含 `/user/profile/<id>`）提取作者 id，作关注去重 key。纯逻辑，可单测。
+pub(crate) fn xhs_author_id_from_url(url: &str) -> Option<String> {
+    let after = url.split("/user/profile/").nth(1)?;
+    let id: String = after.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+    if id.is_empty() { None } else { Some(id) }
+}
+
 /// 轮询关键元素出现确认页面加载完（每秒一次，最多 max_secs 秒）。供"等加载再操作"。
 fn xhs_wait_loaded_blocking(selector: &str, max_secs: u64) -> bool {
     use std::time::Duration;
@@ -462,6 +503,66 @@ fn xhs_like_blocking() -> bool {
     false
 }
 
+/// 在当前笔记弹框收藏。`.engage-bar .collect-wrapper` 唯一。先读状态：已收藏(class 含 active/collected/selected)
+/// → Ok(false) 跳过（避免重复点击反而取消收藏）；未收藏则 force 点，验证 class 变激活或 count 增加 → Ok(true)。
+fn xhs_collect_blocking() -> Result<bool, String> {
+    use std::time::Duration;
+    let sel = ".engage-bar .collect-wrapper";
+    if !unzoo_element_exists(sel) { return Err("未找到收藏按钮(.collect-wrapper)".into()); }
+    // 状态判断用 svg 图标 href（已收藏=#collected，未收藏=#collect；class 始终不变，不能用 class）。
+    let read_js = "(function(){var w=document.querySelector('.engage-bar .collect-wrapper');if(!w)return 'x|';var u=w.querySelector('use');var h=u?(u.getAttribute('xlink:href')||u.getAttribute('href')||''):'';var c=(w.querySelector('.count')||{}).innerText||'';return (/collected/.test(h)?'1':'0')+'|'+c;})()";
+    let raw0 = unzoo_evaluate(read_js)?;
+    let s0 = serde_json::from_str::<String>(&raw0).unwrap_or(raw0);
+    let p0: Vec<&str> = s0.trim().split('|').collect();
+    if p0.first() == Some(&"1") { return Ok(false); } // 已收藏，跳过
+    let before = p0.get(1).map(|c| xhs_parse_count(c)).unwrap_or(0);
+    // 用 JS click：视频笔记里收藏按钮会被 video 覆盖，human_click 坐标点不中；JS click 直接触发元素，小红书认（实测 count+1）。
+    let _ = unzoo_evaluate("(function(){var w=document.querySelector('.engage-bar .collect-wrapper');if(w)w.click();return 'ok';})()")?;
+    std::thread::sleep(Duration::from_millis(get_human_delay(1200, 2500)));
+    let raw1 = unzoo_evaluate(read_js)?;
+    let s1 = serde_json::from_str::<String>(&raw1).unwrap_or(raw1);
+    let p1: Vec<&str> = s1.trim().split('|').collect();
+    let collected_now = p1.first() == Some(&"1");
+    let after = p1.get(1).map(|c| xhs_parse_count(c)).unwrap_or(before);
+    if collected_now || after > before { Ok(true) } else { Err("收藏后状态未变（疑似未生效）".into()) }
+}
+
+/// 读当前笔记弹框作者主页 URL（用于关注质量门）。已关注(`.note-detail-follow-btn` 文本含「已关注」)→ None 不收集。
+/// 返回拼好的完整 https URL；无作者链接或已关注则 None。
+fn xhs_note_author_url_blocking() -> Option<String> {
+    let js = "(function(){var m=document.querySelector('.note-detail-mask')||document;var b=m.querySelector('.note-detail-follow-btn');var followed=!!(b&&/已关注/.test(b.innerText||''));var a=m.querySelector('.author-wrapper a[href*=\"/user/profile/\"]');var h=a?(a.getAttribute('href')||''):'';return JSON.stringify({followed:followed,href:h});})()";
+    let raw = unzoo_evaluate(js).ok()?;
+    let inner = serde_json::from_str::<String>(&raw).unwrap_or(raw);
+    let v: serde_json::Value = serde_json::from_str(&inner).ok()?;
+    if v.get("followed").and_then(|x| x.as_bool()).unwrap_or(false) { return None; }
+    let href = v.get("href").and_then(|x| x.as_str()).unwrap_or("");
+    if href.is_empty() || !href.contains("/user/profile/") { return None; }
+    Some(if href.starts_with("http") { href.to_string() } else { format!("https://www.xiaohongshu.com{}", href) })
+}
+
+/// 导航到作者主页 → 读粉丝/获赞与收藏 → 质量门达标则关注。Ok(true)=关注成功；Ok(false)=不达标/已关注跳过；Err=异常。
+/// 会离开当前搜索结果页（调用方在主题切换间隙调用，不打断弹框阅读）。
+fn xhs_follow_with_quality_blocking(profile_url: &str) -> Result<bool, String> {
+    use std::time::Duration;
+    if unzoo_navigate(profile_url).is_err() { return Err("导航作者主页失败".into()); }
+    if !xhs_wait_loaded_blocking(".user-interactions, .user-info", 10) { return Err("作者主页未加载".into()); }
+    std::thread::sleep(Duration::from_millis(get_human_delay(1500, 3000)));
+    let raw = unzoo_evaluate("(function(){var e=document.querySelector('.user-interactions');return e?(e.innerText||'').replace(/\\s+/g,' '):'';})()")?;
+    let txt = serde_json::from_str::<String>(&raw).unwrap_or(raw);
+    let (fans, likes) = xhs_parse_profile_stats(&txt);
+    if !xhs_author_passes_quality(fans, likes) { return Ok(false); } // 不达标，不关注
+    let btn_js = "(function(){var b=document.querySelector('.user-info .follow-button');return b?(b.innerText||'').trim():'none';})()";
+    let braw = unzoo_evaluate(btn_js)?;
+    let bs = serde_json::from_str::<String>(&braw).unwrap_or(braw);
+    if bs.contains("已关注") || bs.contains("none") { return Ok(false); } // 已关注/无按钮
+    std::thread::sleep(Duration::from_millis(get_human_delay(1200, 2500)));
+    if !xhs_force_click(".user-info .follow-button") { return Err("点击关注失败".into()); }
+    std::thread::sleep(Duration::from_millis(get_human_delay(1500, 3000)));
+    let braw2 = unzoo_evaluate(btn_js)?;
+    let bs2 = serde_json::from_str::<String>(&braw2).unwrap_or(braw2);
+    if bs2.contains("已关注") { Ok(true) } else { Err("关注后按钮未变「已关注」".into()) }
+}
+
 /// 多图笔记：随机点几下「下一张」翻图，更像真人。单图/视频笔记没有箭头(.arrow-controller.right)→直接跳过。
 /// 到末张箭头变 .arrow-controller.right.forbidden，命中即停。
 fn xhs_browse_images_blocking() {
@@ -493,6 +594,17 @@ fn xhs_open_note_blocking(idx: i64) -> bool {
         }
     }
     false
+}
+
+/// 列表卡片是否【当前账号已点赞】：读第 idx 张卡片底部点赞图标 svg use href，#liked=已赞、#like=未赞。
+/// 已赞返回 true → 调用方跳过、不再点开（用户要求：列表上点赞过的不重复打开）。注意 class `like-active`
+/// 所有卡片都有、不可靠；必须看 svg href。用 /liked/ 判断：'#like' 不含 'liked'、'#liked' 含，不会误命中未赞。
+fn xhs_card_liked_blocking(idx: i64) -> bool {
+    let js = format!("(function(){{var c=document.querySelector('section.note-item:nth-of-type({}) .like-wrapper use');if(!c)return '0';var h=c.getAttribute('xlink:href')||c.getAttribute('href')||'';return /liked/.test(h)?'1':'0';}})()", idx);
+    match unzoo_evaluate(&js) {
+        Ok(raw) => serde_json::from_str::<String>(&raw).unwrap_or(raw).trim() == "1",
+        Err(_) => false, // 读不到当未赞，不拦截（打开后还有按 note_url 的 DB 去重兜底）
+    }
 }
 
 /// 关闭当前笔记弹框：优先 force 点关闭按钮，兜底按 Esc。关后回到搜索结果页（不丢上下文）。
@@ -744,14 +856,18 @@ fn x_read_tweet_text_blocking(tweet_url: &str) -> Option<String> {
 /// 并对楼里**一条**别人的非灌水评论自动回复(启发式预筛灌水 + AI 判定值不值得回)。
 /// 全程"等加载+随机延迟"再操作。返回 (searched, read, liked, replied, creplied)。
 /// app/account_id 用于点赞/评论去重(xhs_actions_log)与进度推送。reply_on/reply_quota/creply_quota 控制自动评论与楼中回复。
-fn xhs_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec<String>, n_like: i64, reply_on: bool, reply_quota: i64, creply_quota: i64, reply_style: String, duration_secs: i64, seed0: u64) -> Result<(i64, i64, i64, i64, i64), String> {
+fn xhs_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec<String>, n_like: i64, n_collect: i64, n_follow: i64, reply_on: bool, reply_quota: i64, creply_quota: i64, reply_style: String, duration_secs: i64, seed0: u64) -> Result<(i64, i64, i64, i64, i64, i64, i64), String> {
     use std::time::{Duration, Instant};
     let start = Instant::now();
-    if keywords.is_empty() { return Ok((0, 0, 0, 0, 0)); }
+    if keywords.is_empty() { return Ok((0, 0, 0, 0, 0, 0, 0)); }
     if !xhs_logged_in_blocking() {
         return Err("未登录小红书！请先点卡片上「✋ 手工登录」在浏览器里登一次，再养号。".to_string());
     }
     let mut searched = 0i64; let mut read = 0i64; let mut liked = 0i64; let mut replied = 0i64; let mut creplied = 0i64;
+    let mut collected = 0i64; let mut followed = 0i64;
+    // 关注候选：弹框阅读时收集（作者主页 URL），主题切换间隙逐个进主页做质量门→关注。author id 去重，避免同一作者重复评估。
+    let mut follow_cands: Vec<String> = Vec::new();
+    let mut follow_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     // 本轮(整 session)已点开读过的笔记 URL：避免反复点开同一帖——搜索结果常有重复卡片，且关闭弹框后 feed
     // 会重排/懒加载，导致按 nth-of-type 序号点会错位命中已读过的笔记。跨主题搜索也共用此集合去重。
     let mut opened_urls: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -814,6 +930,8 @@ fn xhs_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec<S
             if opened >= read_per_search { break; }
             if nurture_should_stop() { break; }
             if start.elapsed().as_secs() as i64 >= duration_secs { break; }
+            // 列表上当前账号已点赞过的笔记 → 跳过不打开（用户要求：不重复打开已赞笔记，省时且更自然）
+            if xhs_card_liked_blocking(idx) { continue; }
             // 在搜索页上「点击」第 idx 张卡片打开弹框（human 真实点击，触发小红书弹框逻辑）
             if !xhs_open_note_blocking(idx) { continue; }
             // 等弹框加载完再操作；加载不出就关掉跳过这篇
@@ -860,6 +978,47 @@ fn xhs_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec<S
                         }
                         emit_nurture_step(&app, account_id, &format!("👍 点赞 {}/{}", liked, n_like));
                         std::thread::sleep(Duration::from_millis(get_human_delay(1500, 3000))); // 点后 settle
+                    }
+                }
+            }
+            // 收藏：配额内 + 约 50% 概率 + 未收藏过这篇（收藏几乎无风控，预热期也做；整个 session 顶多 n_collect 次）。
+            seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17;
+            let collect_roll = (seed % 100) as i64;
+            if collected < n_collect && collect_roll < 50 && !dedup_key.is_empty() {
+                let ckey = format!("{}#collect", dedup_key);
+                let already_col = {
+                    let st = app.state::<AppState>();
+                    let locked = st.db.lock();
+                    match locked { Ok(c) => xhs_already_acted(&c, account_id, &ckey), Err(_) => true }
+                };
+                if !already_col {
+                    std::thread::sleep(Duration::from_millis(get_human_delay(1500, 3500)));
+                    match xhs_collect_blocking() {
+                        Ok(true) => {
+                            collected += 1;
+                            let st = app.state::<AppState>();
+                            if let Ok(c) = st.db.lock() { let _ = xhs_record_action(&c, account_id, "collect", &ckey); }
+                            emit_nurture_step(&app, account_id, &format!("⭐ 收藏 {}/{}", collected, n_collect));
+                            std::thread::sleep(Duration::from_millis(get_human_delay(1500, 3000)));
+                        }
+                        Ok(false) => {} // 已收藏，跳过
+                        Err(_) => {}     // 失败不记库，不影响其它动作
+                    }
+                }
+            }
+            // 关注候选收集：成长/成熟期 + 还有配额时，记下未关注作者的主页（去重），主题切换间隙统一质量门关注。
+            if n_follow > 0 && (followed as usize + follow_cands.len()) < n_follow as usize {
+                if let Some(au) = xhs_note_author_url_blocking() {
+                    if let Some(aid) = xhs_author_id_from_url(&au) {
+                        let fkey = format!("follow:{}", aid);
+                        let already_fo = {
+                            let st = app.state::<AppState>();
+                            let locked = st.db.lock();
+                            match locked { Ok(c) => xhs_already_acted(&c, account_id, &fkey), Err(_) => true }
+                        };
+                        if !already_fo && follow_seen.insert(aid) {
+                            follow_cands.push(au);
+                        }
                     }
                 }
             }
@@ -946,8 +1105,30 @@ fn xhs_nurture_browse_blocking(app: AppHandle, account_id: &str, keywords: Vec<S
             std::thread::sleep(Duration::from_millis(get_human_delay(1500, 3000)));
         }
         std::thread::sleep(Duration::from_millis(get_human_delay(2000, 4000)));
+        // 主题切换间隙：处理关注候选——逐个进作者主页质量门，达标才关注（会离开搜索页，下一主题会重新搜，有兜底）。
+        while followed < n_follow && !follow_cands.is_empty() {
+            if nurture_should_stop() { break; }
+            if start.elapsed().as_secs() as i64 >= duration_secs { break; }
+            let url = follow_cands.remove(0);
+            let aid = xhs_author_id_from_url(&url).unwrap_or_default();
+            emit_nurture_step(&app, account_id, &format!("👤 关注评估中（{}/{}）", followed + 1, n_follow));
+            match xhs_follow_with_quality_blocking(&url) {
+                Ok(true) => {
+                    followed += 1;
+                    if !aid.is_empty() {
+                        let st = app.state::<AppState>();
+                        let locked = st.db.lock();
+                        if let Ok(c) = locked { let _ = xhs_record_action(&c, account_id, "follow", &format!("follow:{}", aid)); }
+                    }
+                    emit_nurture_step(&app, account_id, &format!("👤 已关注（{}/{}）", followed, n_follow));
+                    std::thread::sleep(Duration::from_millis(get_human_delay(3000, 6000)));
+                }
+                Ok(false) => {} // 不达标/已关注，跳过
+                Err(e) => { emit_nurture_step(&app, account_id, &format!("关注跳过：{}", e)); }
+            }
+        }
     }
-    Ok((searched, read, liked, replied, creplied))
+    Ok((searched, read, liked, replied, creplied, collected, followed))
 }
 
 /// 小红书养号入口：读主题 + 分期 → 搜索驱动浏览(+成长期点赞) → 写养号统计。未选主题 → 跳过提示。
@@ -974,7 +1155,17 @@ pub(crate) async fn xiaohongshu_nurture_run(app: &AppHandle, account_id: &str, d
     // 成长/成熟期点赞随机 1-2 次（预热只读 → 0）。刻意压低：新号一轮点太多赞易触发风控。
     // 注意用 get_human_delay（返回原值 1-2）而非 get_random_delay（返回毫秒 1000-2000）——
     // 后者会让点赞配额≈数千、形同不限量（曾让 4 天新号一早上点 25 个赞），是个老 bug。
-    let n_like = if allow_like { get_human_delay(1, 2) as i64 } else { 0 };
+    // 配额随机源：get_human_delay 用 subsec_nanos 作种子，连续调用会系统性偏向最小值（实测 n_like/n_collect/n_follow 恒取 min）；
+    // 而 get_random_delay 返回毫秒（末尾恒 *1000），直接 %2 也恒 0。故对 seed0 做 xorshift 充分混合后再取模（与 browse 内部 PRNG 一致）。
+    let seed0 = get_random_delay(1, 100_000);
+    let mut qseed = seed0 | 1;
+    qseed ^= qseed << 13; qseed ^= qseed >> 7; qseed ^= qseed << 17;
+    let n_like = if allow_like { 1 + (qseed % 2) as i64 } else { 0 }; // 点赞 1~2
+    // 收藏：每轮至少 1 次（含预热期，收藏几乎无风控）。关注：成长/成熟期 1~2 个 + 质量门（预热 0 不关注）。
+    let n_collect = xhs_collect_quota(&phase).max(1);
+    qseed ^= qseed << 13; qseed ^= qseed >> 7; qseed ^= qseed << 17;
+    let n_follow = { let cap = xhs_follow_quota(&phase); if cap > 0 { 1 + (qseed % cap as u64) as i64 } else { 0 } };
+    log::info!("[XHS-NURTURE] account={} phase={} 配额 n_like={} n_collect={} n_follow={}", account_id, phase, n_like, n_collect, n_follow);
     // 自动评论 + 楼中回复：开关开 + 分期允许(成长/成熟=1，预热=0)。
     // 一轮养号只随机做其中【一个】——要么评论笔记、要么回复楼里某条评论，不必两样都做(更像真人、也更克制)。
     let base_q = xhs_reply_quota(&phase);
@@ -992,12 +1183,11 @@ pub(crate) async fn xiaohongshu_nurture_run(app: &AppHandle, account_id: &str, d
         }
     };
     let dur = duration.max(30);
-    let seed0 = get_random_delay(1, 100_000);
     let topic_n = kws.len();
     emit_nurture_step(app, account_id, &format!("开始小红书养号 · 逐个搜索 {} 个主题并阅读（约 {}s）", topic_n, dur));
     let app_cl = app.clone();
     let acct = account_id.to_string();
-    let (searched, read, liked, replied, creplied) = tauri::async_runtime::spawn_blocking(move || xhs_nurture_browse_blocking(app_cl, &acct, kws, n_like, reply_on, reply_quota, creply_quota, reply_style, dur, seed0))
+    let (searched, read, liked, replied, creplied, collected, followed) = tauri::async_runtime::spawn_blocking(move || xhs_nurture_browse_blocking(app_cl, &acct, kws, n_like, n_collect, n_follow, reply_on, reply_quota, creply_quota, reply_style, dur, seed0))
         .await.map_err(|e| format!("养号任务异常: {}", e))??;
 
     // 写养号统计（与 SF 一致）
@@ -1018,9 +1208,9 @@ pub(crate) async fn xiaohongshu_nurture_run(app: &AppHandle, account_id: &str, d
                 params![Uuid::new_v4().to_string(), account_id, today, elapsed_secs]);
         }
     }
-    log::info!("[XHS-NURTURE] account={} phase={} 搜索={} 阅读={} 点赞={} 评论={} 楼中回复={} 耗时={}s", account_id, phase, searched, read, liked, replied, creplied, elapsed_secs);
+    log::info!("[XHS-NURTURE] account={} phase={} 搜索={} 阅读={} 点赞={} 收藏={} 关注={} 评论={} 楼中回复={} 耗时={}s", account_id, phase, searched, read, liked, collected, followed, replied, creplied, elapsed_secs);
     let cmt_note = if reply_on { format!(" · 评论 {} · 楼中回复 {}", replied, creplied) } else { String::new() };
-    Ok(format!("小红书养号完成（{}）：搜索 {} 次 · 阅读 {} 篇 · 点赞 {}{} · 用时 {}s", phase, searched, read, liked, cmt_note, elapsed_secs))
+    Ok(format!("小红书养号完成（{}）：搜索 {} 次 · 阅读 {} 篇 · 点赞 {} · 收藏 {} · 关注 {}{} · 用时 {}s", phase, searched, read, liked, collected, followed, cmt_note, elapsed_secs))
 }
 
 // ===== 微博养号（搜索驱动：s.weibo.com 搜索领域词 → 采集卡片 mid → 就地点赞 + 滚动浏览）=====
