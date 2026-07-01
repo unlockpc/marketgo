@@ -362,7 +362,42 @@ mod topics_tests {
         let beauty = builtin_topics("xiaohongshu").into_iter().find(|t| t.key == "beauty").unwrap();
         assert_eq!(beauty.label, "美妆护肤");
         assert_eq!(beauty.keywords, vec!["美妆护肤".to_string()]);
+        // 微博内置主题：每个展开成一组具体词（不是 label 本身）
+        let sports = builtin_topics("weibo").into_iter().find(|t| t.key == "sports").unwrap();
+        assert_eq!(sports.label, "体育运动");
+        assert!(sports.keywords.contains(&"足球".to_string()) && sports.keywords.len() >= 3);
         assert!(builtin_topics("unknown").is_empty());
+    }
+
+    #[test]
+    fn weibo_collect_follow_quota_and_quality() {
+        use crate::{weibo_collect_quota, weibo_follow_quota, weibo_author_passes_quality, weibo_uid_from_url, weibo_parse_fans};
+        // 收藏：各期上界恒 1；关注：预热 0，成长/成熟 2
+        for p in ["warmup", "growth", "mature"] { assert_eq!(weibo_collect_quota(p), 1); }
+        assert_eq!(weibo_follow_quota("warmup"), 0);
+        assert_eq!(weibo_follow_quota("growth"), 2);
+        assert_eq!(weibo_follow_quota("mature"), 2);
+        // 粉丝解析：万/亿/纯数
+        assert_eq!(weibo_parse_fans("数码闲聊站 348.3万粉丝 134关注"), 3_483_000);
+        assert_eq!(weibo_parse_fans("某大V 1.2亿粉丝"), 120_000_000);
+        assert_eq!(weibo_parse_fans("小号 832粉丝 50关注"), 832);
+        assert_eq!(weibo_parse_fans("没有粉丝字样"), 0);
+        // 质量门：≥1000 才过
+        assert!(weibo_author_passes_quality(1000));
+        assert!(!weibo_author_passes_quality(999));
+        // uid 提取：weibo.com/<uid> 与 weibo.com/u/<uid>
+        assert_eq!(weibo_uid_from_url("//weibo.com/6048569942?refer_flag=1").as_deref(), Some("6048569942"));
+        assert_eq!(weibo_uid_from_url("https://weibo.com/u/123456").as_deref(), Some("123456"));
+        assert_eq!(weibo_uid_from_url("https://weibo.com/n/某昵称"), None); // 非数字 uid
+    }
+
+    #[test]
+    fn weibo_topic_fallback_builtin_vs_custom() {
+        // 内置主题 → 写死的具体关键词（无 AI key 时的回退）
+        let sports = builtin_topic_fallback("weibo", "sports", "体育运动");
+        assert!(sports.contains(&"足球".to_string()));
+        // 自定义/未知 key → 回退用 label 本身
+        assert_eq!(builtin_topic_fallback("weibo", "u-custom", "露营装备"), vec!["露营装备".to_string()]);
     }
 
     #[test]

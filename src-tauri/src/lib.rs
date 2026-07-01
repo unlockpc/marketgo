@@ -738,6 +738,26 @@ const XHS_TOPICS: &[XhsTopic] = &[
     XhsTopic { key: "wellness",  label: "养生健康" },
 ];
 
+struct WeiboTopic { key: &'static str, label: &'static str, keywords: &'static [&'static str] }
+/// 微博内置养号主题（综合社交，泛兴趣领域）。每个主题展开成一组具体热门搜索词（不直接用宽泛的 label 搜索），
+/// 让搜索更自然多样、更像真人翻看兴趣内容。用户可在账号卡片「🎯 主题」里勾选 + 增删自定义。
+const WEIBO_TOPICS: &[WeiboTopic] = &[
+    WeiboTopic { key: "digital",       label: "数码科技",   keywords: &["手机", "数码", "AI", "智能硬件", "笔记本电脑"] },
+    WeiboTopic { key: "entertainment", label: "影视娱乐",   keywords: &["电影", "电视剧", "综艺", "追剧", "影评"] },
+    WeiboTopic { key: "sports",        label: "体育运动",   keywords: &["足球", "篮球", "世界杯", "NBA", "跑步"] },
+    WeiboTopic { key: "gaming",        label: "游戏电竞",   keywords: &["游戏", "原神", "英雄联盟", "王者荣耀", "电竞"] },
+    WeiboTopic { key: "food",          label: "美食",       keywords: &["美食", "美食探店", "家常菜", "烘焙", "火锅"] },
+    WeiboTopic { key: "fashion",       label: "时尚穿搭",   keywords: &["穿搭", "时尚", "美妆", "护肤", "潮流"] },
+    WeiboTopic { key: "finance",       label: "财经投资",   keywords: &["股票", "基金", "理财", "A股", "财经"] },
+    WeiboTopic { key: "auto",          label: "汽车",       keywords: &["汽车", "新能源车", "试驾", "特斯拉", "比亚迪"] },
+    WeiboTopic { key: "travel",        label: "旅行",       keywords: &["旅行", "旅游攻略", "自驾游", "露营", "民宿"] },
+    WeiboTopic { key: "pet",           label: "萌宠",       keywords: &["猫咪", "狗狗", "萌宠", "养猫", "宠物日常"] },
+    WeiboTopic { key: "health",        label: "健康养生",   keywords: &["养生", "健身", "减肥", "健康", "中医"] },
+    WeiboTopic { key: "acg",           label: "动漫二次元", keywords: &["动漫", "二次元", "漫画", "cosplay", "番剧"] },
+    WeiboTopic { key: "science",       label: "科普知识",   keywords: &["科普", "历史", "天文", "冷知识", "地理"] },
+    WeiboTopic { key: "career",        label: "职场成长",   keywords: &["职场", "副业", "自我提升", "求职", "成长"] },
+];
+
 pub struct TopicDef { pub key: String, pub label: String, pub keywords: Vec<String> }
 
 #[derive(serde::Serialize, Clone)]
@@ -761,6 +781,10 @@ fn builtin_topics(platform: &str) -> Vec<TopicDef> {
         "xiaohongshu" | "redbook" => XHS_TOPICS.iter().map(|t| TopicDef {
             key: t.key.to_string(), label: t.label.to_string(),
             keywords: vec![t.label.to_string()],
+        }).collect(),
+        "weibo" => WEIBO_TOPICS.iter().map(|t| TopicDef {
+            key: t.key.to_string(), label: t.label.to_string(),
+            keywords: t.keywords.iter().map(|s| s.to_string()).collect(),
         }).collect(),
         _ => Vec::new(),
     }
@@ -889,6 +913,42 @@ fn account_topic_keywords(conn: &Connection, account_id: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// 选中主题的 (key, label) 列表（按 catalog 过滤非法 key）。供 AI 动态生成搜索词用。
+pub(crate) fn account_topic_pairs(conn: &Connection, account_id: &str) -> Vec<(String, String)> {
+    let platform = match account_platform(conn, account_id) { Some(p) => p, None => return Vec::new() };
+    let keys = account_topics(conn, account_id);
+    let catalog = topics_catalog_from(conn, &platform);
+    keys.iter().filter_map(|k| catalog.iter().find(|i| &i.key == k).map(|i| (i.key.clone(), i.label.clone()))).collect()
+}
+
+/// 主题搜索词的回退（无 AI key / 生成失败时用）：内置主题用写死的 keywords，自定义主题用 label 本身。
+pub(crate) fn builtin_topic_fallback(platform: &str, key: &str, label: &str) -> Vec<String> {
+    builtin_topics(platform).into_iter().find(|d| d.key == key)
+        .map(|d| d.keywords).filter(|k| !k.is_empty())
+        .unwrap_or_else(|| vec![label.to_string()])
+}
+
+/// 读主题搜索词缓存；超过 ttl_days 天 / 不存在 / 空 → None（触发重新生成）。
+pub(crate) fn topic_kw_cache_get(conn: &Connection, platform: &str, key: &str, ttl_days: i64) -> Option<Vec<String>> {
+    let (kw_json, updated): (String, String) = conn.query_row(
+        "SELECT keywords, updated_at FROM topic_keyword_cache WHERE platform=?1 AND topic_key=?2",
+        params![platform, key], |r| Ok((r.get(0)?, r.get(1)?))).ok()?;
+    let age = parse_dt(&updated).map(|u| (Utc::now() - u).num_days()).unwrap_or(i64::MAX);
+    if age > ttl_days { return None; }
+    let words: Vec<String> = serde_json::from_str(&kw_json).ok()?;
+    if words.is_empty() { None } else { Some(words) }
+}
+
+/// 写主题搜索词缓存（按 platform+topic_key 覆盖）。
+pub(crate) fn topic_kw_cache_put(conn: &Connection, platform: &str, key: &str, words: &[String]) {
+    let json = serde_json::to_string(words).unwrap_or_default();
+    let now = Utc::now().to_rfc3339();
+    let _ = conn.execute(
+        "INSERT INTO topic_keyword_cache (platform, topic_key, keywords, updated_at) VALUES (?1,?2,?3,?4) \
+         ON CONFLICT(platform, topic_key) DO UPDATE SET keywords=?3, updated_at=?4",
+        params![platform, key, json, now]);
 }
 
 #[tauri::command]
@@ -1254,6 +1314,40 @@ pub(crate) fn weibo_reply_quota(phase: &str) -> i64 {
         "growth" | "mature" => 1,
         _ => 0, // 预热只点赞、不评论/转帖
     }
+}
+
+/// 微博收藏配额上界：每轮 ≤1 次（含预热期，收藏几乎无风控）。实际 0~1 在 runner 里随机。
+pub(crate) fn weibo_collect_quota(_phase: &str) -> i64 { 1 }
+
+/// 微博关注配额上界：预热 0（新号不关注），成长/成熟 2。实际在 runner 里随机。
+pub(crate) fn weibo_follow_quota(phase: &str) -> i64 {
+    match phase { "growth" | "mature" => 2, _ => 0 }
+}
+
+/// 解析微博粉丝数文本（"348.3万粉丝" / "1.2亿粉丝" / "5234粉丝"）→ 整数。失败返回 0。纯逻辑，可单测。
+pub(crate) fn weibo_parse_fans(text: &str) -> i64 {
+    let pos = match text.find("粉丝") { Some(p) => p, None => return 0 };
+    let pre = &text[..pos];
+    let token: String = pre.chars().rev()
+        .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '万' || *c == '亿')
+        .collect::<Vec<char>>().into_iter().rev().collect();
+    let (num, mult) = if let Some(p) = token.strip_suffix('亿') { (p, 100_000_000.0) }
+        else if let Some(p) = token.strip_suffix('万') { (p, 10_000.0) }
+        else { (token.as_str(), 1.0) };
+    num.parse::<f64>().map(|v| (v * mult) as i64).unwrap_or(0)
+}
+
+/// 微博关注质量门：粉丝 ≥1000 才关注（微博粉丝基数大，过滤僵尸/小号）。纯逻辑，可单测。
+pub(crate) fn weibo_author_passes_quality(fans: i64) -> bool {
+    fans >= 1000
+}
+
+/// 从微博博主链接（含 weibo.com/<uid> 或 weibo.com/u/<uid>）提取 uid。纯逻辑，可单测。
+pub(crate) fn weibo_uid_from_url(url: &str) -> Option<String> {
+    let after = url.split("weibo.com/").nth(1)?;
+    let after = after.strip_prefix("u/").unwrap_or(after);
+    let uid: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if uid.is_empty() { None } else { Some(uid) }
 }
 
 /// 按页面文本分类微博账号健康风险：captcha(验证码/安全验证) | banned(封禁/冻结) | restricted(频率受限) | None。
@@ -3537,6 +3631,8 @@ fn run_migrations(conn: &Connection) -> rusqlite::Result<()> {
     let _ = conn.execute("CREATE TABLE IF NOT EXISTS weibo_actions_log (id TEXT PRIMARY KEY, account_id TEXT NOT NULL, action_type TEXT NOT NULL, target TEXT NOT NULL, date TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP)", []);
     let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_weibo_actions_acct ON weibo_actions_log(account_id, target)", []);
     let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_weibo_actions_target ON weibo_actions_log(target)", []);
+    // 主题搜索词缓存（AI 动态生成的搜索词按 platform+topic_key 缓存，带 TTL，避免每轮养号都调 AI）
+    let _ = conn.execute("CREATE TABLE IF NOT EXISTS topic_keyword_cache (platform TEXT NOT NULL, topic_key TEXT NOT NULL, keywords TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (platform, topic_key))", []);
     // 一次性把旧三列方向迁入统一列（key 不变，直接搬 JSON）
     let _ = conn.execute("UPDATE accounts SET nurture_topics = gh_domains WHERE platform='github' AND nurture_topics IS NULL AND gh_domains IS NOT NULL", []);
     let _ = conn.execute("UPDATE accounts SET nurture_topics = x_niches WHERE platform IN ('twitter','x') AND nurture_topics IS NULL AND x_niches IS NOT NULL", []);

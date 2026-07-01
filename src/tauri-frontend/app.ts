@@ -3005,7 +3005,7 @@ function renderAccountCard(account: any): string {
           ${(nurtureAllRunning && nurtureAllProfileKeys.has(nurtureProfileKeyOf(account)))
             ? `<button class="btn btn-small btn-success" data-nurture-account="${account.id}" disabled style="opacity:.5;cursor:not-allowed;" title="一键养号进行中，完成后才可单独养号">🌱 ${t('nurture.quickNurture')}</button>`
             : `<button class="btn btn-small btn-success" data-nurture-account="${account.id}" onclick="openNurtureModal('${account.id}', '${escapeHtml(account.platform)}', '${escapeHtml(account.username || account.email || 'N/A')}')" title="${t('nurture.quickNurture')}">🌱 ${t('nurture.quickNurture')}</button>`}
-          ${['github','twitter','x','segmentfault','xiaohongshu'].includes(account.platform) ? `<button class="btn btn-small btn-secondary" onclick="pickTopics('${account.id}','${escapeHtml(account.platform)}')" title="选择养号主题">🎯 主题</button>` : ''}
+          ${['github','twitter','x','segmentfault','xiaohongshu','weibo'].includes(account.platform) ? `<button class="btn btn-small btn-secondary" onclick="pickTopics('${account.id}','${escapeHtml(account.platform)}')" title="选择养号主题">🎯 主题</button>` : ''}
           ${['twitter','x','xiaohongshu','weibo'].includes(account.platform) ? `<button class="btn btn-small btn-secondary" onclick="pickReplyStyle('${account.id}')" title="选择养号自动回复/评论的语气风格">💬 风格</button>` : ''}
           <button class="btn btn-small btn-secondary" onclick="openAccountProxyModal('${account.id}')" title="配置该账号的自定义 SOCKS5 代理（不配走身份机场节点）">🧦 SOCKS5</button>
           ${stage !== 'active' ? `<button class="btn btn-small btn-secondary" onclick="finishAccountNurture('${account.id}')" title="老账号无需养号，直接标为正常">✅ ${t('nurture.finishBtn')}</button>` : ''}

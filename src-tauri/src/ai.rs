@@ -271,6 +271,29 @@ pub(crate) async fn gen_nurture_text(app: &AppHandle, kind: &str, context: &str,
     validate_reply(&raw)
 }
 
+/// 给定平台 + 主题，让 AI 生成一组该平台上的【具体】热门搜索词（养号搜索用，能跟当下热点）。
+/// 返回去重、非空、不过长的词；无 AI key / 调用失败 / 解析空 → None（调用方回退到内置词或 label）。
+pub(crate) async fn gen_topic_keywords(app: &AppHandle, platform: &str, topic: &str, count: usize) -> Option<Vec<String>> {
+    let (provider, key) = ai_reply_config(app)?;
+    let plat = match platform { "weibo" => "微博", "xiaohongshu" => "小红书", "twitter" | "x" => "X/推特", _ => platform };
+    let prompt = format!(
+        "你在帮一个{p}用户规划要刷的内容方向。主题是「{t}」。请给出 {n} 个该主题下、适合在{p}上搜索的【具体】热门搜索词。\
+         要求：每个都是真人真会搜的具体词或子方向（例：体育运动→足球、篮球、世界杯；数码科技→手机、AI、智能手表），\
+         要具体、不空泛、彼此不同，也不要和主题名「{t}」本身重复；只输出搜索词，用英文逗号分隔，不要编号/解释/引号。",
+        p = plat, t = topic, n = count);
+    let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(20)).build().ok()?;
+    let raw = ai_complete(&client, &provider, &key, &prompt).await.ok()?;
+    let cleaned = strip_code_fence(&raw);
+    let mut seen = std::collections::HashSet::new();
+    let words: Vec<String> = cleaned
+        .split(|c| c == ',' || c == '，' || c == '、' || c == '\n' || c == ';' || c == '；')
+        .map(|s| s.trim().trim_matches(|c: char| c == '"' || c == '\'' || c == '#' || c == '“' || c == '”').trim().to_string())
+        .filter(|s| !s.is_empty() && s.chars().count() <= 12 && s != topic)
+        .filter(|s| seen.insert(s.clone()))
+        .collect();
+    if words.is_empty() { None } else { Some(words) }
+}
+
 /// 在任意嵌套 JSON 中递归找第一个匹配 key 的字符串值（用于解析 Veo 多版本响应）。
 fn json_find_str(v: &serde_json::Value, want: &[&str]) -> Option<String> {
     match v {
